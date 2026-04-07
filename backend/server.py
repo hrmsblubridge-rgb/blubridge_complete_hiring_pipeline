@@ -44,7 +44,7 @@ def create_access_token(user_id: str, email: str) -> str:
     payload = {
         "sub": user_id,
         "email": email,
-        "exp": datetime.now(timezone.utc) + timedelta(minutes=15),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=60),
         "type": "access"
     }
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
@@ -813,13 +813,17 @@ async def get_data(
         naukri_schema = await db.schema_metadata.find_one({"type": "naukri"})
         pipeline_schema = await db.schema_metadata.find_one({"type": "pipeline"})
         
+        # Clean schema objects by removing _id
+        clean_naukri_schema = {k: v for k, v in naukri_schema.items() if k != "_id"} if naukri_schema else None
+        clean_pipeline_schema = {k: v for k, v in pipeline_schema.items() if k != "_id"} if pipeline_schema else None
+        
         result = {
             "naukri": None,
             "pipeline": None,
             "processed": None,
             "schemas": {
-                "naukri": naukri_schema,
-                "pipeline": pipeline_schema
+                "naukri": clean_naukri_schema,
+                "pipeline": clean_pipeline_schema
             }
         }
         
