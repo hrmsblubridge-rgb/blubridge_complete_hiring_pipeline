@@ -1,0 +1,97 @@
+{
+  "project_name": "Recruitment Analytics System",
+  "theme": "light",
+  "archetype": "Archetype 4 (Swiss & High-Contrast)",
+  "typography": {
+    "heading_font": "Cabinet Grotesk",
+    "body_font": "Satoshi",
+    "mono_font": "JetBrains Mono",
+    "scale": {
+      "h1": "text-4xl sm:text-5xl tracking-tighter font-black",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-black",
+      "h3": "text-xl font-bold tracking-tight",
+      "body": "text-base leading-relaxed font-medium",
+      "small_label": "text-xs uppercase tracking-[0.2em] font-bold text-gray-500"
+    }
+  },
+  "colors": {
+    "background": "#FFFFFF",
+    "surface": "#F9FAFB",
+    "surface_alt": "#F3F4F6",
+    "text_primary": "#0A0A0A",
+    "text_secondary": "#4B5563",
+    "border": "#E5E7EB",
+    "primary": "#002FA7",
+    "primary_hover": "#00227A",
+    "accent_danger": "#E63946",
+    "chart_palette": [
+      "#002FA7",
+      "#4361EE",
+      "#374151",
+      "#9CA3AF",
+      "#0A0A0A"
+    ]
+  },
+  "spacing_and_layout": {
+    "general_padding": "p-6 md:p-8",
+    "grid_strategy": "MODE B: THE CONTROL ROOM GRID",
+    "grid_class": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6",
+    "container_corners": "rounded-none",
+    "shadows": "shadow-none",
+    "borders": "border border-gray-200"
+  },
+  "surface_strategy": "GRID BORDERS (The Technical Look) - Flat backgrounds, 1px subtle borders, no shadows. Expose the grid where possible. Use sharp edges.",
+  "components": {
+    "buttons": "rounded-none font-bold uppercase tracking-[0.1em] px-6 py-3 transition-colors bg-[#002FA7] text-white hover:bg-[#00227A]",
+    "inputs": "rounded-none border border-gray-200 focus:border-[#002FA7] focus:ring-1 focus:ring-[#002FA7] bg-transparent",
+    "cards": "border border-gray-200 bg-white p-6 rounded-none flex flex-col gap-4",
+    "charts": "Recharts or custom SVG with sharp tooltips (rounded-none, border-black).",
+    "upload_zone": "border-2 border-dashed border-gray-300 hover:border-[#002FA7] transition-colors bg-gray-50 p-12 text-center flex flex-col items-center justify-center cursor-pointer min-h-[300px]"
+  },
+  "motion": {
+    "hover": "transition-all duration-200 ease-in-out",
+    "active": "active:scale-[0.98]",
+    "page_transition": "Use framer-motion: initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}"
+  },
+  "icons_library": "@phosphor-icons/react",
+  "accessibility": {
+    "contrast_standard": "APCA minimums met. Text on primary color must be pure white.",
+    "focus_states": "focus:outline-none focus:ring-2 focus:ring-[#002FA7] focus:ring-offset-2"
+  },
+  "pages": {
+    "auth": {
+      "layout": "Split screen. Left side: Login form, stark white, heavy typography. Right side: login_background image with subtle grain overlay.",
+      "testids": ["login-form-submit-button", "email-input", "password-input"]
+    },
+    "/upload/naukri": {
+      "layout": "Centered upload zone with progress indicator. Top left page title.",
+      "testid": "upload-naukri-input"
+    },
+    "/upload/pipeline": {
+      "layout": "Centered upload zone with progress indicator. Top left page title.",
+      "testid": "upload-pipeline-input"
+    },
+    "/dashboard": {
+      "layout": "Sidebar navigation + Bento grid content. Top left: North Star Metric. Top right: Job Role Filter. Middle: Funnel Visualization.",
+      "testids": [
+        "filter-job-role",
+        "download-csv-button",
+        "funnel-chart"
+      ]
+    }
+  },
+  "media": {
+    "login_background": {
+      "url": "https://images.unsplash.com/photo-1765416589470-0ab68a9368e9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzF8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMGFyY2hpdGVjdHVyYWwlMjBnZW9tZXRyaWMlMjBsaWdodCUyMHdoaXRlfGVufDB8fHx8MTc3NTU0MzEwNXww&ixlib=rb-4.1.0&q=85",
+      "description": "Abstract white geometric architecture for login split screen background"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Install dependencies: yarn add @phosphor-icons/react recharts framer-motion",
+    "Implement Cabinet Grotesk for headings and Satoshi for body via font faces or google fonts if available, fallback to Inter and JetBrains Mono if not.",
+    "Use pure HTML/Tailwind for structural layout; use Shadcn UI for interactive elements (Dropdown, Select) but strip border-radius to 0 (rounded-none).",
+    "Do NOT use soft shadows. Rely on 1px borders and high contrast backgrounds. This is a brutalist swiss design.",
+    "Implement the Funnel chart using Recharts or a custom SVG polygon. Ensure stages are visually distinct using the chart_palette.",
+    "Ensure all data-testids are added to interactive elements."
+  ]
+}
