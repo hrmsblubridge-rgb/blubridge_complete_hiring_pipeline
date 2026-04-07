@@ -1,34 +1,204 @@
-.App-logo {
-    height: 40vmin;
-    pointer-events: none;
+/* Swiss Brutalist Design - Recruitment Analytics */
+
+/* Typography classes */
+.heading-1 {
+    font-family: 'Syne', sans-serif;
+    font-size: 2.25rem;
+    font-weight: 800;
+    letter-spacing: -0.05em;
+    line-height: 1.1;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-    .App-logo {
-        animation: App-logo-spin infinite 20s linear;
+@media (min-width: 640px) {
+    .heading-1 {
+        font-size: 3rem;
     }
 }
 
-.App-header {
-    background-color: #0f0f10;
-    min-height: 100vh;
+.heading-2 {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.5rem;
+    font-weight: 800;
+    letter-spacing: -0.025em;
+    line-height: 1.2;
+}
+
+@media (min-width: 640px) {
+    .heading-2 {
+        font-size: 1.875rem;
+    }
+}
+
+.heading-3 {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+}
+
+.label-small {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    font-weight: 700;
+    color: #4B5563;
+}
+
+/* Button styles */
+.btn-primary {
+    background-color: #002FA7;
+    color: white;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 0.75rem 1.5rem;
+    border: none;
+    transition: background-color 0.2s ease;
+    cursor: pointer;
+}
+
+.btn-primary:hover {
+    background-color: #00227A;
+}
+
+.btn-primary:active {
+    transform: scale(0.98);
+}
+
+.btn-primary:disabled {
+    background-color: #9CA3AF;
+    cursor: not-allowed;
+}
+
+/* Upload zone */
+.upload-zone {
+    border: 2px dashed #D1D5DB;
+    background-color: #F9FAFB;
+    padding: 3rem;
+    text-align: center;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    font-size: calc(10px + 2vmin);
-    color: white;
+    cursor: pointer;
+    min-height: 300px;
+    transition: border-color 0.2s ease, background-color 0.2s ease;
 }
 
-.App-link {
-    color: #61dafb;
+.upload-zone:hover {
+    border-color: #002FA7;
+    background-color: #F3F4F6;
 }
 
-@keyframes App-logo-spin {
-    from {
-        transform: rotate(0deg);
-    }
+.upload-zone.dragging {
+    border-color: #002FA7;
+    background-color: #EEF2FF;
+}
+
+/* Card styles */
+.card {
+    border: 1px solid #E5E7EB;
+    background-color: white;
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+/* Input styles */
+.input {
+    border: 1px solid #E5E7EB;
+    background-color: transparent;
+    padding: 0.75rem 1rem;
+    font-size: 1rem;
+    transition: border-color 0.2s ease;
+}
+
+.input:focus {
+    outline: none;
+    border-color: #002FA7;
+    box-shadow: 0 0 0 1px #002FA7;
+}
+
+/* Stats card */
+.stat-card {
+    border: 1px solid #E5E7EB;
+    background-color: white;
+    padding: 1.5rem;
+}
+
+.stat-value {
+    font-family: 'Syne', sans-serif;
+    font-size: 2.5rem;
+    font-weight: 800;
+    color: #0A0A0A;
+    line-height: 1;
+}
+
+.stat-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    font-weight: 700;
+    color: #4B5563;
+    margin-top: 0.5rem;
+}
+
+/* Funnel styles */
+.funnel-stage {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 60px;
+    transition: all 0.3s ease;
+}
+
+.funnel-stage:hover {
+    transform: translateX(4px);
+}
+
+/* Navigation */
+.nav-link {
+    font-weight: 600;
+    color: #4B5563;
+    transition: color 0.2s ease;
+    text-decoration: none;
+}
+
+.nav-link:hover {
+    color: #002FA7;
+}
+
+.nav-link.active {
+    color: #002FA7;
+}
+
+/* Loading spinner */
+@keyframes spin {
     to {
         transform: rotate(360deg);
     }
+}
+
+.spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid #E5E7EB;
+    border-top-color: #002FA7;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+/* Progress bar */
+.progress-bar {
+    height: 4px;
+    background-color: #E5E7EB;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background-color: #002FA7;
+    transition: width 0.3s ease;
 }
