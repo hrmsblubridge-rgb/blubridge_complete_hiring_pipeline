@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Layout } from '../components/Layout';
 import { motion } from 'framer-motion';
-import { CloudArrowUp, FileXls, CheckCircle, XCircle, Warning } from '@phosphor-icons/react';
+import { CloudArrowUp, FileXls, CheckCircle, XCircle, Warning, Info } from '@phosphor-icons/react';
 import axios from 'axios';
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -87,21 +87,24 @@ export default function UploadNaukri() {
                 >
                     <h1 className="heading-1 mb-2">Upload Naukri Applies</h1>
                     <p className="text-gray-500 mb-8">
-                        Upload your Naukri job applications data. Supported formats: CSV, XLSX
+                        Upload your Naukri job applications data. The system will automatically detect columns.
                     </p>
 
-                    {/* Required columns info */}
-                    <div className="card mb-8">
-                        <p className="label-small">Required Columns</p>
-                        <div className="flex flex-wrap gap-2 mt-2">
-                            {['Name', 'Email', 'Phone Number', 'Job Role'].map((col) => (
-                                <span 
-                                    key={col}
-                                    className="px-3 py-1 bg-gray-100 border border-gray-200 text-sm font-medium"
-                                >
-                                    {col}
-                                </span>
-                            ))}
+                    {/* Dynamic Schema Info */}
+                    <div className="card mb-8 bg-blue-50 border-blue-200">
+                        <div className="flex items-start gap-3">
+                            <Info size={20} weight="fill" className="text-blue-600 flex-shrink-0 mt-0.5" />
+                            <div>
+                                <p className="font-semibold text-blue-900 mb-2">Dynamic Schema Detection</p>
+                                <p className="text-sm text-blue-800 mb-3">
+                                    The system will automatically detect and map your columns. Ensure your file has:
+                                </p>
+                                <ul className="text-sm text-blue-700 space-y-1">
+                                    <li>• <strong>Email</strong> or <strong>Phone</strong> column (at least one required for matching)</li>
+                                    <li>• All other columns will be stored and displayed dynamically</li>
+                                    <li>• Column names are detected automatically (case-insensitive)</li>
+                                </ul>
+                            </div>
                         </div>
                     </div>
 
@@ -139,7 +142,7 @@ export default function UploadNaukri() {
                                     <p className="font-semibold">Drop your file here</p>
                                     <p className="text-sm text-gray-500">or click to browse</p>
                                 </div>
-                                <p className="text-xs text-gray-400">Maximum file size: 10MB</p>
+                                <p className="text-xs text-gray-400">Supported: CSV, XLSX (Max 10MB)</p>
                             </div>
                         )}
                     </div>
@@ -148,7 +151,7 @@ export default function UploadNaukri() {
                     {uploading && (
                         <div className="mt-6">
                             <div className="flex justify-between text-sm mb-2">
-                                <span className="text-gray-600">Uploading...</span>
+                                <span className="text-gray-600">Uploading & Processing...</span>
                                 <span className="font-semibold">{progress}%</span>
                             </div>
                             <div className="progress-bar">
@@ -182,7 +185,7 @@ export default function UploadNaukri() {
                                 </div>
                             </div>
 
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                                 <div className="stat-card">
                                     <p className="stat-value">{result.total_records}</p>
                                     <p className="stat-label">Total Records</p>
@@ -200,6 +203,48 @@ export default function UploadNaukri() {
                                     <p className="stat-label">Invalid</p>
                                 </div>
                             </div>
+
+                            {/* Schema Info */}
+                            {result.schema_info && (
+                                <div className="card bg-gray-50">
+                                    <p className="label-small mb-3">Detected Schema</p>
+                                    <div className="grid grid-cols-2 gap-4 text-sm">
+                                        <div>
+                                            <p className="text-gray-600">Total Columns:</p>
+                                            <p className="font-semibold">{result.schema_info.total_columns}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-gray-600">Email Column:</p>
+                                            <p className="font-semibold">{result.schema_info.email_column || 'Not found'}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-gray-600">Phone Column:</p>
+                                            <p className="font-semibold">{result.schema_info.phone_column || 'Not found'}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-gray-600">Name Column:</p>
+                                            <p className="font-semibold">{result.schema_info.name_column || 'Not found'}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-gray-600">Job Role Column:</p>
+                                            <p className="font-semibold">{result.schema_info.job_role_column || 'Not found'}</p>
+                                        </div>
+                                    </div>
+                                    <div className="mt-4">
+                                        <p className="text-gray-600 text-sm mb-2">All Columns:</p>
+                                        <div className="flex flex-wrap gap-2">
+                                            {result.schema_info.columns?.map((col) => (
+                                                <span 
+                                                    key={col}
+                                                    className="px-2 py-1 bg-white border border-gray-200 text-xs font-medium"
+                                                >
+                                                    {col}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
 
                             {result.errors && result.errors.length > 0 && (
                                 <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200">

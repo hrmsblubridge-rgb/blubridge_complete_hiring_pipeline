@@ -160,7 +160,7 @@ class RecruitmentAPITester:
         success, response = self.run_test(
             "Process Data (Empty)",
             "POST",
-            "process",
+            "process-data",
             200
         )
         if success:
@@ -230,7 +230,7 @@ Bob Johnson,bob@example.com,9876543212,Product Manager,scheduled"""
         success, response = self.run_test(
             "Process Data (With Data)",
             "POST",
-            "process",
+            "process-data",
             200
         )
         if success:
