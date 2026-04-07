@@ -106,6 +106,53 @@ class UploadResponse(BaseModel):
     errors: List[str]
     schema_info: Dict[str, Any]
 
+class WorkflowState(BaseModel):
+    naukri_uploaded: bool
+    pipeline_uploaded: bool
+    processing_complete: bool
+    current_step: str  # 'naukri', 'pipeline', 'dashboard'
+
+# ============ WORKFLOW STATE MANAGEMENT ============
+
+async def get_workflow_state(user_id: str) -> dict:
+    """Get workflow state for a user"""
+    state = await db.workflow_state.find_one({"user_id": user_id})
+    if not state:
+        return {
+            "naukri_uploaded": False,
+            "pipeline_uploaded": False,
+            "processing_complete": False,
+            "current_step": "naukri"
+        }
+    return {
+        "naukri_uploaded": state.get("naukri_uploaded", False),
+        "pipeline_uploaded": state.get("pipeline_uploaded", False),
+        "processing_complete": state.get("processing_complete", False),
+        "current_step": state.get("current_step", "naukri")
+    }
+
+async def update_workflow_state(user_id: str, updates: dict):
+    """Update workflow state for a user"""
+    await db.workflow_state.update_one(
+        {"user_id": user_id},
+        {"$set": {**updates, "updated_at": datetime.now(timezone.utc)}},
+        upsert=True
+    )
+
+async def reset_workflow_state(user_id: str):
+    """Reset workflow state when starting fresh"""
+    await db.workflow_state.update_one(
+        {"user_id": user_id},
+        {"$set": {
+            "naukri_uploaded": False,
+            "pipeline_uploaded": False,
+            "processing_complete": False,
+            "current_step": "naukri",
+            "updated_at": datetime.now(timezone.utc)
+        }},
+        upsert=True
+    )
+
 # ============ DYNAMIC SCHEMA UTILITIES ============
 
 def normalize_phone(phone) -> str:
@@ -113,9 +160,7 @@ def normalize_phone(phone) -> str:
     if pd.isna(phone) or phone is None:
         return ""
     phone_str = str(phone).strip()
-    # Remove all non-numeric characters
     phone_str = re.sub(r'[^\d]', '', phone_str)
-    # Remove country code if present (91 for India)
     if phone_str.startswith('91') and len(phone_str) > 10:
         phone_str = phone_str[2:]
     return phone_str
@@ -131,7 +176,6 @@ def detect_identifier_columns(columns: List[str]) -> Dict[str, Optional[str]]:
     email_col = None
     phone_col = None
     
-    # Exact matches first, then partial matches
     email_exact = ['email', 'email id', 'email_id', 'emailid', 'e-mail']
     email_partial = ['email', 'mail']
     phone_exact = ['phone', 'phone number', 'phone_number', 'phonenumber', 'mobile', 'mobile number', 'contact']
@@ -139,29 +183,25 @@ def detect_identifier_columns(columns: List[str]) -> Dict[str, Optional[str]]:
     
     columns_lower = {col.lower().strip(): col for col in columns}
     
-    # Try exact matches first
     for pattern in email_exact:
         if pattern in columns_lower:
             email_col = columns_lower[pattern]
             break
     
-    # Fall back to partial matches
     if not email_col:
         for pattern in email_partial:
             for col_lower, col_original in columns_lower.items():
-                if pattern in col_lower and 'type' not in col_lower:  # Exclude email_type
+                if pattern in col_lower and 'type' not in col_lower:
                     email_col = col_original
                     break
             if email_col:
                 break
     
-    # Phone detection - exact first
     for pattern in phone_exact:
         if pattern in columns_lower:
             phone_col = columns_lower[pattern]
             break
     
-    # Fall back to partial matches
     if not phone_col:
         for pattern in phone_partial:
             for col_lower, col_original in columns_lower.items():
@@ -179,29 +219,25 @@ def detect_status_column(df: pd.DataFrame) -> Optional[str]:
                         'hired', 'pending', 'in progress', 'not attended', 'not scheduled',
                         'interview', 'offer', 'joined', 'dropped', 'hold', 'waitlist', 'confirmed']
     
-    # Priority columns to check first
     priority_patterns = ['status', 'pipeline_status', 'email_type', 'candidate_status', 'result_status']
     
     columns_lower = {col.lower().strip(): col for col in df.columns}
     
-    # Check priority patterns first
     for pattern in priority_patterns:
         for col_lower, col_original in columns_lower.items():
             if pattern == col_lower or pattern in col_lower:
-                # Verify it has status-like values
                 try:
                     unique_values = df[col_original].dropna().astype(str).str.lower().unique()
-                    if len(unique_values) > 0 and len(unique_values) < 20:  # Reasonable number of statuses
+                    if len(unique_values) > 0 and len(unique_values) < 20:
                         return col_original
                 except Exception:
                     continue
     
-    # Fallback: check all columns for status-like values
     for col in df.columns:
         try:
             unique_values = df[col].dropna().astype(str).str.lower().unique()
             matches = sum(1 for val in unique_values if any(ind in val for ind in status_indicators))
-            if matches >= 1 and len(unique_values) < 15:  # At least 1 match
+            if matches >= 1 and len(unique_values) < 15:
                 return col
         except Exception:
             continue
@@ -210,26 +246,21 @@ def detect_status_column(df: pd.DataFrame) -> Optional[str]:
 
 def detect_job_role_column(df: pd.DataFrame) -> Optional[str]:
     """Auto-detect job role column"""
-    # Exact matches first
     role_exact = ['job_role', 'job role', 'jobrole', 'job title', 'job_title', 'jobtitle', 'position', 'designation']
     role_partial = ['job', 'role', 'position', 'designation', 'title']
     
     columns_lower = {col.lower().strip(): col for col in df.columns}
     
-    # Try exact matches first
     for pattern in role_exact:
         if pattern in columns_lower:
             return columns_lower[pattern]
     
-    # Then try partial matches, prioritizing 'job' patterns
     for pattern in role_partial:
         for col_lower, col_original in columns_lower.items():
-            if pattern in col_lower and 'id' not in col_lower:  # Exclude job_id type columns
-                # Verify it has reasonable values (text, not just numbers)
+            if pattern in col_lower and 'id' not in col_lower:
                 try:
                     unique_values = df[col_original].dropna().astype(str).unique()
                     if len(unique_values) > 1 and len(unique_values) < 100:
-                        # Check if values look like job titles
                         sample = str(unique_values[0]).lower()
                         if any(kw in sample for kw in ['engineer', 'developer', 'analyst', 'manager', 'scientist', 'accountant', 'designer', 'ai', 'ml', 'data']):
                             return col_original
@@ -254,7 +285,6 @@ def detect_name_column(df: pd.DataFrame) -> Optional[str]:
 def parse_file(file_content: bytes, filename: str) -> pd.DataFrame:
     """Parse uploaded file to DataFrame"""
     if filename.lower().endswith('.csv'):
-        # Try different encodings
         for encoding in ['utf-8', 'latin-1', 'cp1252']:
             try:
                 return pd.read_csv(io.BytesIO(file_content), encoding=encoding)
@@ -273,14 +303,6 @@ def clean_value(val):
     if isinstance(val, (pd.Timestamp, datetime)):
         return val.isoformat()
     return val
-
-def dataframe_to_records(df: pd.DataFrame) -> List[Dict]:
-    """Convert DataFrame to list of clean dictionaries"""
-    records = []
-    for _, row in df.iterrows():
-        record = {col: clean_value(row[col]) for col in df.columns}
-        records.append(record)
-    return records
 
 # ============ AUTH ENDPOINTS ============
 
@@ -305,8 +327,11 @@ async def register(response: Response, data: UserRegister):
     access_token = create_access_token(user_id, email)
     refresh_token = create_refresh_token(user_id)
     
-    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=900, path="/")
+    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=3600, path="/")
     response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
+    
+    # Initialize workflow state for new user
+    await reset_workflow_state(user_id)
     
     return {"id": user_id, "name": data.name, "email": email, "role": "user"}
 
@@ -324,7 +349,7 @@ async def login(response: Response, data: UserLogin):
     access_token = create_access_token(user_id, email)
     refresh_token = create_refresh_token(user_id)
     
-    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=900, path="/")
+    response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=3600, path="/")
     response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=False, samesite="lax", max_age=604800, path="/")
     
     return {"id": user_id, "name": user["name"], "email": email, "role": user.get("role", "user")}
@@ -354,17 +379,44 @@ async def refresh_token(request: Request, response: Response):
         
         user_id = str(user["_id"])
         access_token = create_access_token(user_id, user["email"])
-        response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=900, path="/")
+        response.set_cookie(key="access_token", value=access_token, httponly=True, secure=False, samesite="lax", max_age=3600, path="/")
         return {"message": "Token refreshed"}
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Refresh token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-# ============ DYNAMIC UPLOAD ENDPOINTS ============
+# ============ WORKFLOW STATE ENDPOINTS ============
+
+@api_router.get("/workflow/state")
+async def get_workflow_status(user: dict = Depends(get_current_user)):
+    """Get current workflow state for the user"""
+    state = await get_workflow_state(user["_id"])
+    return state
+
+@api_router.post("/workflow/reset")
+async def reset_workflow(user: dict = Depends(get_current_user)):
+    """Reset workflow and clear all data for fresh upload"""
+    user_id = user["_id"]
+    
+    # Clear existing data
+    await db.naukri_applies_raw.delete_many({"_uploaded_by": user_id})
+    await db.pipeline_data_raw.delete_many({"_uploaded_by": user_id})
+    await db.processed_candidates.delete_many({})
+    await db.schema_metadata.delete_many({})
+    
+    # Reset workflow state
+    await reset_workflow_state(user_id)
+    
+    return {"success": True, "message": "Workflow reset. Ready for new upload."}
+
+# ============ UPLOAD ENDPOINTS ============
 
 @api_router.post("/upload/naukri", response_model=UploadResponse)
 async def upload_naukri(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    """Step 1: Upload Naukri Applies data"""
+    user_id = user["_id"]
+    
     try:
         content = await file.read()
         if len(content) > 10 * 1024 * 1024:
@@ -395,6 +447,11 @@ async def upload_naukri(file: UploadFile = File(...), user: dict = Depends(get_c
             "total_columns": len(df.columns)
         }
         
+        # Clear previous naukri data for this user (fresh upload resets pipeline too)
+        await db.naukri_applies_raw.delete_many({"_uploaded_by": user_id})
+        await db.pipeline_data_raw.delete_many({"_uploaded_by": user_id})
+        await db.processed_candidates.delete_many({})
+        
         # Update schema in database
         await db.schema_metadata.update_one(
             {"type": "naukri"},
@@ -410,7 +467,6 @@ async def upload_naukri(file: UploadFile = File(...), user: dict = Depends(get_c
         
         for idx, row in df.iterrows():
             try:
-                # Extract and normalize identifiers
                 email = normalize_email(row.get(email_col)) if email_col else ""
                 phone = normalize_phone(row.get(phone_col)) if phone_col else ""
                 
@@ -419,14 +475,14 @@ async def upload_naukri(file: UploadFile = File(...), user: dict = Depends(get_c
                     invalid_records += 1
                     continue
                 
-                # Check for duplicates
+                # Check for duplicates within this upload
                 query_conditions = []
                 if email:
                     query_conditions.append({"_normalized_email": email})
                 if phone:
                     query_conditions.append({"_normalized_phone": phone})
                 
-                existing = await db.naukri_applies_raw.find_one({"$or": query_conditions}) if query_conditions else None
+                existing = await db.naukri_applies_raw.find_one({"$or": query_conditions, "_uploaded_by": user_id}) if query_conditions else None
                 
                 if existing:
                     duplicate_records += 1
@@ -435,12 +491,11 @@ async def upload_naukri(file: UploadFile = File(...), user: dict = Depends(get_c
                 # Store ALL fields dynamically
                 doc = {col: clean_value(row[col]) for col in df.columns}
                 
-                # Add normalized fields and metadata
                 doc["_normalized_email"] = email
                 doc["_normalized_phone"] = phone
                 doc["_source"] = "naukri"
                 doc["_created_at"] = datetime.now(timezone.utc)
-                doc["_uploaded_by"] = user["_id"]
+                doc["_uploaded_by"] = user_id
                 
                 await db.naukri_applies_raw.insert_one(doc)
                 valid_records += 1
@@ -448,6 +503,9 @@ async def upload_naukri(file: UploadFile = File(...), user: dict = Depends(get_c
             except Exception as e:
                 errors.append(f"Row {idx + 2}: {str(e)}")
                 invalid_records += 1
+        
+        if valid_records == 0:
+            raise HTTPException(status_code=400, detail="No valid records found in the file")
         
         # Log upload history
         await db.upload_history.insert_one({
@@ -458,13 +516,21 @@ async def upload_naukri(file: UploadFile = File(...), user: dict = Depends(get_c
             "valid_records": valid_records,
             "duplicate_records": duplicate_records,
             "invalid_records": invalid_records,
-            "uploaded_by": user["_id"],
+            "uploaded_by": user_id,
             "uploaded_at": datetime.now(timezone.utc)
+        })
+        
+        # Update workflow state - Naukri uploaded, reset pipeline state
+        await update_workflow_state(user_id, {
+            "naukri_uploaded": True,
+            "pipeline_uploaded": False,
+            "processing_complete": False,
+            "current_step": "pipeline"
         })
         
         return UploadResponse(
             success=True,
-            message="Naukri data uploaded successfully",
+            message="Step 1 Complete: Naukri data uploaded. Proceed to upload Pipeline data.",
             total_records=total_records,
             valid_records=valid_records,
             duplicate_records=duplicate_records,
@@ -480,6 +546,14 @@ async def upload_naukri(file: UploadFile = File(...), user: dict = Depends(get_c
 
 @api_router.post("/upload/pipeline", response_model=UploadResponse)
 async def upload_pipeline(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    """Step 2: Upload Pipeline data (requires Naukri upload first)"""
+    user_id = user["_id"]
+    
+    # Check workflow state - ensure Naukri is uploaded first
+    state = await get_workflow_state(user_id)
+    if not state["naukri_uploaded"]:
+        raise HTTPException(status_code=400, detail="Please upload Naukri Applies data first (Step 1)")
+    
     try:
         content = await file.read()
         if len(content) > 10 * 1024 * 1024:
@@ -518,6 +592,9 @@ async def upload_pipeline(file: UploadFile = File(...), user: dict = Depends(get
             "total_columns": len(df.columns)
         }
         
+        # Clear previous pipeline data
+        await db.pipeline_data_raw.delete_many({"_uploaded_by": user_id})
+        
         # Update schema in database
         await db.schema_metadata.update_one(
             {"type": "pipeline"},
@@ -541,14 +618,14 @@ async def upload_pipeline(file: UploadFile = File(...), user: dict = Depends(get
                     invalid_records += 1
                     continue
                 
-                # Check for duplicates
+                # Check for duplicates within this upload
                 query_conditions = []
                 if email:
                     query_conditions.append({"_normalized_email": email})
                 if phone:
                     query_conditions.append({"_normalized_phone": phone})
                 
-                existing = await db.pipeline_data_raw.find_one({"$or": query_conditions}) if query_conditions else None
+                existing = await db.pipeline_data_raw.find_one({"$or": query_conditions, "_uploaded_by": user_id}) if query_conditions else None
                 
                 if existing:
                     duplicate_records += 1
@@ -557,13 +634,12 @@ async def upload_pipeline(file: UploadFile = File(...), user: dict = Depends(get
                 # Store ALL fields dynamically
                 doc = {col: clean_value(row[col]) for col in df.columns}
                 
-                # Add normalized fields and metadata
                 doc["_normalized_email"] = email
                 doc["_normalized_phone"] = phone
                 doc["_normalized_status"] = str(row.get(status_col, "")).strip().lower() if status_col else None
                 doc["_source"] = "pipeline"
                 doc["_created_at"] = datetime.now(timezone.utc)
-                doc["_uploaded_by"] = user["_id"]
+                doc["_uploaded_by"] = user_id
                 
                 await db.pipeline_data_raw.insert_one(doc)
                 valid_records += 1
@@ -571,6 +647,9 @@ async def upload_pipeline(file: UploadFile = File(...), user: dict = Depends(get
             except Exception as e:
                 errors.append(f"Row {idx + 2}: {str(e)}")
                 invalid_records += 1
+        
+        if valid_records == 0:
+            raise HTTPException(status_code=400, detail="No valid records found in the file")
         
         # Log upload history
         await db.upload_history.insert_one({
@@ -581,13 +660,19 @@ async def upload_pipeline(file: UploadFile = File(...), user: dict = Depends(get
             "valid_records": valid_records,
             "duplicate_records": duplicate_records,
             "invalid_records": invalid_records,
-            "uploaded_by": user["_id"],
+            "uploaded_by": user_id,
             "uploaded_at": datetime.now(timezone.utc)
+        })
+        
+        # Update workflow state - Pipeline uploaded
+        await update_workflow_state(user_id, {
+            "pipeline_uploaded": True,
+            "current_step": "processing"
         })
         
         return UploadResponse(
             success=True,
-            message="Pipeline data uploaded successfully",
+            message="Step 2 Complete: Pipeline data uploaded. Processing will begin automatically.",
             total_records=total_records,
             valid_records=valid_records,
             duplicate_records=duplicate_records,
@@ -601,24 +686,30 @@ async def upload_pipeline(file: UploadFile = File(...), user: dict = Depends(get
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ============ PROCESSING ENDPOINT ============
+# ============ COMBINED PROCESSING ENDPOINT ============
 
-@api_router.post("/process-data")
-async def process_data(user: dict = Depends(get_current_user)):
+@api_router.post("/process-combined")
+async def process_combined_data(user: dict = Depends(get_current_user)):
+    """Process both datasets together (requires both uploads complete)"""
+    user_id = user["_id"]
+    
+    # Check workflow state
+    state = await get_workflow_state(user_id)
+    if not state["naukri_uploaded"]:
+        raise HTTPException(status_code=400, detail="Please upload Naukri Applies data first (Step 1)")
+    if not state["pipeline_uploaded"]:
+        raise HTTPException(status_code=400, detail="Please upload Pipeline data first (Step 2)")
+    
     try:
         # Clear existing processed data
         await db.processed_candidates.delete_many({})
         
-        # Get schema metadata
-        naukri_schema = await db.schema_metadata.find_one({"type": "naukri"})
-        pipeline_schema = await db.schema_metadata.find_one({"type": "pipeline"})
-        
-        # Get all naukri applies
-        naukri_cursor = db.naukri_applies_raw.find({})
+        # Get all naukri applies for this user
+        naukri_cursor = db.naukri_applies_raw.find({"_uploaded_by": user_id})
         naukri_list = await naukri_cursor.to_list(None)
         
-        # Get all pipeline data
-        pipeline_cursor = db.pipeline_data_raw.find({})
+        # Get all pipeline data for this user
+        pipeline_cursor = db.pipeline_data_raw.find({"_uploaded_by": user_id})
         pipeline_list = await pipeline_cursor.to_list(None)
         
         # Create lookup dicts for pipeline data
@@ -652,7 +743,7 @@ async def process_data(user: dict = Depends(get_current_user)):
             doc["_naukri_id"] = str(naukri["_id"])
             
             if pipeline_match:
-                # Merge pipeline data
+                # Registered - matched in pipeline
                 doc["_registration_status"] = "registered"
                 doc["_pipeline_id"] = str(pipeline_match["_id"])
                 doc["_pipeline_status"] = pipeline_match.get("_normalized_status", "unknown")
@@ -676,9 +767,15 @@ async def process_data(user: dict = Depends(get_current_user)):
             await db.processed_candidates.insert_one(doc)
             processed_count += 1
         
+        # Update workflow state - Processing complete
+        await update_workflow_state(user_id, {
+            "processing_complete": True,
+            "current_step": "dashboard"
+        })
+        
         return {
             "success": True,
-            "message": "Data processed successfully",
+            "message": "Processing complete! Redirecting to dashboard.",
             "total_processed": processed_count,
             "registered": registered_count,
             "not_registered": not_registered_count,
@@ -692,6 +789,23 @@ async def process_data(user: dict = Depends(get_current_user)):
 
 @api_router.get("/analytics")
 async def get_analytics(job_role: Optional[str] = Query(None), user: dict = Depends(get_current_user)):
+    """Get analytics (requires processing complete)"""
+    user_id = user["_id"]
+    
+    # Check workflow state
+    state = await get_workflow_state(user_id)
+    if not state["processing_complete"]:
+        return {
+            "total_naukri_applies": 0,
+            "registered": 0,
+            "not_registered": 0,
+            "status_breakdown": {},
+            "job_roles": [],
+            "job_role_column": None,
+            "schema": {"naukri": None, "pipeline": None},
+            "workflow_state": state
+        }
+    
     try:
         # Get schema metadata
         naukri_schema = await db.schema_metadata.find_one({"type": "naukri"})
@@ -710,19 +824,13 @@ async def get_analytics(job_role: Optional[str] = Query(None), user: dict = Depe
         total_naukri = await db.processed_candidates.count_documents(match_filter)
         
         if total_naukri == 0:
-            # Get job roles from raw data
             job_roles = []
             if job_role_col:
                 job_roles = await db.naukri_applies_raw.distinct(job_role_col)
                 job_roles = [r for r in job_roles if r]
             
-            # Clean schema objects by removing _id fields
-            clean_naukri_schema = None
-            clean_pipeline_schema = None
-            if naukri_schema:
-                clean_naukri_schema = {k: v for k, v in naukri_schema.items() if k != "_id"}
-            if pipeline_schema:
-                clean_pipeline_schema = {k: v for k, v in pipeline_schema.items() if k != "_id"}
+            clean_naukri_schema = {k: v for k, v in naukri_schema.items() if k != "_id"} if naukri_schema else None
+            clean_pipeline_schema = {k: v for k, v in pipeline_schema.items() if k != "_id"} if pipeline_schema else None
             
             return {
                 "total_naukri_applies": 0,
@@ -734,7 +842,8 @@ async def get_analytics(job_role: Optional[str] = Query(None), user: dict = Depe
                 "schema": {
                     "naukri": clean_naukri_schema,
                     "pipeline": clean_pipeline_schema
-                }
+                },
+                "workflow_state": state
             }
         
         # Registration counts
@@ -746,23 +855,13 @@ async def get_analytics(job_role: Optional[str] = Query(None), user: dict = Depe
         
         # Dynamic status breakdown
         status_breakdown = {}
-        if pipeline_schema and pipeline_schema.get("status_values"):
-            for status in pipeline_schema["status_values"]:
-                status_lower = status.lower().strip()
-                count = await db.processed_candidates.count_documents({
-                    **registered_filter,
-                    "_pipeline_status": status_lower
-                })
-                status_breakdown[status] = count
-        
-        # Also get any statuses not in original schema
         pipeline = [
             {"$match": registered_filter},
             {"$group": {"_id": "$_pipeline_status", "count": {"$sum": 1}}}
         ]
         status_agg = await db.processed_candidates.aggregate(pipeline).to_list(None)
         for item in status_agg:
-            if item["_id"] and item["_id"] not in [s.lower() for s in status_breakdown.keys()]:
+            if item["_id"]:
                 status_breakdown[item["_id"]] = item["count"]
         
         # Get distinct job roles
@@ -771,13 +870,9 @@ async def get_analytics(job_role: Optional[str] = Query(None), user: dict = Depe
             job_roles = await db.processed_candidates.distinct(job_role_col)
             job_roles = [r for r in job_roles if r]
         
-        # Clean schema objects by removing _id fields
-        clean_naukri_schema = None
-        clean_pipeline_schema = None
-        if naukri_schema:
-            clean_naukri_schema = {k: v for k, v in naukri_schema.items() if k != "_id"}
-        if pipeline_schema:
-            clean_pipeline_schema = {k: v for k, v in pipeline_schema.items() if k != "_id"}
+        # Clean schema objects
+        clean_naukri_schema = {k: v for k, v in naukri_schema.items() if k != "_id"} if naukri_schema else None
+        clean_pipeline_schema = {k: v for k, v in pipeline_schema.items() if k != "_id"} if pipeline_schema else None
         
         return {
             "total_naukri_applies": total_naukri,
@@ -789,13 +884,14 @@ async def get_analytics(job_role: Optional[str] = Query(None), user: dict = Depe
             "schema": {
                 "naukri": clean_naukri_schema,
                 "pipeline": clean_pipeline_schema
-            }
+            },
+            "workflow_state": state
         }
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ============ DATA ENDPOINTS ============
+# ============ DATA ENDPOINT ============
 
 @api_router.get("/data")
 async def get_data(
@@ -808,12 +904,15 @@ async def get_data(
     limit: int = Query(50, ge=1, le=500),
     user: dict = Depends(get_current_user)
 ):
+    """Get detailed data (requires processing complete for processed data)"""
+    user_id = user["_id"]
+    
     try:
         # Get schema metadata
         naukri_schema = await db.schema_metadata.find_one({"type": "naukri"})
         pipeline_schema = await db.schema_metadata.find_one({"type": "pipeline"})
         
-        # Clean schema objects by removing _id
+        # Clean schema objects
         clean_naukri_schema = {k: v for k, v in naukri_schema.items() if k != "_id"} if naukri_schema else None
         clean_pipeline_schema = {k: v for k, v in pipeline_schema.items() if k != "_id"} if pipeline_schema else None
         
@@ -829,7 +928,6 @@ async def get_data(
         
         skip = (page - 1) * limit
         
-        # Build filters
         def build_search_filter(schema, search_term):
             if not search_term or not schema:
                 return {}
@@ -849,7 +947,7 @@ async def get_data(
             return {"$or": conditions} if conditions else {}
         
         if source in ["naukri", "all"]:
-            naukri_filter = {}
+            naukri_filter = {"_uploaded_by": user_id}
             if job_role and job_role != "all" and naukri_schema:
                 job_role_col = naukri_schema.get("job_role_column")
                 if job_role_col:
@@ -857,7 +955,8 @@ async def get_data(
             
             if search and naukri_schema:
                 search_filter = build_search_filter(naukri_schema, search)
-                naukri_filter.update(search_filter)
+                if search_filter:
+                    naukri_filter.update(search_filter)
             
             total_naukri = await db.naukri_applies_raw.count_documents(naukri_filter)
             naukri_data = await db.naukri_applies_raw.find(
@@ -865,7 +964,6 @@ async def get_data(
                 {"_id": 0}
             ).skip(skip).limit(limit).to_list(None)
             
-            # Clean datetime objects
             for record in naukri_data:
                 for k, v in record.items():
                     if isinstance(v, datetime):
@@ -880,7 +978,7 @@ async def get_data(
             }
         
         if source in ["pipeline", "all"]:
-            pipeline_filter = {}
+            pipeline_filter = {"_uploaded_by": user_id}
             if status and status != "all" and pipeline_schema:
                 pipeline_filter["_normalized_status"] = status.lower()
             
@@ -891,7 +989,8 @@ async def get_data(
             
             if search and pipeline_schema:
                 search_filter = build_search_filter(pipeline_schema, search)
-                pipeline_filter.update(search_filter)
+                if search_filter:
+                    pipeline_filter.update(search_filter)
             
             total_pipeline = await db.pipeline_data_raw.count_documents(pipeline_filter)
             pipeline_data = await db.pipeline_data_raw.find(
@@ -948,7 +1047,6 @@ async def get_data(
                     if isinstance(v, datetime):
                         record[k] = v.isoformat()
             
-            # Get combined columns
             combined_columns = []
             if naukri_schema:
                 combined_columns.extend(naukri_schema.get("columns", []))
@@ -967,19 +1065,6 @@ async def get_data(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ============ SCHEMA ENDPOINT ============
-
-@api_router.get("/schema")
-async def get_schema(user: dict = Depends(get_current_user)):
-    """Get current schema metadata for both datasets"""
-    naukri_schema = await db.schema_metadata.find_one({"type": "naukri"}, {"_id": 0})
-    pipeline_schema = await db.schema_metadata.find_one({"type": "pipeline"}, {"_id": 0})
-    
-    return {
-        "naukri": naukri_schema,
-        "pipeline": pipeline_schema
-    }
-
 # ============ CSV DOWNLOAD ENDPOINT ============
 
 @api_router.get("/analytics/download")
@@ -990,6 +1075,8 @@ async def download_analytics(
     registration: Optional[str] = Query(None),
     user: dict = Depends(get_current_user)
 ):
+    user_id = user["_id"]
+    
     try:
         naukri_schema = await db.schema_metadata.find_one({"type": "naukri"})
         
@@ -1007,12 +1094,14 @@ async def download_analytics(
             
             cursor = db.processed_candidates.find(filter_query, {"_id": 0})
         elif source == "naukri":
+            filter_query["_uploaded_by"] = user_id
             if job_role and job_role != "all" and naukri_schema:
                 job_role_col = naukri_schema.get("job_role_column")
                 if job_role_col:
                     filter_query[job_role_col] = job_role
             cursor = db.naukri_applies_raw.find(filter_query, {"_id": 0})
         elif source == "pipeline":
+            filter_query["_uploaded_by"] = user_id
             pipeline_schema = await db.schema_metadata.find_one({"type": "pipeline"})
             if status and status != "all":
                 filter_query["_normalized_status"] = status.lower()
@@ -1029,22 +1118,18 @@ async def download_analytics(
         if not data:
             raise HTTPException(status_code=404, detail="No data to download")
         
-        # Get all columns from data
         all_columns = set()
         for record in data:
             all_columns.update(record.keys())
         
-        # Filter out internal fields for cleaner export
         export_columns = [c for c in all_columns if not c.startswith('_') or c in ['_registration_status', '_pipeline_status']]
         export_columns.sort()
         
-        # Create CSV
         output = io.StringIO()
         writer = csv.DictWriter(output, fieldnames=export_columns, extrasaction='ignore')
         writer.writeheader()
         
         for record in data:
-            # Clean datetime values
             clean_record = {}
             for k, v in record.items():
                 if isinstance(v, datetime):
@@ -1066,31 +1151,10 @@ async def download_analytics(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ============ RESET DATA ENDPOINT ============
-
-@api_router.delete("/reset-data")
-async def reset_data(source: str = Query("all"), user: dict = Depends(get_current_user)):
-    """Reset data for fresh upload"""
-    try:
-        if source in ["naukri", "all"]:
-            await db.naukri_applies_raw.delete_many({})
-            await db.schema_metadata.delete_one({"type": "naukri"})
-        
-        if source in ["pipeline", "all"]:
-            await db.pipeline_data_raw.delete_many({})
-            await db.schema_metadata.delete_one({"type": "pipeline"})
-        
-        if source in ["processed", "all"]:
-            await db.processed_candidates.delete_many({})
-        
-        return {"success": True, "message": f"Data reset successfully for: {source}"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 # Health check
 @api_router.get("/")
 async def root():
-    return {"message": "Recruitment Analytics API", "status": "healthy", "version": "2.0"}
+    return {"message": "Recruitment Analytics API", "status": "healthy", "version": "3.0"}
 
 # Include the router in the main app
 app.include_router(api_router)
@@ -1120,6 +1184,7 @@ async def startup_event():
     await db.pipeline_data_raw.create_index([("_normalized_email", 1), ("_normalized_phone", 1)])
     await db.processed_candidates.create_index("_registration_status")
     await db.processed_candidates.create_index("_pipeline_status")
+    await db.workflow_state.create_index("user_id", unique=True)
     
     # Seed admin
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@recruitment.com")
@@ -1128,13 +1193,15 @@ async def startup_event():
     existing = await db.users.find_one({"email": admin_email})
     if existing is None:
         hashed = hash_password(admin_password)
-        await db.users.insert_one({
+        result = await db.users.insert_one({
             "email": admin_email,
             "password_hash": hashed,
             "name": "Admin",
             "role": "admin",
             "created_at": datetime.now(timezone.utc)
         })
+        # Initialize workflow state for admin
+        await reset_workflow_state(str(result.inserted_id))
         logger.info(f"Admin user created: {admin_email}")
     elif not verify_password(admin_password, existing["password_hash"]):
         await db.users.update_one(

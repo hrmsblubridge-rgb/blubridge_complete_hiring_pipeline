@@ -1,12 +1,16 @@
 import { useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Layout } from '../components/Layout';
+import { useWorkflow } from '../context/WorkflowContext';
 import { motion } from 'framer-motion';
-import { CloudArrowUp, FileXls, CheckCircle, XCircle, Warning, Info } from '@phosphor-icons/react';
+import { CloudArrowUp, FileXls, CheckCircle, XCircle, Warning, Info, ArrowRight, NumberCircleOne, NumberCircleTwo, NumberCircleThree } from '@phosphor-icons/react';
 import axios from 'axios';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
 export default function UploadNaukri() {
+    const navigate = useNavigate();
+    const { workflowState, updateLocalState, resetWorkflow } = useWorkflow();
     const [file, setFile] = useState(null);
     const [dragging, setDragging] = useState(false);
     const [uploading, setUploading] = useState(false);
@@ -70,6 +74,12 @@ export default function UploadNaukri() {
             });
 
             setResult(response.data);
+            updateLocalState({
+                naukri_uploaded: true,
+                pipeline_uploaded: false,
+                processing_complete: false,
+                current_step: 'pipeline'
+            });
             setFile(null);
         } catch (err) {
             setError(err.response?.data?.detail || 'Upload failed. Please try again.');
@@ -78,16 +88,47 @@ export default function UploadNaukri() {
         }
     };
 
+    const handleContinue = () => {
+        navigate('/upload/pipeline');
+    };
+
+    const handleStartOver = async () => {
+        await resetWorkflow();
+        setResult(null);
+        setFile(null);
+        setError('');
+    };
+
     return (
         <Layout>
-            <div className="max-w-3xl mx-auto">
+            <div className="max-w-4xl mx-auto">
                 <motion.div
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                 >
-                    <h1 className="heading-1 mb-2">Upload Naukri Applies</h1>
+                    {/* Progress Steps */}
+                    <div className="mb-8">
+                        <div className="flex items-center justify-center gap-4">
+                            <div className="flex items-center gap-2">
+                                <NumberCircleOne size={32} weight="fill" className="text-[#002FA7]" />
+                                <span className="font-bold text-[#002FA7]">Upload Naukri</span>
+                            </div>
+                            <div className="w-16 h-0.5 bg-gray-300"></div>
+                            <div className="flex items-center gap-2">
+                                <NumberCircleTwo size={32} weight={workflowState.naukri_uploaded ? "fill" : "regular"} className={workflowState.naukri_uploaded ? "text-[#002FA7]" : "text-gray-400"} />
+                                <span className={workflowState.naukri_uploaded ? "font-bold text-[#002FA7]" : "text-gray-400"}>Upload Pipeline</span>
+                            </div>
+                            <div className="w-16 h-0.5 bg-gray-300"></div>
+                            <div className="flex items-center gap-2">
+                                <NumberCircleThree size={32} weight="regular" className="text-gray-400" />
+                                <span className="text-gray-400">Dashboard</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <h1 className="heading-1 mb-2">Step 1: Upload Naukri Applies Data</h1>
                     <p className="text-gray-500 mb-8">
-                        Upload your Naukri job applications data. The system will automatically detect columns.
+                        Start by uploading your Naukri job applications data. This is the first dataset required for analysis.
                     </p>
 
                     {/* Dynamic Schema Info */}
@@ -102,11 +143,41 @@ export default function UploadNaukri() {
                                 <ul className="text-sm text-blue-700 space-y-1">
                                     <li>• <strong>Email</strong> or <strong>Phone</strong> column (at least one required for matching)</li>
                                     <li>• All other columns will be stored and displayed dynamically</li>
-                                    <li>• Column names are detected automatically (case-insensitive)</li>
                                 </ul>
                             </div>
                         </div>
                     </div>
+
+                    {/* Already uploaded - show continue option */}
+                    {workflowState.naukri_uploaded && !result && (
+                        <div className="card mb-8 bg-green-50 border-green-200">
+                            <div className="flex items-start gap-3">
+                                <CheckCircle size={24} weight="fill" className="text-green-600 flex-shrink-0 mt-0.5" />
+                                <div className="flex-1">
+                                    <p className="font-semibold text-green-900 mb-2">Naukri Data Already Uploaded</p>
+                                    <p className="text-sm text-green-800 mb-4">
+                                        You have already uploaded Naukri data. You can continue to the next step or start over with a new file.
+                                    </p>
+                                    <div className="flex gap-3">
+                                        <button
+                                            onClick={handleContinue}
+                                            className="btn-primary flex items-center gap-2"
+                                            data-testid="continue-to-pipeline-btn"
+                                        >
+                                            Continue to Step 2
+                                            <ArrowRight size={18} weight="bold" />
+                                        </button>
+                                        <button
+                                            onClick={handleStartOver}
+                                            className="px-4 py-3 border border-gray-300 font-bold text-sm uppercase tracking-wider hover:bg-gray-50"
+                                        >
+                                            Start Over
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {/* Upload Zone */}
                     <div
@@ -139,7 +210,7 @@ export default function UploadNaukri() {
                             <div className="flex flex-col items-center gap-4">
                                 <CloudArrowUp size={48} weight="duotone" className="text-gray-400" />
                                 <div className="text-center">
-                                    <p className="font-semibold">Drop your file here</p>
+                                    <p className="font-semibold">Drop your Naukri Applies file here</p>
                                     <p className="text-sm text-gray-500">or click to browse</p>
                                 </div>
                                 <p className="text-xs text-gray-400">Supported: CSV, XLSX (Max 10MB)</p>
@@ -206,9 +277,9 @@ export default function UploadNaukri() {
 
                             {/* Schema Info */}
                             {result.schema_info && (
-                                <div className="card bg-gray-50">
+                                <div className="card bg-gray-50 mb-6">
                                     <p className="label-small mb-3">Detected Schema</p>
-                                    <div className="grid grid-cols-2 gap-4 text-sm">
+                                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
                                         <div>
                                             <p className="text-gray-600">Total Columns:</p>
                                             <p className="font-semibold">{result.schema_info.total_columns}</p>
@@ -221,33 +292,12 @@ export default function UploadNaukri() {
                                             <p className="text-gray-600">Phone Column:</p>
                                             <p className="font-semibold">{result.schema_info.phone_column || 'Not found'}</p>
                                         </div>
-                                        <div>
-                                            <p className="text-gray-600">Name Column:</p>
-                                            <p className="font-semibold">{result.schema_info.name_column || 'Not found'}</p>
-                                        </div>
-                                        <div>
-                                            <p className="text-gray-600">Job Role Column:</p>
-                                            <p className="font-semibold">{result.schema_info.job_role_column || 'Not found'}</p>
-                                        </div>
-                                    </div>
-                                    <div className="mt-4">
-                                        <p className="text-gray-600 text-sm mb-2">All Columns:</p>
-                                        <div className="flex flex-wrap gap-2">
-                                            {result.schema_info.columns?.map((col) => (
-                                                <span 
-                                                    key={col}
-                                                    className="px-2 py-1 bg-white border border-gray-200 text-xs font-medium"
-                                                >
-                                                    {col}
-                                                </span>
-                                            ))}
-                                        </div>
                                     </div>
                                 </div>
                             )}
 
                             {result.errors && result.errors.length > 0 && (
-                                <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200">
+                                <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200">
                                     <div className="flex items-center gap-2 mb-2">
                                         <Warning size={18} weight="fill" className="text-yellow-600" />
                                         <p className="font-semibold text-yellow-800">Validation Errors</p>
@@ -259,17 +309,27 @@ export default function UploadNaukri() {
                                     </ul>
                                 </div>
                             )}
+
+                            {/* Continue Button */}
+                            <button
+                                onClick={handleContinue}
+                                className="btn-primary w-full flex items-center justify-center gap-2"
+                                data-testid="continue-to-step2-btn"
+                            >
+                                Continue to Step 2: Upload Pipeline Data
+                                <ArrowRight size={20} weight="bold" />
+                            </button>
                         </motion.div>
                     )}
 
                     {/* Upload button */}
-                    {file && !uploading && (
+                    {file && !uploading && !result && (
                         <button
                             onClick={handleUpload}
                             className="btn-primary w-full mt-6"
                             data-testid="upload-submit-button"
                         >
-                            Upload File
+                            Upload Naukri File
                         </button>
                     )}
                 </motion.div>

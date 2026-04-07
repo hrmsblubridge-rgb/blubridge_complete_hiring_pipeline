@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Layout } from '../components/Layout';
+import { useWorkflow } from '../context/WorkflowContext';
 import { motion } from 'framer-motion';
 import { 
     Funnel, 
@@ -10,11 +12,10 @@ import {
     ArrowsClockwise,
     ChartBar,
     Table as TableIcon,
-    List,
     MagnifyingGlass,
     CaretLeft,
     CaretRight,
-    Trash
+    CheckCircle
 } from '@phosphor-icons/react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
@@ -25,9 +26,10 @@ const API = process.env.REACT_APP_BACKEND_URL;
 const CHART_COLORS = ['#002FA7', '#4361EE', '#374151', '#9CA3AF', '#0A0A0A', '#10B981', '#F59E0B', '#EF4444'];
 
 export default function Dashboard() {
+    const navigate = useNavigate();
+    const { workflowState, resetWorkflow } = useWorkflow();
     const [analytics, setAnalytics] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [processing, setProcessing] = useState(false);
     const [selectedRole, setSelectedRole] = useState('all');
     const [selectedStatus, setSelectedStatus] = useState('all');
     const [selectedRegistration, setSelectedRegistration] = useState('all');
@@ -93,24 +95,6 @@ export default function Dashboard() {
         }
     }, [activeTab, fetchTableData]);
 
-    const handleProcess = async () => {
-        setProcessing(true);
-        try {
-            await axios.post(`${API}/api/process-data`, {}, {
-                withCredentials: true
-            });
-            await fetchAnalytics(selectedRole);
-            if (activeTab === 'data') {
-                await fetchTableData();
-            }
-        } catch (err) {
-            setError('Processing failed');
-            console.error(err);
-        } finally {
-            setProcessing(false);
-        }
-    };
-
     const handleDownload = async (source = 'processed') => {
         try {
             const params = new URLSearchParams({ source });
@@ -137,21 +121,10 @@ export default function Dashboard() {
         }
     };
 
-    const handleReset = async (source = 'all') => {
-        if (!window.confirm(`Are you sure you want to reset ${source} data? This cannot be undone.`)) {
-            return;
-        }
-        try {
-            await axios.delete(`${API}/api/reset-data?source=${source}`, {
-                withCredentials: true
-            });
-            await fetchAnalytics(selectedRole);
-            if (activeTab === 'data') {
-                await fetchTableData();
-            }
-        } catch (err) {
-            setError('Reset failed');
-            console.error(err);
+    const handleNewAnalysis = async () => {
+        if (window.confirm('Start a new analysis? This will clear all uploaded data.')) {
+            await resetWorkflow();
+            navigate('/upload/naukri');
         }
     };
 
@@ -179,7 +152,7 @@ export default function Dashboard() {
     const jobRoles = analytics?.job_roles || [];
     const statusValues = Object.keys(statusBreakdown);
 
-    // Calculate funnel with dynamic status
+    // Calculate funnel percentages
     const getPercentage = (value, total) => {
         if (total === 0) return 0;
         return Math.round((value / total) * 100);
@@ -197,7 +170,7 @@ export default function Dashboard() {
             label: 'Registered', 
             value: analytics.registered, 
             icon: UserCheck,
-            color: CHART_COLORS[1],
+            color: CHART_COLORS[5],
             width: getPercentage(analytics.registered, analytics.total_naukri_applies) || 85
         },
         { 
@@ -216,7 +189,7 @@ export default function Dashboard() {
     const totalRecords = tableData?.[dataSource]?.total || 0;
     const totalPages = Math.ceil(totalRecords / pageSize);
 
-    // Filter columns to show (exclude internal fields except important ones)
+    // Filter columns to show
     const displayColumns = currentColumns.filter(col => 
         !col.startsWith('_') || 
         ['_registration_status', '_pipeline_status', '_normalized_email', '_normalized_phone'].includes(col)
@@ -229,11 +202,29 @@ export default function Dashboard() {
                 animate={{ opacity: 1, y: 0 }}
                 data-testid="dashboard-content"
             >
+                {/* Success Banner */}
+                <div className="mb-6 p-4 bg-green-50 border border-green-200 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <CheckCircle size={24} weight="fill" className="text-green-600" />
+                        <div>
+                            <p className="font-semibold text-green-900">Analysis Complete</p>
+                            <p className="text-sm text-green-700">Both datasets have been processed and matched successfully.</p>
+                        </div>
+                    </div>
+                    <button
+                        onClick={handleNewAnalysis}
+                        className="flex items-center gap-2 px-4 py-2 border border-green-300 text-green-700 font-bold text-sm uppercase tracking-wider hover:bg-green-100 transition-colors"
+                    >
+                        <ArrowsClockwise size={18} weight="bold" />
+                        New Analysis
+                    </button>
+                </div>
+
                 {/* Header */}
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
                     <div>
-                        <h1 className="heading-1 mb-1">Recruitment Analytics</h1>
-                        <p className="text-gray-500">Dynamic schema-driven analysis</p>
+                        <h1 className="heading-1 mb-1">Analytics Dashboard</h1>
+                        <p className="text-gray-500">Combined analysis of Naukri Applies and Pipeline data</p>
                     </div>
                     
                     <div className="flex flex-wrap items-center gap-3">
@@ -252,25 +243,14 @@ export default function Dashboard() {
                             </Select>
                         )}
 
-                        {/* Process Button */}
+                        {/* Download Button */}
                         <button
-                            onClick={handleProcess}
-                            disabled={processing}
-                            className="btn-primary flex items-center gap-2"
-                            data-testid="process-data-button"
+                            onClick={() => handleDownload('processed')}
+                            className="flex items-center gap-2 px-4 py-3 border border-gray-200 font-bold text-sm uppercase tracking-wider hover:bg-gray-50 transition-colors"
+                            data-testid="download-csv-button"
                         >
-                            <ArrowsClockwise size={18} weight="bold" className={processing ? 'animate-spin' : ''} />
-                            {processing ? 'Processing...' : 'Process Data'}
-                        </button>
-
-                        {/* Reset Button */}
-                        <button
-                            onClick={() => handleReset('all')}
-                            className="flex items-center gap-2 px-4 py-3 border border-red-200 text-red-600 font-bold text-sm uppercase tracking-wider hover:bg-red-50 transition-colors"
-                            data-testid="reset-data-button"
-                        >
-                            <Trash size={18} weight="bold" />
-                            Reset
+                            <DownloadSimple size={18} weight="bold" />
+                            Download CSV
                         </button>
                     </div>
                 </div>
@@ -306,8 +286,8 @@ export default function Dashboard() {
                             <div className="flex flex-col items-center justify-center min-h-[400px] border border-gray-200 bg-white">
                                 <ChartBar size={64} weight="duotone" className="text-gray-300 mb-4" />
                                 <h2 className="heading-3 mb-2">No Data Available</h2>
-                                <p className="text-gray-500 text-center max-w-md mb-6">
-                                    Upload your data files and click "Process Data" to generate analytics.
+                                <p className="text-gray-500 text-center max-w-md">
+                                    Processing may still be in progress. Please wait or try refreshing.
                                 </p>
                             </div>
                         ) : (
@@ -327,6 +307,7 @@ export default function Dashboard() {
                                             <span className="label-small">Registered</span>
                                         </div>
                                         <p className="stat-value text-green-600">{analytics.registered}</p>
+                                        <p className="text-xs text-gray-500">{getPercentage(analytics.registered, analytics.total_naukri_applies)}% of total</p>
                                     </div>
                                     <div className="stat-card">
                                         <div className="flex items-center gap-2 mb-2">
@@ -334,11 +315,12 @@ export default function Dashboard() {
                                             <span className="label-small">Not Registered</span>
                                         </div>
                                         <p className="stat-value text-red-500">{analytics.not_registered}</p>
+                                        <p className="text-xs text-gray-500">{getPercentage(analytics.not_registered, analytics.total_naukri_applies)}% of total</p>
                                     </div>
                                     <div className="stat-card">
                                         <div className="flex items-center gap-2 mb-2">
-                                            <List size={20} weight="bold" className="text-[#002FA7]" />
-                                            <span className="label-small">Statuses Found</span>
+                                            <Funnel size={20} weight="bold" className="text-[#002FA7]" />
+                                            <span className="label-small">Status Types</span>
                                         </div>
                                         <p className="stat-value">{statusValues.length}</p>
                                     </div>
@@ -351,14 +333,6 @@ export default function Dashboard() {
                                             <Funnel size={24} weight="bold" className="text-[#002FA7]" />
                                             <h2 className="heading-3">Recruitment Funnel</h2>
                                         </div>
-                                        <button
-                                            onClick={() => handleDownload('processed')}
-                                            className="flex items-center gap-2 px-4 py-2 border border-gray-200 font-bold text-xs uppercase tracking-wider hover:bg-gray-50 transition-colors"
-                                            data-testid="download-csv-button"
-                                        >
-                                            <DownloadSimple size={16} weight="bold" />
-                                            CSV
-                                        </button>
                                     </div>
 
                                     <div className="space-y-3">
@@ -501,7 +475,7 @@ export default function Dashboard() {
                             ) : currentData.length === 0 ? (
                                 <div className="flex flex-col items-center justify-center py-12">
                                     <TableIcon size={48} weight="duotone" className="text-gray-300 mb-4" />
-                                    <p className="text-gray-500">No data available. Upload files first.</p>
+                                    <p className="text-gray-500">No data available for the selected filters.</p>
                                 </div>
                             ) : (
                                 <>
@@ -566,36 +540,6 @@ export default function Dashboard() {
                                 </>
                             )}
                         </div>
-
-                        {/* Schema Info */}
-                        {tableData?.schemas && (
-                            <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {tableData.schemas.naukri && (
-                                    <div className="card">
-                                        <h4 className="label-small mb-3">Naukri Schema (Detected)</h4>
-                                        <div className="space-y-2 text-sm">
-                                            <p><span className="font-semibold">Columns:</span> {tableData.schemas.naukri.total_columns}</p>
-                                            <p><span className="font-semibold">Email Column:</span> {tableData.schemas.naukri.email_column || 'Not detected'}</p>
-                                            <p><span className="font-semibold">Phone Column:</span> {tableData.schemas.naukri.phone_column || 'Not detected'}</p>
-                                            <p><span className="font-semibold">Name Column:</span> {tableData.schemas.naukri.name_column || 'Not detected'}</p>
-                                            <p><span className="font-semibold">Job Role Column:</span> {tableData.schemas.naukri.job_role_column || 'Not detected'}</p>
-                                        </div>
-                                    </div>
-                                )}
-                                {tableData.schemas.pipeline && (
-                                    <div className="card">
-                                        <h4 className="label-small mb-3">Pipeline Schema (Detected)</h4>
-                                        <div className="space-y-2 text-sm">
-                                            <p><span className="font-semibold">Columns:</span> {tableData.schemas.pipeline.total_columns}</p>
-                                            <p><span className="font-semibold">Email Column:</span> {tableData.schemas.pipeline.email_column || 'Not detected'}</p>
-                                            <p><span className="font-semibold">Phone Column:</span> {tableData.schemas.pipeline.phone_column || 'Not detected'}</p>
-                                            <p><span className="font-semibold">Status Column:</span> {tableData.schemas.pipeline.status_column || 'Not detected'}</p>
-                                            <p><span className="font-semibold">Status Values:</span> {tableData.schemas.pipeline.status_values?.join(', ') || 'None'}</p>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        )}
                     </TabsContent>
                 </Tabs>
             </motion.div>
