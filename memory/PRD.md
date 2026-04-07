@@ -1,7 +1,15 @@
 # Recruitment Analytics System - PRD
 
 ## Project Overview
-Full-stack web application for recruitment analytics that dynamically ingests any dataset format, processes them, matches records, and displays both aggregated funnel analytics and detailed row-level data.
+Full-stack web application for recruitment analytics with a **sequential, state-driven workflow** that ingests Naukri Applies and Pipeline Data, processes them together, and displays combined analytics.
+
+## Workflow Flow (CRITICAL)
+```
+Login → Step 1: Upload Naukri → Step 2: Upload Pipeline → Auto-Process → Dashboard
+```
+- Dashboard only accessible after BOTH uploads complete and processing finishes
+- Route guards enforce sequential access
+- State persisted in database (survives page refresh)
 
 ## User Personas
 1. **Recruiters** - Upload candidate data and view analytics
@@ -10,113 +18,128 @@ Full-stack web application for recruitment analytics that dynamically ingests an
 
 ## Core Requirements (Static)
 - JWT-based authentication (60 min sessions)
+- Sequential workflow (Naukri → Pipeline → Process → Dashboard)
 - Dynamic schema detection from uploaded files
 - File upload (CSV/XLSX) with 10MB limit
 - Data validation and normalization
 - Candidate matching (email primary, phone fallback)
 - Funnel visualization with dynamic status breakdown
 - Detailed data tables with all fields
-- Job role filtering (auto-detected)
 - CSV export
 
 ## What's Been Implemented (April 7, 2026)
 
-### Dynamic Schema System (REFACTORED)
-- [x] No hardcoded column names or status values
-- [x] Auto-detect email column (Email, Email ID, etc.)
-- [x] Auto-detect phone column (Phone, Phone Number, Mobile, etc.)
-- [x] Auto-detect status column (email_type, status, pipeline_status, etc.)
-- [x] Auto-detect job role column (job_role, Job Title, position, etc.)
-- [x] Auto-detect name column
-- [x] Store ALL fields from uploaded files dynamically
+### Sequential Workflow System (NEW)
+- [x] Workflow state persisted in MongoDB per user
+- [x] `/upload/naukri` - Entry point (always accessible)
+- [x] `/upload/pipeline` - Requires Naukri upload complete
+- [x] `/dashboard` - Requires processing complete
+- [x] Route guards enforce access sequence
+- [x] Progress indicators in UI (Step 1 → Step 2 → Step 3)
+- [x] Green checkmarks show completed steps
+- [x] "Continue to Step 2" button after Naukri upload
+- [x] Auto-processing after Pipeline upload
+- [x] "New Analysis" button to reset and start fresh
+
+### Dynamic Schema System
+- [x] Auto-detect email, phone, status, job role columns
+- [x] Store ALL fields from uploaded files
 - [x] Extract status values from actual data
 
 ### Authentication System
-- [x] JWT auth with httpOnly cookies (60 min sessions)
+- [x] JWT auth with httpOnly cookies
 - [x] Login/Register pages
 - [x] Protected routes
 - [x] Admin seeding on startup
 
 ### Data Upload
-- [x] `/upload/naukri` - Dynamic upload with schema detection
-- [x] `/upload/pipeline` - Dynamic upload with schema detection
-- [x] Shows detected schema after upload (columns, email, phone, status)
-- [x] Data normalization (email lowercase, phone numeric)
-- [x] Duplicate detection via email/phone
+- [x] Step 1: Upload Naukri with schema detection
+- [x] Step 2: Upload Pipeline with schema detection
+- [x] Shows detected schema after upload
+- [x] Data normalization
+- [x] Duplicate detection
 - [x] Error reporting
 
 ### Data Processing
-- [x] `/api/process-data` - Match candidates between datasets
-- [x] Email/phone matching priority
+- [x] `POST /api/process-combined` - Only after BOTH uploads
+- [x] Candidate matching (email/phone)
 - [x] Dynamic status classification
 
 ### Analytics Dashboard
-- [x] **Summary Funnel Tab**: Total applies, Registered/Not Registered, Dynamic status breakdown
-- [x] **Detailed Data Tab**: Full table with all columns from files
-- [x] Data source selector (Processed, Naukri, Pipeline)
+- [x] "Analysis Complete" banner
+- [x] Summary Funnel tab with counts
+- [x] Detailed Data tab with tables
 - [x] Registration filter
 - [x] Status filter (dynamically populated)
 - [x] Job role filter (if detected)
-- [x] Search by name/email/phone
-- [x] Pagination
-- [x] CSV download
-- [x] Reset data functionality
-- [x] Schema info display
-
-### Design
-- [x] Swiss brutalist theme (light)
-- [x] Syne + DM Sans typography
-- [x] Sharp edges, 1px borders
-- [x] Phosphor icons
-- [x] Responsive layout
+- [x] Search, pagination, CSV download
 
 ## API Endpoints
+### Auth
 - POST `/api/auth/register`
 - POST `/api/auth/login`
 - POST `/api/auth/logout`
 - GET `/api/auth/me`
 - POST `/api/auth/refresh`
-- POST `/api/upload/naukri` - Returns schema_info
-- POST `/api/upload/pipeline` - Returns schema_info
-- POST `/api/process-data`
+
+### Workflow
+- GET `/api/workflow/state` - Get current workflow state
+- POST `/api/workflow/reset` - Reset and start fresh
+
+### Upload
+- POST `/api/upload/naukri` - Step 1 (updates workflow state)
+- POST `/api/upload/pipeline` - Step 2 (requires Step 1 complete)
+
+### Processing
+- POST `/api/process-combined` - Requires both uploads
+
+### Analytics
 - GET `/api/analytics?job_role=`
 - GET `/api/data?source=&job_role=&status=&registration=&search=&page=&limit=`
 - GET `/api/analytics/download?source=&job_role=&status=`
-- GET `/api/schema`
-- DELETE `/api/reset-data?source=`
 
 ## Database Collections
 - `users` - User accounts
-- `schema_metadata` - Detected schemas for each dataset type
-- `naukri_applies_raw` - Raw Naukri data with ALL fields
-- `pipeline_data_raw` - Raw Pipeline data with ALL fields
+- `workflow_state` - Per-user workflow progress
+- `schema_metadata` - Detected schemas
+- `naukri_applies_raw` - Raw Naukri data (all fields)
+- `pipeline_data_raw` - Raw Pipeline data (all fields)
 - `processed_candidates` - Matched/processed candidates
 - `upload_history` - Upload logs
 
-## Supported Sample Files
-- **Naukri Applies**: XLSX with columns like Email ID, Phone Number, Name, Job Title, Pipeline Status, etc. (70+ columns supported)
-- **Pipeline Data**: CSV with columns like email, phone, name, job_role, email_type (status), etc. (45+ columns supported)
+## Workflow State Schema
+```json
+{
+  "user_id": "...",
+  "naukri_uploaded": true/false,
+  "pipeline_uploaded": true/false,
+  "processing_complete": true/false,
+  "current_step": "naukri|pipeline|processing|dashboard"
+}
+```
 
 ## Prioritized Backlog
 
 ### P0 - Critical (Completed)
+- [x] Sequential workflow enforcement
+- [x] Route guards
 - [x] Dynamic schema detection
 - [x] Authentication
-- [x] File uploads with schema extraction
-- [x] Data processing
-- [x] Analytics dashboard (Summary + Detailed)
+- [x] File uploads
+- [x] Combined processing
+- [x] Analytics dashboard
 
 ### P1 - Important (Future)
-- [ ] Column mapping UI for ambiguous files
-- [ ] Bulk delete/reset data
+- [ ] Bulk data re-upload without full reset
 - [ ] Upload history view
+- [ ] Progress bar during processing
 
 ### P2 - Nice to Have
 - [ ] Role-based access (Admin/Recruiter)
-- [ ] Advanced charts (bar, pie)
-- [ ] Date range filtering
+- [ ] Advanced charts
+- [ ] Email notifications when processing complete
 
 ## Next Tasks
-1. Add column mapping UI for edge cases
-2. Implement upload history tracking page
+1. Add processing progress indicator
+2. Add upload history tracking
 3. Add more chart types to dashboard

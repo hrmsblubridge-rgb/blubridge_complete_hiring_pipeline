@@ -60,12 +60,24 @@ export function WorkflowRoute({ children, step }) {
     }
 
     // Enforce workflow sequence
-    if (step === 'pipeline' && !workflowState.naukri_uploaded) {
-        return <Navigate to="/upload/naukri" replace />;
+    if (step === 'naukri') {
+        // Naukri is always accessible, but if workflow is complete, allow going forward
+        return children;
     }
 
-    if (step === 'dashboard' && !workflowState.processing_complete) {
-        return <Navigate to={getNextRoute()} replace />;
+    if (step === 'pipeline') {
+        if (!workflowState.naukri_uploaded) {
+            return <Navigate to="/upload/naukri" replace />;
+        }
+        return children;
+    }
+
+    if (step === 'dashboard') {
+        if (!workflowState.processing_complete) {
+            const nextRoute = getNextRoute();
+            return <Navigate to={nextRoute} replace />;
+        }
+        return children;
     }
 
     return children;
