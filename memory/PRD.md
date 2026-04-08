@@ -1,102 +1,108 @@
 # Recruitment Analytics System - PRD
 
 ## Project Overview
-Full-stack web application for recruitment analytics that ingests Naukri Applies and Pipeline datasets, processes them, matches records using Email/Phone composite key, and displays a funnel-based analytics dashboard with hierarchical drill-down panels.
+Full-stack recruitment analytics system that ingests Naukri Applies and HR Internal Pipeline datasets, processes them with strict schema mapping, matches records using Email/Phone, and displays a funnel-based analytics dashboard with hierarchical drill-down panels.
 
 ## Architecture
 - **Frontend**: React + Tailwind CSS + Phosphor Icons + Framer Motion
 - **Backend**: FastAPI + Motor (async MongoDB)
-- **Database**: MongoDB
+- **Database**: MongoDB (3 collections: naukri_applies, pipeline_data, registered_candidates)
 - **Auth**: JWT cookie-based (hardcoded admin/admin)
 
-## Workflow
-```
-Login -> Dashboard (Upload Datasets via modal -> View Analytics -> Drill-down into categories)
-```
+## Schema Mapping Layer
 
-## Core Data Architecture (Relational Integrity)
+### Naukri Applies (NAUKRI_COLUMN_MAP)
+Maps CSV display column names → normalized snake_case DB fields:
+- "Email ID" → email
+- "Phone Number" → phone
+- "Job Title" → job_title
+- "Date of application" → date_of_application
+- "Name" → name
+- "Gender" → gender
+- "Date of Birth" → date_of_birth
+- "Current Location" → current_location
+- ... (65+ fields mapped)
 
-### Collections
-- `naukri_applies` - Raw Naukri applicant data, with `_is_registered` flag
-- `pipeline_data` - Raw HR pipeline data
-- `registered_candidates` - **DERIVED** collection: INNER JOIN of naukri_applies + pipeline_data on (email OR phone)
+### HR Internal Pipeline (PIPELINE_EXPECTED_COLUMNS)
+Canonical column set (already snake_case):
+- id → pipeline_id (to avoid MongoDB _id conflict)
+- name, email, phone, age, gender, hr_team, job_role
+- email_type, confirm_box, schedule_date, schedule_time
+- otp_verified, otp_expired, result_status, result_mail
+- ... (40 fields total)
+- Handles duplicate columns in CSV (keeps first occurrence)
 
-### Matching Logic
-After each upload, `reprocess_matching()` rebuilds `registered_candidates`:
-1. For each naukri record, match against pipeline by email OR phone
-2. Matched records are merged (naukri + pipeline fields) into `registered_candidates`
-3. Unmatched naukri records are flagged `_is_registered: false`
+### Key Schema Corrections
+- Pipeline field is `confirm_box` (NOT `confirm`)
+- Pipeline field is `job_role` (NOT `job_title`)
+- Pipeline `id` stored as `pipeline_id`
+- Unmapped CSV columns stored with `_extra_` prefix (no data loss)
+
+## Data Architecture (Relational Integrity)
+
+### registered_candidates (DERIVED)
+- INNER JOIN of naukri_applies + pipeline_data on (email OR phone)
+- Contains ALL fields from BOTH datasets (merged)
+- Naukri fields take precedence for shared field names (name, email, phone, gender)
+- Rebuilt on every upload via `reprocess_matching()`
 
 ### Category Definitions (ALL from registered_candidates)
-- **Total Applies**: count(naukri_applies)
-- **Registered**: count(registered_candidates) — the JOIN result
-- **Unregistered**: total_applies - registered
-- **Shortlisted**: registered_candidates WHERE email_type matches 'shortlist'
-- **Rejected**: registered_candidates WHERE result_status matches 'reject'
-- **Scheduled**: registered_candidates WHERE schedule_date IS NOT NULL AND schedule_time IS NOT NULL
-- **Not Scheduled**: registered_candidates WHERE schedule_date IS NULL AND schedule_time IS NULL
-- **Attended**: registered_candidates WHERE otp_verified IS NOT NULL
-- **Not Attended**: registered_candidates WHERE otp_verified IS NULL
+- **Registered**: count(registered_candidates)
+- **Unregistered**: total_applies - registered (from naukri_applies where not matched)
+- **Shortlisted**: registered WHERE email_type matches 'shortlist'
+- **Rejected**: registered WHERE result_status matches 'reject'
+- **Scheduled**: registered WHERE schedule_date AND schedule_time NOT NULL
+- **Not Scheduled**: registered WHERE schedule_date AND schedule_time NULL
+- **Attended**: registered WHERE otp_verified NOT NULL
+- **Not Attended**: registered WHERE otp_verified NULL
 
-### Integrity Constraints
+### Integrity Constraints (Validated)
 - registered + unregistered = total_applies
-- scheduled + not_scheduled = registered (partition)
-- attended + not_attended = registered (partition)
-- All sub-categories <= registered (strict subsets)
+- scheduled + not_scheduled = registered
+- attended + not_attended = registered
 
 ## API Endpoints
-- POST `/api/login` - Login
-- POST `/api/logout` - Logout
-- GET `/api/auth/check` - Check auth
-- POST `/api/upload/naukri` - Upload Naukri CSV/XLSX
-- POST `/api/upload/pipeline` - Upload Pipeline CSV/XLSX
-- GET `/api/dashboard-counts` - Funnel counts (all from registered_candidates)
-- GET `/api/data/unregistered` - From naukri_applies where not registered
-- GET `/api/data/registered` - From registered_candidates
-- GET `/api/data/shortlisted` - From registered_candidates
-- GET `/api/data/rejected` - From registered_candidates
-- GET `/api/data/scheduled` - From registered_candidates
-- GET `/api/data/not-scheduled` - From registered_candidates
-- GET `/api/data/attended` - From registered_candidates
-- GET `/api/data/not-attended` - From registered_candidates
+- POST `/api/login` — Login
+- POST `/api/logout` — Logout
+- GET `/api/auth/check` — Auth check
+- POST `/api/upload/naukri` — Upload with NAUKRI_COLUMN_MAP mapping
+- POST `/api/upload/pipeline` — Upload with PIPELINE_EXPECTED_COLUMNS + dedup
+- GET `/api/dashboard-counts` — All funnel counts from registered_candidates
+- GET `/api/data/{category}` — Drill-down data (8 categories)
 
 ## Code Architecture
 ```
 /app/
 ├── backend/
-│   ├── .env
-│   ├── requirements.txt
-│   ├── server.py
-│   └── tests/
-│       ├── test_recruitment_api.py
-│       └── test_relational_integrity.py
-├── frontend/
-│   └── src/
-│       ├── App.js
-│       ├── context/AuthContext.js
-│       ├── components/ProtectedRoute.js
-│       └── pages/
-│           ├── Login.js
-│           └── Dashboard.js
+│   ├── server.py (NAUKRI_COLUMN_MAP, PIPELINE_EXPECTED_COLUMNS, upload/analytics/data endpoints)
+│   ├── tests/test_schema_refactor.py
+│   └── .env
+├── frontend/src/
+│   ├── App.js
+│   ├── context/AuthContext.js
+│   ├── components/ProtectedRoute.js
+│   └── pages/
+│       ├── Login.js
+│       └── Dashboard.js
 ├── test_data/
-│   ├── naukri_test.csv
-│   └── pipeline_test.csv
+│   ├── naukri_test.csv (10 records, uses correct column names)
+│   └── pipeline_test.csv (7 records, uses confirm_box/job_role)
 ```
 
 ## Testing Status (April 8, 2026)
-- Backend: 34/34 tests passed (100%) — relational integrity validated
-- Frontend: All features verified (100%)
-- UPSERT: Verified (re-upload updates, no duplicates)
-- Partition checks: scheduled+not_scheduled=registered, attended+not_attended=registered
+- Backend: 20/20 tests passed (100%) — schema alignment, relational integrity, UPSERT
+- Frontend: All features verified (100%) — confirm_box shown correctly
+- Data alignment: Diana (Pune), Eve (Hyderabad) verified correct
+- No data loss: 0 unmapped columns for both datasets
 
 ## Prioritized Backlog
 
-### P1 - Important
+### P1
 - [ ] CSV export/download from data table modals
 - [ ] Session persistence across hard page refreshes
 - [ ] Search within data table modals
 
-### P2 - Nice to Have
+### P2
 - [ ] Upload history view
 - [ ] Progress bar during processing
 - [ ] Role-based access (Admin/Recruiter)
