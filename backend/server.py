@@ -337,95 +337,116 @@ async def upload_pipeline(file: UploadFile = File(...), user: str = Depends(get_
 
 # ============ MATCHING & PROCESSING ============
 
+def is_null_or_empty(val):
+    """Check if a value is None, empty string, or missing"""
+    return val is None or val == ""
+
 async def reprocess_matching():
-    """Reprocess matching between naukri and pipeline data"""
-    # Get all naukri applies
+    """Rebuild registered_candidates collection via INNER JOIN of naukri_applies and pipeline_data"""
     naukri_list = await db.naukri_applies.find({}).to_list(None)
-    
-    # Get all pipeline data
     pipeline_list = await db.pipeline_data.find({}).to_list(None)
-    
-    # Create lookup for pipeline
+
     pipeline_by_email = {p['email']: p for p in pipeline_list if p.get('email')}
     pipeline_by_phone = {p['phone']: p for p in pipeline_list if p.get('phone')}
-    
-    # Update registration status for each naukri applicant
+
+    await db.registered_candidates.drop()
+
+    registered_docs = []
+
     for naukri in naukri_list:
         email = naukri.get('email', '')
         phone = naukri.get('phone', '')
-        
-        # Try to match
+
         pipeline_match = None
         if email and email in pipeline_by_email:
             pipeline_match = pipeline_by_email[email]
         elif phone and phone in pipeline_by_phone:
             pipeline_match = pipeline_by_phone[phone]
-        
+
         is_registered = pipeline_match is not None
-        
+
         await db.naukri_applies.update_one(
             {"_id": naukri["_id"]},
-            {"$set": {"_is_registered": is_registered, "_pipeline_id": str(pipeline_match["_id"]) if pipeline_match else None}}
+            {"$set": {"_is_registered": is_registered}}
         )
+
+        if is_registered:
+            doc = {
+                "name": naukri.get("name") or pipeline_match.get("name"),
+                "email": email or pipeline_match.get("email", ""),
+                "phone": phone or pipeline_match.get("phone", ""),
+                "job_title": naukri.get("job_title") or pipeline_match.get("job_title"),
+                "date_of_application": naukri.get("date_of_application") or pipeline_match.get("date_of_application"),
+                "gender": naukri.get("gender") or pipeline_match.get("gender"),
+                "date_of_birth": naukri.get("date_of_birth"),
+                "age": pipeline_match.get("age"),
+                "location": pipeline_match.get("location"),
+                "loca_change": pipeline_match.get("loca_change"),
+                "attend_inperson": pipeline_match.get("attend_inperson"),
+                "email_type": pipeline_match.get("email_type"),
+                "confirm": pipeline_match.get("confirm"),
+                "schedule_date": pipeline_match.get("schedule_date"),
+                "schedule_time": pipeline_match.get("schedule_time"),
+                "reschedule_count": pipeline_match.get("reschedule_count"),
+                "otp_verified": pipeline_match.get("otp_verified"),
+                "otp_expired": pipeline_match.get("otp_expired"),
+                "result_mail": pipeline_match.get("result_mail"),
+                "result_update": pipeline_match.get("result_update"),
+                "result_status": pipeline_match.get("result_status"),
+            }
+            registered_docs.append(doc)
+
+    if registered_docs:
+        await db.registered_candidates.insert_many(registered_docs)
+
+    await db.registered_candidates.create_index([("email", 1), ("phone", 1)])
+    await db.registered_candidates.create_index("email_type")
+    await db.registered_candidates.create_index("result_status")
+    await db.registered_candidates.create_index("schedule_date")
+    await db.registered_candidates.create_index("otp_verified")
 
 # ============ DASHBOARD COUNTS ENDPOINT ============
 
+# Helpers for NULL-safe MongoDB queries
+_null_filter = {"$in": [None, ""]}
+_not_null_filter = {"$nin": [None, ""], "$exists": True}
+
 @api_router.get("/dashboard-counts")
 async def get_dashboard_counts(user: str = Depends(get_current_user)):
-    """Get all counts for dashboard hierarchy - computed from database"""
-    
-    # Total naukri applies
+    """All counts computed from DB. Sub-categories use registered_candidates ONLY."""
+
     total_applies = await db.naukri_applies.count_documents({})
-    
-    # Registered (matched in pipeline)
-    registered = await db.naukri_applies.count_documents({"_is_registered": True})
-    
-    # Unregistered (not matched)
-    unregistered = await db.naukri_applies.count_documents({"_is_registered": {"$ne": True}})
-    
-    # From pipeline data - status-based counts
-    # Shortlisted: email_type = 'shortlist' or similar
-    shortlisted = await db.pipeline_data.count_documents({
+    registered = await db.registered_candidates.count_documents({})
+    unregistered = total_applies - registered
+
+    # ALL sub-categories from registered_candidates (strict subsets of Registered)
+    shortlisted = await db.registered_candidates.count_documents({
         "email_type": {"$regex": "shortlist", "$options": "i"}
     })
-    
-    # Rejected: result_status IN ('Reject', 'Rejected')
-    rejected = await db.pipeline_data.count_documents({
+    rejected = await db.registered_candidates.count_documents({
         "result_status": {"$regex": "^reject", "$options": "i"}
     })
-    
-    # Interview Scheduled: schedule_date IS NOT NULL
-    scheduled = await db.pipeline_data.count_documents({
-        "schedule_date": {"$ne": None, "$exists": True}
+    scheduled = await db.registered_candidates.count_documents({
+        "schedule_date": _not_null_filter,
+        "schedule_time": _not_null_filter
     })
-    
-    # Interview Not Scheduled: schedule_date IS NULL but shortlisted
-    not_scheduled = await db.pipeline_data.count_documents({
+    not_scheduled = await db.registered_candidates.count_documents({
         "$and": [
-            {"email_type": {"$regex": "shortlist", "$options": "i"}},
-            {"$or": [
-                {"schedule_date": None},
-                {"schedule_date": {"$exists": False}}
-            ]}
+            {"$or": [{"schedule_date": None}, {"schedule_date": ""}, {"schedule_date": {"$exists": False}}]},
+            {"$or": [{"schedule_time": None}, {"schedule_time": ""}, {"schedule_time": {"$exists": False}}]}
         ]
     })
-    
-    # Attended: otp_verified IS NOT NULL
-    attended = await db.pipeline_data.count_documents({
-        "otp_verified": {"$ne": None, "$exists": True}
+    attended = await db.registered_candidates.count_documents({
+        "otp_verified": _not_null_filter
     })
-    
-    # Not Attended: has schedule but otp_verified IS NULL
-    not_attended = await db.pipeline_data.count_documents({
-        "$and": [
-            {"schedule_date": {"$ne": None, "$exists": True}},
-            {"$or": [
-                {"otp_verified": None},
-                {"otp_verified": {"$exists": False}}
-            ]}
+    not_attended = await db.registered_candidates.count_documents({
+        "$or": [
+            {"otp_verified": None},
+            {"otp_verified": ""},
+            {"otp_verified": {"$exists": False}}
         ]
     })
-    
+
     return {
         "total_applies": total_applies,
         "registered": registered,
@@ -446,32 +467,17 @@ async def get_unregistered(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Get unregistered applicants - in Naukri but NOT in Pipeline"""
+    """Unregistered: in naukri_applies but NOT in pipeline_data"""
     skip = (page - 1) * limit
-    
-    total = await db.naukri_applies.count_documents({"_is_registered": {"$ne": True}})
-    
-    cursor = db.naukri_applies.find(
-        {"_is_registered": {"$ne": True}},
-        {
-            "_id": 0,
-            "name": 1,
-            "email": 1,
-            "phone": 1,
-            "job_title": 1,
-            "date_of_application": 1,
-            "gender": 1,
-            "date_of_birth": 1
-        }
-    ).skip(skip).limit(limit)
-    
+    query = {"_is_registered": {"$ne": True}}
+    total = await db.naukri_applies.count_documents(query)
+    cursor = db.naukri_applies.find(query, {
+        "_id": 0, "name": 1, "email": 1, "phone": 1,
+        "job_title": 1, "date_of_application": 1, "gender": 1, "date_of_birth": 1
+    }).skip(skip).limit(limit)
     data = await cursor.to_list(None)
-    
     return {
-        "data": data,
-        "total": total,
-        "page": page,
-        "limit": limit,
+        "data": data, "total": total, "page": page, "limit": limit,
         "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "date_of_birth"]
     }
 
@@ -481,32 +487,16 @@ async def get_registered(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Get registered applicants - matched in Pipeline"""
+    """Registered: JOIN of naukri_applies and pipeline_data"""
     skip = (page - 1) * limit
-    
-    total = await db.naukri_applies.count_documents({"_is_registered": True})
-    
-    cursor = db.naukri_applies.find(
-        {"_is_registered": True},
-        {
-            "_id": 0,
-            "name": 1,
-            "email": 1,
-            "phone": 1,
-            "job_title": 1,
-            "date_of_application": 1,
-            "gender": 1,
-            "date_of_birth": 1
-        }
-    ).skip(skip).limit(limit)
-    
+    total = await db.registered_candidates.count_documents({})
+    cursor = db.registered_candidates.find({}, {
+        "_id": 0, "name": 1, "email": 1, "phone": 1,
+        "job_title": 1, "date_of_application": 1, "gender": 1, "date_of_birth": 1
+    }).skip(skip).limit(limit)
     data = await cursor.to_list(None)
-    
     return {
-        "data": data,
-        "total": total,
-        "page": page,
-        "limit": limit,
+        "data": data, "total": total, "page": page, "limit": limit,
         "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "date_of_birth"]
     }
 
@@ -516,24 +506,17 @@ async def get_shortlisted(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Get shortlisted applicants"""
+    """Shortlisted: registered_candidates WHERE email_type matches shortlist"""
     skip = (page - 1) * limit
-    
     query = {"email_type": {"$regex": "shortlist", "$options": "i"}}
-    total = await db.pipeline_data.count_documents(query)
-    
-    cursor = db.pipeline_data.find(
-        query,
-        {"_id": 0}
-    ).skip(skip).limit(limit)
-    
+    total = await db.registered_candidates.count_documents(query)
+    cursor = db.registered_candidates.find(query, {
+        "_id": 0, "name": 1, "email": 1, "phone": 1, "job_title": 1,
+        "date_of_application": 1, "gender": 1, "location": 1, "email_type": 1
+    }).skip(skip).limit(limit)
     data = await cursor.to_list(None)
-    
     return {
-        "data": data,
-        "total": total,
-        "page": page,
-        "limit": limit,
+        "data": data, "total": total, "page": page, "limit": limit,
         "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "location", "email_type"]
     }
 
@@ -543,30 +526,19 @@ async def get_rejected(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Get rejected applicants - result_status IN ('Reject', 'Rejected')"""
+    """Rejected: registered_candidates WHERE result_status IN (Reject, Rejected)"""
     skip = (page - 1) * limit
-    
     query = {"result_status": {"$regex": "^reject", "$options": "i"}}
-    total = await db.pipeline_data.count_documents(query)
-    
-    cursor = db.pipeline_data.find(
-        query,
-        {
-            "_id": 0,
-            "name": 1, "email": 1, "phone": 1, "job_title": 1, 
-            "date_of_application": 1, "gender": 1, "date_of_birth": 1,
-            "location": 1, "loca_change": 1, "attend_inperson": 1,
-            "email_type": 1, "confirm": 1
-        }
-    ).skip(skip).limit(limit)
-    
+    total = await db.registered_candidates.count_documents(query)
+    cursor = db.registered_candidates.find(query, {
+        "_id": 0, "name": 1, "email": 1, "phone": 1, "job_title": 1,
+        "date_of_application": 1, "gender": 1, "date_of_birth": 1,
+        "location": 1, "loca_change": 1, "attend_inperson": 1,
+        "email_type": 1, "confirm": 1
+    }).skip(skip).limit(limit)
     data = await cursor.to_list(None)
-    
     return {
-        "data": data,
-        "total": total,
-        "page": page,
-        "limit": limit,
+        "data": data, "total": total, "page": page, "limit": limit,
         "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "date_of_birth", "location", "loca_change", "attend_inperson", "email_type", "confirm"]
     }
 
@@ -576,29 +548,21 @@ async def get_scheduled(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Get interview scheduled applicants"""
+    """Scheduled: registered_candidates WHERE schedule_date IS NOT NULL AND schedule_time IS NOT NULL"""
     skip = (page - 1) * limit
-    
-    query = {"schedule_date": {"$ne": None, "$exists": True}}
-    total = await db.pipeline_data.count_documents(query)
-    
-    cursor = db.pipeline_data.find(
-        query,
-        {
-            "_id": 0,
-            "name": 1, "email": 1, "phone": 1, "job_title": 1, 
-            "date_of_application": 1, "gender": 1,
-            "schedule_date": 1, "schedule_time": 1, "reschedule_count": 1
-        }
-    ).skip(skip).limit(limit)
-    
+    query = {
+        "schedule_date": _not_null_filter,
+        "schedule_time": _not_null_filter
+    }
+    total = await db.registered_candidates.count_documents(query)
+    cursor = db.registered_candidates.find(query, {
+        "_id": 0, "name": 1, "email": 1, "phone": 1, "job_title": 1,
+        "date_of_application": 1, "gender": 1,
+        "schedule_date": 1, "schedule_time": 1, "reschedule_count": 1
+    }).skip(skip).limit(limit)
     data = await cursor.to_list(None)
-    
     return {
-        "data": data,
-        "total": total,
-        "page": page,
-        "limit": limit,
+        "data": data, "total": total, "page": page, "limit": limit,
         "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "schedule_date", "schedule_time", "reschedule_count"]
     }
 
@@ -608,38 +572,24 @@ async def get_not_scheduled(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Get interview NOT scheduled - shortlisted but no schedule_date"""
+    """Not Scheduled: registered_candidates WHERE schedule_date IS NULL AND schedule_time IS NULL"""
     skip = (page - 1) * limit
-    
     query = {
         "$and": [
-            {"email_type": {"$regex": "shortlist", "$options": "i"}},
-            {"$or": [
-                {"schedule_date": None},
-                {"schedule_date": {"$exists": False}}
-            ]}
+            {"$or": [{"schedule_date": None}, {"schedule_date": ""}, {"schedule_date": {"$exists": False}}]},
+            {"$or": [{"schedule_time": None}, {"schedule_time": ""}, {"schedule_time": {"$exists": False}}]}
         ]
     }
-    total = await db.pipeline_data.count_documents(query)
-    
-    cursor = db.pipeline_data.find(
-        query,
-        {
-            "_id": 0,
-            "name": 1, "email": 1, "phone": 1, "job_title": 1, 
-            "date_of_application": 1, "gender": 1, "date_of_birth": 1,
-            "location": 1, "loca_change": 1, "attend_inperson": 1,
-            "email_type": 1, "confirm": 1
-        }
-    ).skip(skip).limit(limit)
-    
+    total = await db.registered_candidates.count_documents(query)
+    cursor = db.registered_candidates.find(query, {
+        "_id": 0, "name": 1, "email": 1, "phone": 1, "job_title": 1,
+        "date_of_application": 1, "gender": 1, "date_of_birth": 1,
+        "location": 1, "loca_change": 1, "attend_inperson": 1,
+        "email_type": 1, "confirm": 1
+    }).skip(skip).limit(limit)
     data = await cursor.to_list(None)
-    
     return {
-        "data": data,
-        "total": total,
-        "page": page,
-        "limit": limit,
+        "data": data, "total": total, "page": page, "limit": limit,
         "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "date_of_birth", "location", "loca_change", "attend_inperson", "email_type", "confirm"]
     }
 
@@ -649,30 +599,19 @@ async def get_attended(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Get attended applicants - otp_verified IS NOT NULL"""
+    """Attended: registered_candidates WHERE otp_verified IS NOT NULL"""
     skip = (page - 1) * limit
-    
-    query = {"otp_verified": {"$ne": None, "$exists": True}}
-    total = await db.pipeline_data.count_documents(query)
-    
-    cursor = db.pipeline_data.find(
-        query,
-        {
-            "_id": 0,
-            "name": 1, "email": 1, "phone": 1, "job_title": 1, 
-            "date_of_application": 1, "gender": 1, "date_of_birth": 1,
-            "schedule_date": 1, "schedule_time": 1, "reschedule_count": 1,
-            "otp_verified": 1, "result_mail": 1, "result_update": 1, "result_status": 1
-        }
-    ).skip(skip).limit(limit)
-    
+    query = {"otp_verified": _not_null_filter}
+    total = await db.registered_candidates.count_documents(query)
+    cursor = db.registered_candidates.find(query, {
+        "_id": 0, "name": 1, "email": 1, "phone": 1, "job_title": 1,
+        "date_of_application": 1, "gender": 1, "date_of_birth": 1,
+        "schedule_date": 1, "schedule_time": 1, "reschedule_count": 1,
+        "otp_verified": 1, "result_mail": 1, "result_update": 1, "result_status": 1
+    }).skip(skip).limit(limit)
     data = await cursor.to_list(None)
-    
     return {
-        "data": data,
-        "total": total,
-        "page": page,
-        "limit": limit,
+        "data": data, "total": total, "page": page, "limit": limit,
         "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "date_of_birth", "schedule_date", "schedule_time", "reschedule_count", "otp_verified", "result_mail", "result_update", "result_status"]
     }
 
@@ -682,38 +621,25 @@ async def get_not_attended(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Get NOT attended - has schedule but otp_verified IS NULL"""
+    """Not Attended: registered_candidates WHERE otp_verified IS NULL"""
     skip = (page - 1) * limit
-    
     query = {
-        "$and": [
-            {"schedule_date": {"$ne": None, "$exists": True}},
-            {"$or": [
-                {"otp_verified": None},
-                {"otp_verified": {"$exists": False}}
-            ]}
+        "$or": [
+            {"otp_verified": None},
+            {"otp_verified": ""},
+            {"otp_verified": {"$exists": False}}
         ]
     }
-    total = await db.pipeline_data.count_documents(query)
-    
-    cursor = db.pipeline_data.find(
-        query,
-        {
-            "_id": 0,
-            "name": 1, "email": 1, "phone": 1, "job_title": 1, 
-            "date_of_application": 1, "gender": 1, "date_of_birth": 1,
-            "schedule_date": 1, "schedule_time": 1, "reschedule_count": 1,
-            "otp_verified": 1, "otp_expired": 1
-        }
-    ).skip(skip).limit(limit)
-    
+    total = await db.registered_candidates.count_documents(query)
+    cursor = db.registered_candidates.find(query, {
+        "_id": 0, "name": 1, "email": 1, "phone": 1, "job_title": 1,
+        "date_of_application": 1, "gender": 1, "date_of_birth": 1,
+        "schedule_date": 1, "schedule_time": 1, "reschedule_count": 1,
+        "otp_verified": 1, "otp_expired": 1
+    }).skip(skip).limit(limit)
     data = await cursor.to_list(None)
-    
     return {
-        "data": data,
-        "total": total,
-        "page": page,
-        "limit": limit,
+        "data": data, "total": total, "page": page, "limit": limit,
         "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "date_of_birth", "schedule_date", "schedule_time", "reschedule_count", "otp_verified", "otp_expired"]
     }
 
@@ -744,10 +670,11 @@ async def startup_event():
     # Create indexes
     await db.naukri_applies.create_index([("email", 1), ("phone", 1)])
     await db.pipeline_data.create_index([("email", 1), ("phone", 1)])
-    await db.pipeline_data.create_index("email_type")
-    await db.pipeline_data.create_index("result_status")
-    await db.pipeline_data.create_index("schedule_date")
-    await db.pipeline_data.create_index("otp_verified")
+    await db.registered_candidates.create_index([("email", 1), ("phone", 1)])
+    await db.registered_candidates.create_index("email_type")
+    await db.registered_candidates.create_index("result_status")
+    await db.registered_candidates.create_index("schedule_date")
+    await db.registered_candidates.create_index("otp_verified")
     
     # Write test credentials
     try:

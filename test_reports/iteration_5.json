@@ -1,0 +1,121 @@
+{
+  "summary": "Comprehensive testing of Recruitment Analytics Dashboard after relational integrity refactor. All 34 backend API tests passed (100%). Frontend testing verified login, dashboard counts, hierarchical panels, data modals, upload modal, and logout. All relational integrity constraints validated: sub-categories are strict subsets of registered_candidates collection.",
+  
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  
+  "passed_tests": {
+    "backend": [
+      "API health check - returns healthy status v4.0",
+      "Login with admin/admin credentials - returns 200",
+      "Auth check with valid cookie - returns authenticated",
+      "Upload Naukri CSV - processes 10 records correctly",
+      "Upload Pipeline CSV - processes 7 records correctly",
+      "Dashboard counts structure - all 9 fields present",
+      "total_applies = 10",
+      "registered = 7 (INNER JOIN of naukri and pipeline)",
+      "unregistered = 3 (Harry, Ivy, Jack)",
+      "PARTITION: registered + unregistered = total_applies (7+3=10)",
+      "shortlisted = 6",
+      "rejected = 2 (Bob, Frank)",
+      "scheduled = 5",
+      "not_scheduled = 2 (Diana, Eve)",
+      "PARTITION: scheduled + not_scheduled = registered (5+2=7)",
+      "attended = 3 (Alice, Charlie, Grace)",
+      "not_attended = 4 (Bob, Diana, Eve, Frank)",
+      "PARTITION: attended + not_attended = registered (3+4=7)",
+      "SUBSET: shortlisted(6) <= registered(7)",
+      "SUBSET: rejected(2) <= registered(7)",
+      "Unregistered endpoint returns Harry, Ivy, Jack ONLY",
+      "Registered endpoint returns 7 matched records",
+      "Rejected endpoint returns Bob Smith and Frank Garcia",
+      "Not Scheduled endpoint returns Diana Lee and Eve Wilson",
+      "Attended endpoint returns Alice, Charlie, Grace",
+      "Not Attended endpoint returns Bob, Diana, Eve, Frank",
+      "Shortlisted endpoint returns 6 records",
+      "Scheduled endpoint returns 5 records",
+      "UPSERT: Re-upload Naukri updates 10, inserts 0",
+      "UPSERT: Re-upload Pipeline updates 7, inserts 0",
+      "Counts unchanged after UPSERT",
+      "Dashboard counts requires auth (401)",
+      "All /api/data/* endpoints require auth (401)",
+      "Upload endpoints require auth (401)"
+    ],
+    "frontend": [
+      "Login page loads with form elements",
+      "Login with admin/admin redirects to dashboard",
+      "Dashboard shows correct summary cards (Total=10, Registered=7, Unregistered=3)",
+      "Header buttons present (Upload Datasets, Logout)",
+      "Unregistered and Registered panels visible",
+      "Expanding Registered shows Shortlisted(6) and Rejected(2)",
+      "Expanding Shortlisted shows Scheduled(5) and Not Scheduled(2)",
+      "Expanding Scheduled shows Attended(3) and Not Attended(4)",
+      "Clicking Unregistered panel opens modal with Harry, Ivy, Jack",
+      "Clicking Attended panel opens modal with Alice, Charlie, Grace",
+      "Data table modal shows correct columns and pagination",
+      "Upload Datasets button opens upload modal",
+      "Upload modal shows both Naukri and Pipeline sections",
+      "Logout button redirects to login page"
+    ]
+  },
+  
+  "test_report_links": [
+    "/app/backend/tests/test_relational_integrity.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  
+  "action_items": [],
+  
+  "critical_code_review_comments": [],
+  
+  "updated_files": [
+    "/app/backend/tests/test_relational_integrity.py"
+  ],
+  
+  "success_rate": {
+    "backend": "100% (34/34 tests passed)",
+    "frontend": "100% (all features working)"
+  },
+  
+  "test_credentials": {
+    "username": "admin",
+    "password": "admin"
+  },
+  
+  "seed_data_creation": "Test data uploaded via /app/test_data/naukri_test.csv (10 records) and /app/test_data/pipeline_test.csv (7 records)",
+  
+  "retest_needed": false,
+  
+  "should_main_agent_self_test": false,
+  
+  "context_for_next_testing_agent": "All backend APIs and frontend features working correctly after relational integrity refactor. Key architectural change: registered_candidates collection is the INNER JOIN of naukri_applies and pipeline_data. All sub-category endpoints (shortlisted, rejected, scheduled, not-scheduled, attended, not-attended) query from registered_candidates NOT from pipeline_data directly. This ensures all sub-categories are strict subsets of Registered. Verified partitions: scheduled+not_scheduled=registered, attended+not_attended=registered. UPSERT logic works correctly - re-uploading same data updates records instead of duplicating.",
+  
+  "relational_integrity_validation": {
+    "total_applies": 10,
+    "registered": 7,
+    "unregistered": 3,
+    "shortlisted": 6,
+    "rejected": 2,
+    "scheduled": 5,
+    "not_scheduled": 2,
+    "attended": 3,
+    "not_attended": 4,
+    "partition_checks": {
+      "registered_plus_unregistered_equals_total": "7+3=10 ✓",
+      "scheduled_plus_not_scheduled_equals_registered": "5+2=7 ✓",
+      "attended_plus_not_attended_equals_registered": "3+4=7 ✓"
+    },
+    "subset_checks": {
+      "shortlisted_subset_of_registered": "6<=7 ✓",
+      "rejected_subset_of_registered": "2<=7 ✓"
+    }
+  }
+}
