@@ -11,74 +11,54 @@ Full-stack web application for recruitment analytics that ingests Naukri Applies
 
 ## Workflow
 ```
-Login → Dashboard (Upload Datasets via modal → View Analytics → Drill-down into categories)
+Login -> Dashboard (Upload Datasets via modal -> View Analytics -> Drill-down into categories)
 ```
-- Independent file uploads (Naukri and Pipeline can be uploaded separately)
-- Records are UPSERTED using (email OR phone) as composite unique identity
-- After each upload, automatic re-matching runs to update registration status
-- All counts and data are DB-driven (no frontend state dependency)
 
-## Core Features (Implemented)
+## Core Data Architecture (Relational Integrity)
 
-### Authentication
-- [x] JWT cookie-based auth (httpOnly, samesite=lax)
-- [x] Login/Logout endpoints
-- [x] Auth check endpoint
-- [x] Protected routes
+### Collections
+- `naukri_applies` - Raw Naukri applicant data, with `_is_registered` flag
+- `pipeline_data` - Raw HR pipeline data
+- `registered_candidates` - **DERIVED** collection: INNER JOIN of naukri_applies + pipeline_data on (email OR phone)
 
-### Data Upload (Modal-based)
-- [x] Upload Naukri CSV/XLSX via modal
-- [x] Upload Pipeline CSV/XLSX via modal
-- [x] Auto-detect email, phone, and other columns
-- [x] UPSERT logic (email OR phone matching - no duplicates)
-- [x] Auto re-matching after each upload
-- [x] Error reporting (first 10 errors)
-- [x] 10MB file size limit
+### Matching Logic
+After each upload, `reprocess_matching()` rebuilds `registered_candidates`:
+1. For each naukri record, match against pipeline by email OR phone
+2. Matched records are merged (naukri + pipeline fields) into `registered_candidates`
+3. Unmatched naukri records are flagged `_is_registered: false`
 
-### Analytics Dashboard
-- [x] Summary cards (Total Applies, Registered, Unregistered)
-- [x] Hierarchical drill-down panels:
-  - Unregistered Applicants
-  - Registered Applicants
-    - Shortlisted (email_type contains 'shortlist')
-      - Interview Scheduled (schedule_date not null)
-        - Attended (otp_verified not null)
-        - Not Attended (has schedule, no otp_verified)
-      - Interview Not Scheduled (shortlisted but no schedule_date)
-    - Rejected (result_status matches 'reject')
-- [x] Floating modal windows with scrollable data tables
-- [x] Category-specific column visibility
-- [x] Pagination (50 records per page)
+### Category Definitions (ALL from registered_candidates)
+- **Total Applies**: count(naukri_applies)
+- **Registered**: count(registered_candidates) — the JOIN result
+- **Unregistered**: total_applies - registered
+- **Shortlisted**: registered_candidates WHERE email_type matches 'shortlist'
+- **Rejected**: registered_candidates WHERE result_status matches 'reject'
+- **Scheduled**: registered_candidates WHERE schedule_date IS NOT NULL AND schedule_time IS NOT NULL
+- **Not Scheduled**: registered_candidates WHERE schedule_date IS NULL AND schedule_time IS NULL
+- **Attended**: registered_candidates WHERE otp_verified IS NOT NULL
+- **Not Attended**: registered_candidates WHERE otp_verified IS NULL
 
-### Category-Specific Field Mappings
-- **Unregistered**: name, email, phone, job_title, date_of_application, gender, date_of_birth
-- **Registered**: name, email, phone, job_title, date_of_application, gender, date_of_birth
-- **Shortlisted**: name, email, phone, job_title, date_of_application, gender, location, email_type
-- **Rejected**: name, email, phone, job_title, date_of_application, gender, date_of_birth, location, loca_change, attend_inperson, email_type, confirm
-- **Scheduled**: name, email, phone, job_title, date_of_application, gender, schedule_date, schedule_time, reschedule_count
-- **Not Scheduled**: name, email, phone, job_title, date_of_application, gender, date_of_birth, location, loca_change, attend_inperson, email_type, confirm
-- **Attended**: name, email, phone, job_title, date_of_application, gender, date_of_birth, schedule_date, schedule_time, reschedule_count, otp_verified, result_mail, result_update, result_status
-- **Not Attended**: name, email, phone, job_title, date_of_application, gender, date_of_birth, schedule_date, schedule_time, reschedule_count, otp_verified, otp_expired
+### Integrity Constraints
+- registered + unregistered = total_applies
+- scheduled + not_scheduled = registered (partition)
+- attended + not_attended = registered (partition)
+- All sub-categories <= registered (strict subsets)
 
 ## API Endpoints
 - POST `/api/login` - Login
 - POST `/api/logout` - Logout
-- GET `/api/auth/check` - Check auth status
-- POST `/api/upload/naukri` - Upload Naukri data
-- POST `/api/upload/pipeline` - Upload Pipeline data
-- GET `/api/dashboard-counts` - Get all funnel counts
-- GET `/api/data/unregistered` - Drill-down data
-- GET `/api/data/registered` - Drill-down data
-- GET `/api/data/shortlisted` - Drill-down data
-- GET `/api/data/rejected` - Drill-down data
-- GET `/api/data/scheduled` - Drill-down data
-- GET `/api/data/not-scheduled` - Drill-down data
-- GET `/api/data/attended` - Drill-down data
-- GET `/api/data/not-attended` - Drill-down data
-
-## Database Collections
-- `naukri_applies` - Naukri applicant data with _is_registered flag
-- `pipeline_data` - Pipeline/HR internal data
+- GET `/api/auth/check` - Check auth
+- POST `/api/upload/naukri` - Upload Naukri CSV/XLSX
+- POST `/api/upload/pipeline` - Upload Pipeline CSV/XLSX
+- GET `/api/dashboard-counts` - Funnel counts (all from registered_candidates)
+- GET `/api/data/unregistered` - From naukri_applies where not registered
+- GET `/api/data/registered` - From registered_candidates
+- GET `/api/data/shortlisted` - From registered_candidates
+- GET `/api/data/rejected` - From registered_candidates
+- GET `/api/data/scheduled` - From registered_candidates
+- GET `/api/data/not-scheduled` - From registered_candidates
+- GET `/api/data/attended` - From registered_candidates
+- GET `/api/data/not-attended` - From registered_candidates
 
 ## Code Architecture
 ```
@@ -88,7 +68,8 @@ Login → Dashboard (Upload Datasets via modal → View Analytics → Drill-down
 │   ├── requirements.txt
 │   ├── server.py
 │   └── tests/
-│       └── test_recruitment_api.py
+│       ├── test_recruitment_api.py
+│       └── test_relational_integrity.py
 ├── frontend/
 │   └── src/
 │       ├── App.js
@@ -103,22 +84,20 @@ Login → Dashboard (Upload Datasets via modal → View Analytics → Drill-down
 ```
 
 ## Testing Status (April 8, 2026)
-- Backend: 23/23 tests passed (100%)
+- Backend: 34/34 tests passed (100%) — relational integrity validated
 - Frontend: All features verified (100%)
-- UPSERT logic: Verified (re-upload updates, no duplicates)
-- Auth: Cookie-based JWT working correctly
+- UPSERT: Verified (re-upload updates, no duplicates)
+- Partition checks: scheduled+not_scheduled=registered, attended+not_attended=registered
 
 ## Prioritized Backlog
 
 ### P1 - Important
-- [ ] Session persistence verification across hard page refreshes
 - [ ] CSV export/download from data table modals
-- [ ] Bulk data re-upload without full reset
+- [ ] Session persistence across hard page refreshes
+- [ ] Search within data table modals
 
 ### P2 - Nice to Have
 - [ ] Upload history view
-- [ ] Progress bar during file processing
+- [ ] Progress bar during processing
 - [ ] Role-based access (Admin/Recruiter)
 - [ ] Advanced charts/visualizations
-- [ ] Search within data table modals
-- [ ] Email notifications
