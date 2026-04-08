@@ -5,7 +5,7 @@ from datetime import datetime
 import io
 
 class RecruitmentAPITester:
-    def __init__(self, base_url="https://hire-analytics-4.preview.emergentagent.com"):
+    def __init__(self, base_url="https://hiring-dashboard-15.preview.emergentagent.com"):
         self.base_url = base_url
         self.session = requests.Session()
         self.tests_run = 0
