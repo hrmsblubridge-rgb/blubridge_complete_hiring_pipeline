@@ -658,7 +658,7 @@ export default function Dashboard() {
                                     onClick={() => openTableModal(
                                         'Interview Not Scheduled',
                                         'not-scheduled',
-                                        ['name', 'email', 'phone', 'job_title', 'date_of_application', 'gender', 'date_of_birth', 'location', 'loca_change', 'attend_inperson', 'email_type', 'confirm']
+                                        ['name', 'email', 'phone', 'job_title', 'date_of_application', 'gender', 'date_of_birth', 'location', 'loca_change', 'attend_inperson', 'email_type', 'confirm_box']
                                     )}
                                     testId="panel-not-scheduled"
                                 />
@@ -674,7 +674,7 @@ export default function Dashboard() {
                                 onClick={() => openTableModal(
                                     'Rejected Applicants',
                                     'rejected',
-                                    ['name', 'email', 'phone', 'job_title', 'date_of_application', 'gender', 'date_of_birth', 'location', 'loca_change', 'attend_inperson', 'email_type', 'confirm']
+                                    ['name', 'email', 'phone', 'job_title', 'date_of_application', 'gender', 'date_of_birth', 'location', 'loca_change', 'attend_inperson', 'email_type', 'confirm_box']
                                 )}
                                 testId="panel-rejected"
                             />

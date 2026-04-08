@@ -1,8 +1,8 @@
-name,email,phone,job_role,gender,age,location,current_location,loca_change,attend_inperson,email_type,confirm_box,schedule_date,schedule_time,reschedule_count,otp_verified,otp_expired,result_mail,result_update,result_status,submitted_at
-Alice Johnson,alice@example.com,9876543210,Software Engineer,Female,31,Bangalore,Bangalore,Yes,Yes,shortlist,Yes,2026-02-01,10:00 AM,0,Yes,,Sent,Updated,Selected,2026-01-16
-Bob Smith,bob@example.com,9876543211,Data Analyst,Male,33,Mumbai,Mumbai,No,Yes,shortlist,Yes,2026-02-02,11:00 AM,1,,,,,Rejected,2026-01-17
-Charlie Brown,charlie@example.com,9876543212,Product Manager,Male,36,Delhi,Delhi,Yes,Yes,shortlist,Yes,2026-02-03,2:00 PM,0,Yes,,Sent,Updated,Selected,2026-01-18
-Diana Lee,diana@example.com,9876543213,UX Designer,Female,29,Pune,Pune,Yes,No,shortlist,No,,,,,,,,2026-01-19
-Eve Wilson,eve@example.com,9876543214,QA Engineer,Female,32,Hyderabad,Hyderabad,No,Yes,reject,Yes,,,,,,,,2026-01-20
-Frank Garcia,frank@example.com,9876543215,DevOps Engineer,Male,34,Chennai,Chennai,Yes,Yes,shortlist,Yes,2026-02-05,3:00 PM,2,,,,,Rejected,2026-01-21
-Grace Kim,grace@example.com,9876543216,Frontend Developer,Female,30,Kolkata,Kolkata,No,Yes,shortlist,Yes,2026-02-06,9:00 AM,0,Yes,,Sent,Updated,Selected,2026-01-22
+id,name,email,phone,age,gender,hr_team,job_role,email_type,confirm_box,schedule_date,schedule_time,reschedule_count,otp_verified,otp_expired,result_mail,result_update,result_status,submitted_at,current_location,location,loca_change,attend_inperson,year_of_graduation,college,degree,course,state
+1,Alice Johnson,alice@example.com,9876543210,31,Female,Team A,Software Engineer,shortlist,Yes,2026-02-01,10:00 AM,0,Yes,,Sent,Updated,Selected,2026-01-16,Bangalore,Bangalore,Yes,Yes,2017,IIT Bangalore,B.Tech,Computer Science,Karnataka
+2,Bob Smith,bob@example.com,9876543211,33,Male,Team B,Data Analyst,shortlist,Yes,2026-02-02,11:00 AM,1,,,,,Rejected,2026-01-17,Mumbai,Mumbai,No,Yes,2015,IIM Mumbai,MBA,Business Analytics,Maharashtra
+3,Charlie Brown,charlie@example.com,9876543212,36,Male,Team A,Product Manager,shortlist,Yes,2026-02-03,2:00 PM,0,Yes,,Sent,Updated,Selected,2026-01-18,Delhi,Delhi,Yes,Yes,2012,DTU,B.Tech,IT,Delhi
+4,Diana Lee,diana@example.com,9876543213,29,Female,Team C,UX Designer,shortlist,No,,,,,,,,,2026-01-19,Pune,Pune,Yes,No,2019,NID,B.Des,Design,Maharashtra
+5,Eve Wilson,eve@example.com,9876543214,32,Female,Team B,QA Engineer,reject,Yes,,,,,,,,,2026-01-20,Hyderabad,Hyderabad,No,Yes,2016,BITS,B.Tech,CS,Telangana
+6,Frank Garcia,frank@example.com,9876543215,34,Male,Team A,DevOps Engineer,shortlist,Yes,2026-02-05,3:00 PM,2,,,,,Rejected,2026-01-21,Chennai,Chennai,Yes,Yes,2014,Anna University,B.E.,CSE,Tamil Nadu
+7,Grace Kim,grace@example.com,9876543216,30,Female,Team C,Frontend Developer,shortlist,Yes,2026-02-06,9:00 AM,0,Yes,,Sent,Updated,Selected,2026-01-22,Kolkata,Kolkata,No,Yes,2018,Jadavpur,B.Tech,ECE,West Bengal

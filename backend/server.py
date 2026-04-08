@@ -92,6 +92,103 @@ def parse_file(file_content: bytes, filename: str) -> pd.DataFrame:
     else:
         raise ValueError("Unsupported file format. Use .csv or .xlsx")
 
+# ============ SCHEMA MAPPING LAYER ============
+
+# Naukri Applies: display column name → normalized DB field name
+NAUKRI_COLUMN_MAP = {
+    "Job Title": "job_title",
+    "Date of application": "date_of_application",
+    "Name": "name",
+    "Email ID": "email",
+    "Phone Number": "phone",
+    "Current Location": "current_location",
+    "Preferred Locations": "preferred_locations",
+    "Total Experience": "total_experience",
+    "Curr. Company name": "curr_company_name",
+    "Curr. Company Designation": "curr_company_designation",
+    "Department": "department",
+    "Role": "role",
+    "Industry": "industry",
+    "Key Skills": "key_skills",
+    "Annual Salary": "annual_salary",
+    "Notice period/ Availability to join": "notice_period",
+    "Resume Headline": "resume_headline",
+    "Summary": "summary",
+    "Under Graduation degree": "ug_degree",
+    "UG Specialization": "ug_specialization",
+    "UG University/institute Name": "ug_university",
+    "UG Graduation year": "ug_graduation_year",
+    "Post graduation degree": "pg_degree",
+    "PG specialization": "pg_specialization",
+    "PG university/institute name": "pg_university",
+    "PG graduation year": "pg_graduation_year",
+    "Doctorate degree": "doctorate_degree",
+    "Doctorate specialization": "doctorate_specialization",
+    "Doctorate university/institute name": "doctorate_university",
+    "Doctorate graduation year": "doctorate_graduation_year",
+    "Gender": "gender",
+    "Marital Status": "marital_status",
+    "Home Town/City": "home_town",
+    "Pin Code": "pin_code",
+    "Work permit for USA": "work_permit_usa",
+    "Date of Birth": "date_of_birth",
+    "Permanent Address": "permanent_address",
+    "Last Workflow activity": "last_workflow_activity",
+    "Last Workflow activity by": "last_workflow_activity_by",
+    "Time of Last Workflow activity Update": "time_last_workflow_update",
+    "Latest Pipeline Stage": "latest_pipeline_stage",
+    "Pipeline Status Updated By": "pipeline_status_updated_by",
+    "Time when Stage updated": "time_stage_updated",
+    "Download": "download",
+    "Downloaded By": "downloaded_by",
+    "Time Of Download": "time_of_download",
+    "Viewed": "viewed",
+    "Viewed By": "viewed_by",
+    "Time Of View": "time_of_view",
+    "Emailed": "emailed",
+    "Emailed By": "emailed_by",
+    "Time Of Email": "time_of_email",
+    "Calling Status": "calling_status",
+    "Calling Status updated by": "calling_status_updated_by",
+    "Time of Calling activity update": "time_calling_update",
+    "Comment 1": "comment_1",
+    "Comment 1 BY": "comment_1_by",
+    "Time Comment 1 posted": "time_comment_1",
+    "Comment 2": "comment_2",
+    "Comment 2 BY": "comment_2_by",
+    "Time Comment 2 posted": "time_comment_2",
+    "Comment 3": "comment_3",
+    "Comment 3 BY": "comment_3_by",
+    "Time Comment 3 posted": "time_comment_3",
+    "Comment 4": "comment_4",
+    "Comment 4 BY": "comment_4_by",
+    "Time Comment 4 posted": "time_comment_4",
+    "Comment 5": "comment_5",
+    "Comment 5 BY": "comment_5_by",
+    "Time Comment 5 posted": "time_comment_5",
+    "Source": "source",
+    "Candidate profile": "candidate_profile",
+}
+
+# Case-insensitive reverse lookup for Naukri column matching
+_NAUKRI_CI_LOOKUP = {k.strip().lower(): v for k, v in NAUKRI_COLUMN_MAP.items()}
+
+# HR Internal Pipeline: canonical column set (already snake_case)
+PIPELINE_EXPECTED_COLUMNS = {
+    "id", "name", "email", "phone", "age", "gender", "hr_team",
+    "year_of_graduation", "college", "college_type", "degree", "course",
+    "submitted_at", "last_update", "email_send", "current_location",
+    "location", "state", "loca_change", "attend_inperson", "job_role",
+    "email_type", "confirm_box", "resend", "whatsapp_reminder_sent",
+    "schedule_date", "schedule_time", "reschedule_count", "otp",
+    "otp_verified", "otp_expired", "otp_send", "message_id",
+    "result_mail", "result_update", "result_status", "reschedule",
+    "reschedule_mail", "rescheduled", "reschedule_date",
+}
+
+# Case-insensitive lookup for pipeline columns
+_PIPELINE_CI_LOOKUP = {c.lower(): c for c in PIPELINE_EXPECTED_COLUMNS}
+
 # ============ AUTH ENDPOINTS ============
 
 class LoginRequest(BaseModel):
@@ -129,77 +226,64 @@ async def check_auth(user: str = Depends(get_current_user)):
 
 @api_router.post("/upload/naukri")
 async def upload_naukri(file: UploadFile = File(...), user: str = Depends(get_current_user)):
-    """Upload Naukri Applies data - can be uploaded independently"""
+    """Upload Naukri Applies data — mapping-driven schema alignment"""
     try:
         content = await file.read()
         if len(content) > 10 * 1024 * 1024:
             raise HTTPException(status_code=400, detail="File size exceeds 10MB limit")
-        
+
         df = parse_file(content, file.filename)
         df.columns = df.columns.str.strip()
-        
-        # Detect email and phone columns
-        email_col = None
-        phone_col = None
-        for col in df.columns:
-            col_lower = col.lower()
-            if 'email' in col_lower and 'type' not in col_lower:
-                email_col = col
-            if 'phone' in col_lower or 'mobile' in col_lower:
-                phone_col = col
-        
-        if not email_col and not phone_col:
-            raise HTTPException(status_code=400, detail="Could not detect Email or Phone column")
-        
-        # Detect other columns
-        name_col = next((c for c in df.columns if c.lower() == 'name' or 'name' in c.lower()), None)
-        job_col = next((c for c in df.columns if 'job' in c.lower() and ('title' in c.lower() or 'role' in c.lower())), None)
-        date_col = next((c for c in df.columns if 'date' in c.lower() and 'application' in c.lower()), None)
-        if not date_col:
-            date_col = next((c for c in df.columns if 'submitted' in c.lower() or 'applied' in c.lower()), None)
-        gender_col = next((c for c in df.columns if 'gender' in c.lower()), None)
-        dob_col = next((c for c in df.columns if 'birth' in c.lower() or 'dob' in c.lower()), None)
-        
+
+        # Map CSV columns → DB field names using the mapping dictionary
+        col_map = {}  # csv_column_name → db_field_name
+        for csv_col in df.columns:
+            if csv_col in NAUKRI_COLUMN_MAP:
+                col_map[csv_col] = NAUKRI_COLUMN_MAP[csv_col]
+            elif csv_col.strip().lower() in _NAUKRI_CI_LOOKUP:
+                col_map[csv_col] = _NAUKRI_CI_LOOKUP[csv_col.strip().lower()]
+
+        mapped_fields = set(col_map.values())
+        if "email" not in mapped_fields and "phone" not in mapped_fields:
+            raise HTTPException(status_code=400, detail="Could not detect 'Email ID' or 'Phone Number' column")
+
         total = len(df)
         inserted = 0
         updated = 0
         errors = []
-        
+
         for idx, row in df.iterrows():
             try:
-                email = normalize_email(row.get(email_col)) if email_col else ""
-                phone = normalize_phone(row.get(phone_col)) if phone_col else ""
-                
+                doc = {}
+                # Store mapped columns
+                for csv_col, db_field in col_map.items():
+                    doc[db_field] = clean_value(row.get(csv_col))
+
+                # Store unmapped columns (data loss prevention)
+                for csv_col in df.columns:
+                    if csv_col not in col_map:
+                        safe = re.sub(r'[^\w]', '_', csv_col.strip().lower()).strip('_')
+                        doc[f"_extra_{safe}"] = clean_value(row.get(csv_col))
+
+                # Normalize identifiers
+                email = normalize_email(doc.get("email"))
+                phone = normalize_phone(doc.get("phone"))
+                doc["email"] = email
+                doc["phone"] = phone
+                doc["updated_at"] = datetime.now(timezone.utc)
+
                 if not email and not phone:
-                    errors.append(f"Row {idx + 2}: Missing email and phone")
+                    errors.append(f"Row {idx + 2}: Missing Email ID and Phone Number")
                     continue
-                
-                # Build document
-                doc = {
-                    "name": clean_value(row.get(name_col)) if name_col else None,
-                    "email": email,
-                    "phone": phone,
-                    "job_title": clean_value(row.get(job_col)) if job_col else None,
-                    "date_of_application": clean_value(row.get(date_col)) if date_col else None,
-                    "gender": clean_value(row.get(gender_col)) if gender_col else None,
-                    "date_of_birth": clean_value(row.get(dob_col)) if dob_col else None,
-                    "updated_at": datetime.now(timezone.utc)
-                }
-                
-                # Store all original columns too
-                for col in df.columns:
-                    if col not in [email_col, phone_col, name_col, job_col, date_col, gender_col, dob_col]:
-                        doc[f"_raw_{col}"] = clean_value(row.get(col))
-                
-                # UPSERT based on email OR phone composite uniqueness
+
+                # UPSERT on email OR phone
                 query = {"$or": []}
                 if email:
                     query["$or"].append({"email": email})
                 if phone:
                     query["$or"].append({"phone": phone})
-                
+
                 existing = await db.naukri_applies.find_one(query)
-                
                 if existing:
                     await db.naukri_applies.update_one({"_id": existing["_id"]}, {"$set": doc})
                     updated += 1
@@ -207,22 +291,23 @@ async def upload_naukri(file: UploadFile = File(...), user: str = Depends(get_cu
                     doc["created_at"] = datetime.now(timezone.utc)
                     await db.naukri_applies.insert_one(doc)
                     inserted += 1
-                    
+
             except Exception as e:
                 errors.append(f"Row {idx + 2}: {str(e)}")
-        
-        # Trigger reprocessing
+
         await reprocess_matching()
-        
+
         return {
             "success": True,
             "message": f"Naukri data uploaded. Inserted: {inserted}, Updated: {updated}",
             "total": total,
             "inserted": inserted,
             "updated": updated,
-            "errors": errors[:10]
+            "errors": errors[:10],
+            "mapped_columns": len(col_map),
+            "unmapped_columns": len(df.columns) - len(col_map)
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -230,83 +315,74 @@ async def upload_naukri(file: UploadFile = File(...), user: str = Depends(get_cu
 
 @api_router.post("/upload/pipeline")
 async def upload_pipeline(file: UploadFile = File(...), user: str = Depends(get_current_user)):
-    """Upload Pipeline data - can be uploaded independently"""
+    """Upload HR Internal Pipeline data — handles duplicate columns, strict schema"""
     try:
         content = await file.read()
         if len(content) > 10 * 1024 * 1024:
             raise HTTPException(status_code=400, detail="File size exceeds 10MB limit")
-        
+
         df = parse_file(content, file.filename)
         df.columns = df.columns.str.strip()
-        
-        # Handle duplicate column names by taking unique ones
+
+        # Deduplicate columns: keep first occurrence only
         cols = df.columns.tolist()
-        seen = {}
-        new_cols = []
-        for col in cols:
-            if col in seen:
-                seen[col] += 1
-                new_cols.append(f"{col}_{seen[col]}")
-            else:
-                seen[col] = 0
-                new_cols.append(col)
-        df.columns = new_cols
-        
-        # Detect key columns
-        email_col = next((c for c in df.columns if 'email' in c.lower() and 'type' not in c.lower() and '_' not in c), None)
-        phone_col = next((c for c in df.columns if ('phone' in c.lower() or 'mobile' in c.lower()) and '_' not in c), None)
-        
-        if not email_col and not phone_col:
-            raise HTTPException(status_code=400, detail="Could not detect Email or Phone column")
-        
+        seen_bases = set()
+        keep_indices = []
+        for i, col in enumerate(cols):
+            base = re.sub(r'\.\d+$', '', col.strip()).lower()
+            if base not in seen_bases:
+                seen_bases.add(base)
+                keep_indices.append(i)
+        df = df.iloc[:, keep_indices]
+        df.columns = [re.sub(r'\.\d+$', '', c.strip()) for c in df.columns]
+
+        # Map CSV columns → DB field names
+        col_map = {}
+        for csv_col in df.columns:
+            normalized = csv_col.strip().lower()
+            if normalized in _PIPELINE_CI_LOOKUP:
+                db_field = _PIPELINE_CI_LOOKUP[normalized]
+                col_map[csv_col] = "pipeline_id" if db_field == "id" else db_field
+
+        mapped_fields = set(col_map.values())
+        if "email" not in mapped_fields and "phone" not in mapped_fields:
+            raise HTTPException(status_code=400, detail="Could not detect 'email' or 'phone' column")
+
         total = len(df)
         inserted = 0
         updated = 0
         errors = []
-        
+
         for idx, row in df.iterrows():
             try:
-                email = normalize_email(row.get(email_col)) if email_col else ""
-                phone = normalize_phone(row.get(phone_col)) if phone_col else ""
-                
+                doc = {}
+                for csv_col, db_field in col_map.items():
+                    doc[db_field] = clean_value(row.get(csv_col))
+
+                # Store unmapped columns (data loss prevention)
+                for csv_col in df.columns:
+                    if csv_col not in col_map:
+                        safe = re.sub(r'[^\w]', '_', csv_col.strip().lower()).strip('_')
+                        doc[f"_extra_{safe}"] = clean_value(row.get(csv_col))
+
+                email = normalize_email(doc.get("email"))
+                phone = normalize_phone(doc.get("phone"))
+                doc["email"] = email
+                doc["phone"] = phone
+                doc["updated_at"] = datetime.now(timezone.utc)
+
                 if not email and not phone:
                     errors.append(f"Row {idx + 2}: Missing email and phone")
                     continue
-                
-                # Map known fields
-                doc = {
-                    "email": email,
-                    "phone": phone,
-                    "name": clean_value(row.get('name')) if 'name' in df.columns else None,
-                    "job_title": clean_value(row.get('job_role')) if 'job_role' in df.columns else None,
-                    "gender": clean_value(row.get('gender')) if 'gender' in df.columns else None,
-                    "age": clean_value(row.get('age')) if 'age' in df.columns else None,
-                    "location": clean_value(row.get('location')) if 'location' in df.columns else clean_value(row.get('current_location')) if 'current_location' in df.columns else None,
-                    "loca_change": clean_value(row.get('loca_change')) if 'loca_change' in df.columns else None,
-                    "attend_inperson": clean_value(row.get('attend_inperson')) if 'attend_inperson' in df.columns else None,
-                    "email_type": clean_value(row.get('email_type')) if 'email_type' in df.columns else None,
-                    "confirm": clean_value(row.get('confirm_box')) if 'confirm_box' in df.columns else None,
-                    "schedule_date": clean_value(row.get('schedule_date')) if 'schedule_date' in df.columns else None,
-                    "schedule_time": clean_value(row.get('schedule_time')) if 'schedule_time' in df.columns else None,
-                    "reschedule_count": clean_value(row.get('reschedule_count')) if 'reschedule_count' in df.columns else None,
-                    "otp_verified": clean_value(row.get('otp_verified')) if 'otp_verified' in df.columns else None,
-                    "otp_expired": clean_value(row.get('otp_expired')) if 'otp_expired' in df.columns else None,
-                    "result_mail": clean_value(row.get('result_mail')) if 'result_mail' in df.columns else None,
-                    "result_update": clean_value(row.get('result_update')) if 'result_update' in df.columns else None,
-                    "result_status": clean_value(row.get('result_status')) if 'result_status' in df.columns else None,
-                    "date_of_application": clean_value(row.get('submitted_at')) if 'submitted_at' in df.columns else None,
-                    "updated_at": datetime.now(timezone.utc)
-                }
-                
-                # UPSERT based on email OR phone
+
+                # UPSERT on email OR phone
                 query = {"$or": []}
                 if email:
                     query["$or"].append({"email": email})
                 if phone:
                     query["$or"].append({"phone": phone})
-                
+
                 existing = await db.pipeline_data.find_one(query)
-                
                 if existing:
                     await db.pipeline_data.update_one({"_id": existing["_id"]}, {"$set": doc})
                     updated += 1
@@ -314,22 +390,23 @@ async def upload_pipeline(file: UploadFile = File(...), user: str = Depends(get_
                     doc["created_at"] = datetime.now(timezone.utc)
                     await db.pipeline_data.insert_one(doc)
                     inserted += 1
-                    
+
             except Exception as e:
                 errors.append(f"Row {idx + 2}: {str(e)}")
-        
-        # Trigger reprocessing
+
         await reprocess_matching()
-        
+
         return {
             "success": True,
             "message": f"Pipeline data uploaded. Inserted: {inserted}, Updated: {updated}",
             "total": total,
             "inserted": inserted,
             "updated": updated,
-            "errors": errors[:10]
+            "errors": errors[:10],
+            "mapped_columns": len(col_map),
+            "unmapped_columns": len(df.columns) - len(col_map)
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -342,7 +419,7 @@ def is_null_or_empty(val):
     return val is None or val == ""
 
 async def reprocess_matching():
-    """Rebuild registered_candidates collection via INNER JOIN of naukri_applies and pipeline_data"""
+    """Rebuild registered_candidates via INNER JOIN — merges ALL fields from both collections"""
     naukri_list = await db.naukri_applies.find({}).to_list(None)
     pipeline_list = await db.pipeline_data.find({}).to_list(None)
 
@@ -352,6 +429,7 @@ async def reprocess_matching():
     await db.registered_candidates.drop()
 
     registered_docs = []
+    _skip_keys = {"_id", "_is_registered", "created_at", "updated_at"}
 
     for naukri in naukri_list:
         email = naukri.get('email', '')
@@ -371,29 +449,20 @@ async def reprocess_matching():
         )
 
         if is_registered:
-            doc = {
-                "name": naukri.get("name") or pipeline_match.get("name"),
-                "email": email or pipeline_match.get("email", ""),
-                "phone": phone or pipeline_match.get("phone", ""),
-                "job_title": naukri.get("job_title") or pipeline_match.get("job_title"),
-                "date_of_application": naukri.get("date_of_application") or pipeline_match.get("date_of_application"),
-                "gender": naukri.get("gender") or pipeline_match.get("gender"),
-                "date_of_birth": naukri.get("date_of_birth"),
-                "age": pipeline_match.get("age"),
-                "location": pipeline_match.get("location"),
-                "loca_change": pipeline_match.get("loca_change"),
-                "attend_inperson": pipeline_match.get("attend_inperson"),
-                "email_type": pipeline_match.get("email_type"),
-                "confirm": pipeline_match.get("confirm"),
-                "schedule_date": pipeline_match.get("schedule_date"),
-                "schedule_time": pipeline_match.get("schedule_time"),
-                "reschedule_count": pipeline_match.get("reschedule_count"),
-                "otp_verified": pipeline_match.get("otp_verified"),
-                "otp_expired": pipeline_match.get("otp_expired"),
-                "result_mail": pipeline_match.get("result_mail"),
-                "result_update": pipeline_match.get("result_update"),
-                "result_status": pipeline_match.get("result_status"),
-            }
+            # Start with ALL pipeline fields as the base
+            doc = {}
+            for k, v in pipeline_match.items():
+                if k not in _skip_keys:
+                    doc[k] = v
+
+            # Overlay ALL naukri fields (naukri takes precedence for non-null shared fields)
+            for k, v in naukri.items():
+                if k not in _skip_keys:
+                    if v is not None and v != "":
+                        doc[k] = v
+                    elif k not in doc:
+                        doc[k] = v
+
             registered_docs.append(doc)
 
     if registered_docs:
@@ -534,12 +603,12 @@ async def get_rejected(
         "_id": 0, "name": 1, "email": 1, "phone": 1, "job_title": 1,
         "date_of_application": 1, "gender": 1, "date_of_birth": 1,
         "location": 1, "loca_change": 1, "attend_inperson": 1,
-        "email_type": 1, "confirm": 1
+        "email_type": 1, "confirm_box": 1
     }).skip(skip).limit(limit)
     data = await cursor.to_list(None)
     return {
         "data": data, "total": total, "page": page, "limit": limit,
-        "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "date_of_birth", "location", "loca_change", "attend_inperson", "email_type", "confirm"]
+        "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "date_of_birth", "location", "loca_change", "attend_inperson", "email_type", "confirm_box"]
     }
 
 @api_router.get("/data/scheduled")
@@ -585,12 +654,12 @@ async def get_not_scheduled(
         "_id": 0, "name": 1, "email": 1, "phone": 1, "job_title": 1,
         "date_of_application": 1, "gender": 1, "date_of_birth": 1,
         "location": 1, "loca_change": 1, "attend_inperson": 1,
-        "email_type": 1, "confirm": 1
+        "email_type": 1, "confirm_box": 1
     }).skip(skip).limit(limit)
     data = await cursor.to_list(None)
     return {
         "data": data, "total": total, "page": page, "limit": limit,
-        "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "date_of_birth", "location", "loca_change", "attend_inperson", "email_type", "confirm"]
+        "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "date_of_birth", "location", "loca_change", "attend_inperson", "email_type", "confirm_box"]
     }
 
 @api_router.get("/data/attended")
