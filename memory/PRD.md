@@ -1,145 +1,124 @@
 # Recruitment Analytics System - PRD
 
 ## Project Overview
-Full-stack web application for recruitment analytics with a **sequential, state-driven workflow** that ingests Naukri Applies and Pipeline Data, processes them together, and displays combined analytics.
+Full-stack web application for recruitment analytics that ingests Naukri Applies and Pipeline datasets, processes them, matches records using Email/Phone composite key, and displays a funnel-based analytics dashboard with hierarchical drill-down panels.
 
-## Workflow Flow (CRITICAL)
+## Architecture
+- **Frontend**: React + Tailwind CSS + Phosphor Icons + Framer Motion
+- **Backend**: FastAPI + Motor (async MongoDB)
+- **Database**: MongoDB
+- **Auth**: JWT cookie-based (hardcoded admin/admin)
+
+## Workflow
 ```
-Login → Step 1: Upload Naukri → Step 2: Upload Pipeline → Auto-Process → Dashboard
+Login → Dashboard (Upload Datasets via modal → View Analytics → Drill-down into categories)
 ```
-- Dashboard only accessible after BOTH uploads complete and processing finishes
-- Route guards enforce sequential access
-- State persisted in database (survives page refresh)
+- Independent file uploads (Naukri and Pipeline can be uploaded separately)
+- Records are UPSERTED using (email OR phone) as composite unique identity
+- After each upload, automatic re-matching runs to update registration status
+- All counts and data are DB-driven (no frontend state dependency)
 
-## User Personas
-1. **Recruiters** - Upload candidate data and view analytics
-2. **HR Managers** - Monitor recruitment funnel and track conversion rates
-3. **Admin** - Manage system access
+## Core Features (Implemented)
 
-## Core Requirements (Static)
-- JWT-based authentication (60 min sessions)
-- Sequential workflow (Naukri → Pipeline → Process → Dashboard)
-- Dynamic schema detection from uploaded files
-- File upload (CSV/XLSX) with 10MB limit
-- Data validation and normalization
-- Candidate matching (email primary, phone fallback)
-- Funnel visualization with dynamic status breakdown
-- Detailed data tables with all fields
-- CSV export
-
-## What's Been Implemented (April 7, 2026)
-
-### Sequential Workflow System (NEW)
-- [x] Workflow state persisted in MongoDB per user
-- [x] `/upload/naukri` - Entry point (always accessible)
-- [x] `/upload/pipeline` - Requires Naukri upload complete
-- [x] `/dashboard` - Requires processing complete
-- [x] Route guards enforce access sequence
-- [x] Progress indicators in UI (Step 1 → Step 2 → Step 3)
-- [x] Green checkmarks show completed steps
-- [x] "Continue to Step 2" button after Naukri upload
-- [x] Auto-processing after Pipeline upload
-- [x] "New Analysis" button to reset and start fresh
-
-### Dynamic Schema System
-- [x] Auto-detect email, phone, status, job role columns
-- [x] Store ALL fields from uploaded files
-- [x] Extract status values from actual data
-
-### Authentication System
-- [x] JWT auth with httpOnly cookies
-- [x] Login/Register pages
+### Authentication
+- [x] JWT cookie-based auth (httpOnly, samesite=lax)
+- [x] Login/Logout endpoints
+- [x] Auth check endpoint
 - [x] Protected routes
-- [x] Admin seeding on startup
 
-### Data Upload
-- [x] Step 1: Upload Naukri with schema detection
-- [x] Step 2: Upload Pipeline with schema detection
-- [x] Shows detected schema after upload
-- [x] Data normalization
-- [x] Duplicate detection
-- [x] Error reporting
-
-### Data Processing
-- [x] `POST /api/process-combined` - Only after BOTH uploads
-- [x] Candidate matching (email/phone)
-- [x] Dynamic status classification
+### Data Upload (Modal-based)
+- [x] Upload Naukri CSV/XLSX via modal
+- [x] Upload Pipeline CSV/XLSX via modal
+- [x] Auto-detect email, phone, and other columns
+- [x] UPSERT logic (email OR phone matching - no duplicates)
+- [x] Auto re-matching after each upload
+- [x] Error reporting (first 10 errors)
+- [x] 10MB file size limit
 
 ### Analytics Dashboard
-- [x] "Analysis Complete" banner
-- [x] Summary Funnel tab with counts
-- [x] Detailed Data tab with tables
-- [x] Registration filter
-- [x] Status filter (dynamically populated)
-- [x] Job role filter (if detected)
-- [x] Search, pagination, CSV download
+- [x] Summary cards (Total Applies, Registered, Unregistered)
+- [x] Hierarchical drill-down panels:
+  - Unregistered Applicants
+  - Registered Applicants
+    - Shortlisted (email_type contains 'shortlist')
+      - Interview Scheduled (schedule_date not null)
+        - Attended (otp_verified not null)
+        - Not Attended (has schedule, no otp_verified)
+      - Interview Not Scheduled (shortlisted but no schedule_date)
+    - Rejected (result_status matches 'reject')
+- [x] Floating modal windows with scrollable data tables
+- [x] Category-specific column visibility
+- [x] Pagination (50 records per page)
+
+### Category-Specific Field Mappings
+- **Unregistered**: name, email, phone, job_title, date_of_application, gender, date_of_birth
+- **Registered**: name, email, phone, job_title, date_of_application, gender, date_of_birth
+- **Shortlisted**: name, email, phone, job_title, date_of_application, gender, location, email_type
+- **Rejected**: name, email, phone, job_title, date_of_application, gender, date_of_birth, location, loca_change, attend_inperson, email_type, confirm
+- **Scheduled**: name, email, phone, job_title, date_of_application, gender, schedule_date, schedule_time, reschedule_count
+- **Not Scheduled**: name, email, phone, job_title, date_of_application, gender, date_of_birth, location, loca_change, attend_inperson, email_type, confirm
+- **Attended**: name, email, phone, job_title, date_of_application, gender, date_of_birth, schedule_date, schedule_time, reschedule_count, otp_verified, result_mail, result_update, result_status
+- **Not Attended**: name, email, phone, job_title, date_of_application, gender, date_of_birth, schedule_date, schedule_time, reschedule_count, otp_verified, otp_expired
 
 ## API Endpoints
-### Auth
-- POST `/api/auth/register`
-- POST `/api/auth/login`
-- POST `/api/auth/logout`
-- GET `/api/auth/me`
-- POST `/api/auth/refresh`
-
-### Workflow
-- GET `/api/workflow/state` - Get current workflow state
-- POST `/api/workflow/reset` - Reset and start fresh
-
-### Upload
-- POST `/api/upload/naukri` - Step 1 (updates workflow state)
-- POST `/api/upload/pipeline` - Step 2 (requires Step 1 complete)
-
-### Processing
-- POST `/api/process-combined` - Requires both uploads
-
-### Analytics
-- GET `/api/analytics?job_role=`
-- GET `/api/data?source=&job_role=&status=&registration=&search=&page=&limit=`
-- GET `/api/analytics/download?source=&job_role=&status=`
+- POST `/api/login` - Login
+- POST `/api/logout` - Logout
+- GET `/api/auth/check` - Check auth status
+- POST `/api/upload/naukri` - Upload Naukri data
+- POST `/api/upload/pipeline` - Upload Pipeline data
+- GET `/api/dashboard-counts` - Get all funnel counts
+- GET `/api/data/unregistered` - Drill-down data
+- GET `/api/data/registered` - Drill-down data
+- GET `/api/data/shortlisted` - Drill-down data
+- GET `/api/data/rejected` - Drill-down data
+- GET `/api/data/scheduled` - Drill-down data
+- GET `/api/data/not-scheduled` - Drill-down data
+- GET `/api/data/attended` - Drill-down data
+- GET `/api/data/not-attended` - Drill-down data
 
 ## Database Collections
-- `users` - User accounts
-- `workflow_state` - Per-user workflow progress
-- `schema_metadata` - Detected schemas
-- `naukri_applies_raw` - Raw Naukri data (all fields)
-- `pipeline_data_raw` - Raw Pipeline data (all fields)
-- `processed_candidates` - Matched/processed candidates
-- `upload_history` - Upload logs
+- `naukri_applies` - Naukri applicant data with _is_registered flag
+- `pipeline_data` - Pipeline/HR internal data
 
-## Workflow State Schema
-```json
-{
-  "user_id": "...",
-  "naukri_uploaded": true/false,
-  "pipeline_uploaded": true/false,
-  "processing_complete": true/false,
-  "current_step": "naukri|pipeline|processing|dashboard"
-}
+## Code Architecture
 ```
+/app/
+├── backend/
+│   ├── .env
+│   ├── requirements.txt
+│   ├── server.py
+│   └── tests/
+│       └── test_recruitment_api.py
+├── frontend/
+│   └── src/
+│       ├── App.js
+│       ├── context/AuthContext.js
+│       ├── components/ProtectedRoute.js
+│       └── pages/
+│           ├── Login.js
+│           └── Dashboard.js
+├── test_data/
+│   ├── naukri_test.csv
+│   └── pipeline_test.csv
+```
+
+## Testing Status (April 8, 2026)
+- Backend: 23/23 tests passed (100%)
+- Frontend: All features verified (100%)
+- UPSERT logic: Verified (re-upload updates, no duplicates)
+- Auth: Cookie-based JWT working correctly
 
 ## Prioritized Backlog
 
-### P0 - Critical (Completed)
-- [x] Sequential workflow enforcement
-- [x] Route guards
-- [x] Dynamic schema detection
-- [x] Authentication
-- [x] File uploads
-- [x] Combined processing
-- [x] Analytics dashboard
-
-### P1 - Important (Future)
+### P1 - Important
+- [ ] Session persistence verification across hard page refreshes
+- [ ] CSV export/download from data table modals
 - [ ] Bulk data re-upload without full reset
-- [ ] Upload history view
-- [ ] Progress bar during processing
 
 ### P2 - Nice to Have
+- [ ] Upload history view
+- [ ] Progress bar during file processing
 - [ ] Role-based access (Admin/Recruiter)
-- [ ] Advanced charts
-- [ ] Email notifications when processing complete
-
-## Next Tasks
-1. Add processing progress indicator
-2. Add upload history tracking
-3. Add more chart types to dashboard
+- [ ] Advanced charts/visualizations
+- [ ] Search within data table modals
+- [ ] Email notifications

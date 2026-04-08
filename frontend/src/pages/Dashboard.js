@@ -226,7 +226,7 @@ function UploadModal({ isOpen, onClose, onUploadComplete }) {
                 {/* Header */}
                 <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-gray-50">
                     <h2 className="heading-3">Upload Datasets</h2>
-                    <button onClick={handleClose} className="p-2 hover:bg-gray-200 transition-colors">
+                    <button onClick={handleClose} className="p-2 hover:bg-gray-200 transition-colors" data-testid="close-upload-modal-btn">
                         <X size={24} weight="bold" />
                     </button>
                 </div>
