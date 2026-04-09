@@ -2,59 +2,76 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { ArrowLeft, FunnelSimple, ArrowCounterClockwise, SpinnerGap } from '@phosphor-icons/react';
+import { ArrowLeft, FunnelSimple, ArrowCounterClockwise, SpinnerGap, CaretLeft, CaretRight } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
 const COLUMNS = [
-    { key: 'job_role', label: 'Job Role' },
-    { key: 'total_applicants', label: 'Total Applicants' },
-    { key: 'shortlisted', label: 'Total Shortlisted' },
-    { key: 'rejected', label: 'Total Rejected' },
-    { key: 'scheduled', label: 'Total Interview Scheduled' },
-    { key: 'not_scheduled', label: 'Total Interview Not Scheduled' },
-    { key: 'attended', label: 'Total Attended' },
-    { key: 'not_attended', label: 'Total Not Attended' },
+    { key: 'name', label: 'Name' },
+    { key: 'email', label: 'Email' },
+    { key: 'phone', label: 'Phone' },
+    { key: 'gender', label: 'Gender' },
+    { key: 'date_of_birth', label: 'Date of Birth' },
+    { key: 'date_of_application', label: 'Date of Application' },
+    { key: 'status', label: 'Status' },
 ];
+
+const STATUS_STYLES = {
+    'Rejected': 'bg-red-900/40 text-red-400 border border-red-800/50',
+    'Attended': 'bg-emerald-900/40 text-emerald-400 border border-emerald-800/50',
+    'Interview Scheduled': 'bg-blue-900/40 text-blue-400 border border-blue-800/50',
+    'Shortlisted': 'bg-amber-900/40 text-amber-400 border border-amber-800/50',
+    'Registered': 'bg-zinc-800/60 text-zinc-400 border border-zinc-700/50',
+};
 
 export default function RoleDrillDown() {
     const navigate = useNavigate();
     const { jobRole } = useParams();
     const decodedRole = decodeURIComponent(jobRole);
     const [data, setData] = useState([]);
-    const [totalRegistered, setTotalRegistered] = useState(0);
+    const [total, setTotal] = useState(0);
+    const [page, setPage] = useState(1);
+    const [limit] = useState(50);
     const [loading, setLoading] = useState(true);
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
 
-    const fetchData = useCallback(async (filters = {}) => {
+    const fetchData = useCallback(async (filters = {}, pg = 1) => {
         setLoading(true);
         try {
-            const params = { jobRole: decodedRole };
+            const params = { jobRole: decodedRole, page: pg, limit };
             if (filters.startDate) params.startDate = filters.startDate;
             if (filters.endDate) params.endDate = filters.endDate;
             const res = await axios.get(`${API}/api/role`, { params, withCredentials: true });
             setData(res.data.data);
-            setTotalRegistered(res.data.total_registered);
+            setTotal(res.data.total);
         } catch (err) {
-            toast.error('Failed to load role analytics');
+            toast.error('Failed to load role applicants');
         } finally {
             setLoading(false);
         }
-    }, [decodedRole]);
+    }, [decodedRole, limit]);
 
     useEffect(() => {
-        let mounted = true;
-        if (mounted) fetchData();
-        return () => { mounted = false; };
+        fetchData({}, 1);
     }, [fetchData]);
 
-    const handleFilter = () => fetchData({ startDate, endDate });
+    const handleFilter = () => {
+        setPage(1);
+        fetchData({ startDate, endDate }, 1);
+    };
 
     const handleReset = () => {
         setStartDate('');
         setEndDate('');
-        fetchData({});
+        setPage(1);
+        fetchData({}, 1);
+    };
+
+    const totalPages = Math.ceil(total / limit);
+    const goToPage = (pg) => {
+        setPage(pg);
+        fetchData({ startDate, endDate }, pg);
     };
 
     return (
@@ -66,11 +83,11 @@ export default function RoleDrillDown() {
                 </button>
                 <div>
                     <h1 className="text-xl font-semibold tracking-tight" data-testid="role-title">{decodedRole}</h1>
-                    <p className="text-sm text-zinc-500">Role-specific analytics</p>
+                    <p className="text-sm text-zinc-500">Applicant details</p>
                 </div>
                 {!loading && (
-                    <span className="ml-auto text-sm text-zinc-500" data-testid="total-registered">
-                        Registered: {totalRegistered}
+                    <span className="ml-auto text-sm text-zinc-500" data-testid="total-count">
+                        Total Applicants: {total}
                     </span>
                 )}
             </header>
@@ -109,33 +126,65 @@ export default function RoleDrillDown() {
                     </div>
                 ) : data.length === 0 ? (
                     <div className="text-center py-20 text-zinc-500" data-testid="empty-state">
-                        No data available for this role.
+                        No applicants found for this role.
                     </div>
                 ) : (
-                    <div className="overflow-x-auto border border-zinc-800" data-testid="role-table">
-                        <table className="w-full text-sm">
-                            <thead>
-                                <tr className="bg-zinc-900 border-b border-zinc-800">
-                                    {COLUMNS.map(col => (
-                                        <th key={col.key} className="text-left px-4 py-3 font-medium text-zinc-400 text-xs uppercase tracking-wider whitespace-nowrap">
-                                            {col.label}
-                                        </th>
-                                    ))}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {data.map((row, i) => (
-                                    <tr key={i} className="border-b border-zinc-800/50" data-testid={`role-row-${i}`}>
+                    <>
+                        <div className="overflow-x-auto border border-zinc-800" data-testid="applicant-table">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr className="bg-zinc-900 border-b border-zinc-800">
                                         {COLUMNS.map(col => (
-                                            <td key={col.key} className={`px-4 py-3 whitespace-nowrap ${col.key === 'job_role' ? 'font-medium' : 'text-zinc-400 tabular-nums'}`}>
-                                                {row[col.key] ?? '-'}
-                                            </td>
+                                            <th key={col.key} className="text-left px-4 py-3 font-medium text-zinc-400 text-xs uppercase tracking-wider whitespace-nowrap">
+                                                {col.label}
+                                            </th>
                                         ))}
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+                                </thead>
+                                <tbody>
+                                    {data.map((row, i) => (
+                                        <tr key={i} className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors" data-testid={`applicant-row-${i}`}>
+                                            {COLUMNS.map(col => (
+                                                <td key={col.key} className="px-4 py-3 whitespace-nowrap">
+                                                    {col.key === 'status' ? (
+                                                        <span className={`inline-block px-2.5 py-0.5 text-xs font-medium rounded ${STATUS_STYLES[row.status] || STATUS_STYLES['Registered']}`}
+                                                            data-testid={`status-badge-${i}`}>
+                                                            {row.status}
+                                                        </span>
+                                                    ) : (
+                                                        <span className={col.key === 'name' ? 'font-medium' : 'text-zinc-400'}>
+                                                            {row[col.key] ?? '-'}
+                                                        </span>
+                                                    )}
+                                                </td>
+                                            ))}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* Pagination */}
+                        {totalPages > 1 && (
+                            <div className="flex items-center justify-between mt-4" data-testid="pagination">
+                                <span className="text-sm text-zinc-500">
+                                    Page {page} of {totalPages} ({total} applicants)
+                                </span>
+                                <div className="flex gap-2">
+                                    <button onClick={() => goToPage(page - 1)} disabled={page <= 1}
+                                        data-testid="prev-page-btn"
+                                        className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed text-sm transition-colors">
+                                        <CaretLeft size={14} /> Prev
+                                    </button>
+                                    <button onClick={() => goToPage(page + 1)} disabled={page >= totalPages}
+                                        data-testid="next-page-btn"
+                                        className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed text-sm transition-colors">
+                                        Next <CaretRight size={14} />
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </>
                 )}
             </div>
         </div>

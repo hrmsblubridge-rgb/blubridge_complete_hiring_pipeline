@@ -490,7 +490,7 @@ async def get_dashboard_counts(user: str = Depends(get_current_user)):
 
     # ALL sub-categories from registered_candidates (strict subsets of Registered)
     shortlisted = await db.registered_candidates.count_documents({
-        "email_type": {"$regex": "shortlist", "$options": "i"}
+        "result_status": {"$regex": "shortlist", "$options": "i"}
     })
     rejected = await db.registered_candidates.count_documents({
         "result_status": {"$regex": "^reject", "$options": "i"}
@@ -575,18 +575,18 @@ async def get_shortlisted(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Shortlisted: registered_candidates WHERE email_type matches shortlist"""
+    """Shortlisted: registered_candidates WHERE result_status matches shortlist"""
     skip = (page - 1) * limit
-    query = {"email_type": {"$regex": "shortlist", "$options": "i"}}
+    query = {"result_status": {"$regex": "shortlist", "$options": "i"}}
     total = await db.registered_candidates.count_documents(query)
     cursor = db.registered_candidates.find(query, {
         "_id": 0, "name": 1, "email": 1, "phone": 1, "job_title": 1,
-        "date_of_application": 1, "gender": 1, "location": 1, "email_type": 1
+        "date_of_application": 1, "gender": 1, "location": 1, "result_status": 1
     }).skip(skip).limit(limit)
     data = await cursor.to_list(None)
     return {
         "data": data, "total": total, "page": page, "limit": limit,
-        "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "location", "email_type"]
+        "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "location", "result_status"]
     }
 
 @api_router.get("/data/rejected")
@@ -722,7 +722,7 @@ async def _aggregate_funnel_stats(match_filter: dict) -> list:
             "_id": "$job_title",
             "total_applicants": {"$sum": 1},
             "shortlisted": {"$sum": {"$cond": [
-                {"$regexMatch": {"input": {"$ifNull": ["$email_type", ""]}, "regex": "shortlist", "options": "i"}},
+                {"$regexMatch": {"input": {"$ifNull": ["$result_status", ""]}, "regex": "shortlist", "options": "i"}},
                 1, 0
             ]}},
             "rejected": {"$sum": {"$cond": [
@@ -818,14 +818,34 @@ async def get_job_roles(user: str = Depends(get_current_user)):
     return {"job_roles": results}
 
 
+def derive_status(doc: dict) -> str:
+    """Derive candidate status from pipeline fields, most advanced stage first."""
+    result_status = str(doc.get("result_status") or "").strip()
+    otp_verified = str(doc.get("otp_verified") or "").strip()
+    schedule_date = str(doc.get("schedule_date") or "").strip()
+    schedule_time = str(doc.get("schedule_time") or "").strip()
+
+    if re.match(r"^reject", result_status, re.IGNORECASE):
+        return "Rejected"
+    if otp_verified:
+        return "Attended"
+    if schedule_date and schedule_time:
+        return "Interview Scheduled"
+    if re.search(r"shortlist", result_status, re.IGNORECASE):
+        return "Shortlisted"
+    return "Registered"
+
+
 @api_router.get("/role")
-async def get_role_analytics(
+async def get_role_applicants(
     jobRole: str = Query(..., description="Job role to analyze"),
     startDate: str = Query(None),
     endDate: str = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Funnel statistics for a single job role — uses query param to avoid URL encoding issues"""
+    """Detailed applicant table for a single job role — returns individual candidate rows with derived status"""
     role = jobRole.strip()
     match = {"job_title": {"$regex": f"^{re.escape(role)}$", "$options": "i"}}
     if startDate or endDate:
@@ -835,9 +855,36 @@ async def get_role_analytics(
         if endDate:
             date_filter["$lte"] = endDate
         match["date_of_application"] = date_filter
-    results = await _aggregate_funnel_stats(match)
-    total_registered = sum(r["total_applicants"] for r in results)
-    return {"data": results, "total_registered": total_registered}
+
+    total = await db.registered_candidates.count_documents(match)
+    skip = (page - 1) * limit
+    cursor = db.registered_candidates.find(match, {
+        "_id": 0, "name": 1, "email": 1, "phone": 1, "gender": 1,
+        "date_of_birth": 1, "date_of_application": 1,
+        "email_type": 1, "result_status": 1, "otp_verified": 1,
+        "schedule_date": 1, "schedule_time": 1
+    }).skip(skip).limit(limit)
+    docs = await cursor.to_list(None)
+
+    applicants = []
+    for doc in docs:
+        applicants.append({
+            "name": doc.get("name") or "-",
+            "email": doc.get("email") or "-",
+            "phone": doc.get("phone") or "-",
+            "gender": doc.get("gender") or "-",
+            "date_of_birth": doc.get("date_of_birth") or "-",
+            "date_of_application": doc.get("date_of_application") or "-",
+            "status": derive_status(doc)
+        })
+
+    return {
+        "data": applicants,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "columns": ["name", "email", "phone", "gender", "date_of_birth", "date_of_application", "status"]
+    }
 
 
 # Status endpoint — DB-driven state

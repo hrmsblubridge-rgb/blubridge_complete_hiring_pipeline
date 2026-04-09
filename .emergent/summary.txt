@@ -1,161 +1,146 @@
 <analysis>**original_problem_statement**: 
-Build a full-stack web application for a recruitment analytics system that ingests Naukri Applies and Pipeline datasets, processes them, matches records using Email/Phone, and displays a funnel-based analytics dashboard. 
-PRODUCT REQUIREMENTS (Evolved via subsequent requests): 
-- The system must be a stateful, persistent, database-driven application.
-- Supports independent file uploads (Naukri and Pipeline) via modal-based UI.
-- Uses  as a composite unique identity for UPSERT logic (no duplicates).
-- Features hierarchical drill-down panels (Registered -> Shortlisted/Rejected -> Scheduled/Not Scheduled -> Attended/Not Attended).
-- Displays full dataset tables for each specific drill-down category inside floating modal windows with horizontal/vertical scrollbars.
-- Data mapping requirements: Strictly return specific fields for Unregistered, Rejected, Interview Not Scheduled, Not Attended, and Attended applicants as defined in the prompt.
+Refactor and rebuild the application to enforce correct data flow from upload → database → analytics → UI. The application must process Naukri Applies and HR Internal Pipeline datasets with exact column mapping, enforce relational integrity (Registered Users = INNER JOIN on email/phone), and operate as a stateful, database-driven system. It features a specific frontend flow:  (independent uploads and navigation),  (Role-wise funnel metrics table), and  (Job role cards linking to detailed drill-down tables). 
+
+PRODUCT REQUIREMENTS:
+- Database schema must strictly map uploaded dataset columns via dictionaries (, ) to prevent data loss due to spaces/special characters.
+- Uploads must be independent; matching logic triggers automatically when both exist.
+- ALL analytical categories (Shortlisted, Scheduled, Attended, etc.) must be strict subsets of Registered Users (JOINed dataset).
+-  must use query parameters () to handle special characters.
+- **LATEST REQUIREMENT**: The Role Drilldown Page () must display a **detailed applicant table** (name, email, phone, gender, date_of_birth, date_of_application, and derived status) rather than just funnel statistics.
 
 **User's preferred language**: INSTRUCT next agent to respond in **English** only.
 
 **what currently exists?**: 
-A full-stack application (React + FastAPI + MongoDB) that has undergone three major architectural refactors. It successfully implements JWT authentication and Swiss Brutalist design. The latest iteration completely replaces the previous sequential-upload temporary-state workflow with a persistent, DB-driven, hierarchical dashboard. The core files (, , ) have just been rewritten to support this new architecture.
+A fully robust full-stack application (React + FastAPI + MongoDB). It has undergone massive refactoring to implement strict relational integrity (via a  collection), precise schema mapping dictionaries for uploads, and a new frontend navigation flow (, , ). The system successfully handles independent file uploads, uses DB-driven state (), handles special characters in job roles via query params, and successfully maps complex CSV headers to database snake_case formats. 
 
 **Last working item**:
-- Last item agent was working: Implementing the Stateful, persistent, database-driven system refactor. The agent just finished creating/overwriting  and the core frontend files (, , , , ) to support hierarchical drill-downs, modal-based uploads, and DB-driven persistent analytics.
-- Status: IN PROGRESS
-- Agent Testing Done: N
-- Which testing method agent to use? both (backend and frontend testing agent, as these are massive architectural and UI changes).
-- User Testing Done: N
+    - Last item agent was working: The agent just received the latest prompt requiring the Role Drilldown Page () and its corresponding API () to be refactored. Instead of showing the funnel stats, it must now return and render a detailed applicant table listing individual candidates with their derived status (Shortlisted, Interview Scheduled, etc.). The agent had just cleared the DB to begin this implementation when the session ended.
+    - Status: IN PROGRESS
+    - Agent Testing Done: N
+    - Which testing method agent to use? both (backend and frontend testing agent after implementing the API and UI changes)
+    - User Testing Done: N
 
 **All Pending/In progress Issue list**:
-  Issue 1: Unverified Backend API and Database Upsert Logic
-  - Attempted fixes: Agent wrote the logic in  but the session ended before executing any tests. 
-  - Next debug checklist: Check  to ensure endpoints , , , and  handle the composite unique ID  correctly for UPSERTs and return the exact fields requested for each category. Restart the supervisor.
-  - Why fix this issue and what will be achieved with the fix?: Ensures data integrity and meets the core requirement of persistent database-driven analytics.
-  - Status: NOT STARTED
-  - Is recurring issue? N
-  - Should Test frontend/backend/both after fix? both
-  - Blocked on other issue: None
-
-  Issue 2: Verify Hierarchical Drill-down and Modal Tables UI
-  - Attempted fixes: Agent overwrote  but did not test.
-  - Next debug checklist: Check if the frontend properly renders hierarchical panels and opens floating modal windows with full scrollable data tables for each category. Verify independent upload modal functionality.
-  - Why fix this issue and what will be achieved with the fix?: Critical UX requirement requested by the user in the latest prompt.
-  - Status: NOT STARTED
-  - Is recurring issue? N
-  - Should Test frontend/backend/both after fix? frontend
-  - Blocked on other issue: Issue 1 (Backend must be running correctly first)
+  Issue 1: Update Role Drill-down API and UI to display Detailed Applicant Table (P0)
+     - Attempted fixes: Agent cleared the database in preparation but wrote no code yet.
+     - Next debug checklist: Check  for the  endpoint. Update it to return individual applicant records (name, email, phone, gender, date_of_birth, date_of_application, and a derived  field based on pipeline variables). Check  to replace the existing summary metrics table with a detailed candidate table.
+     - Why fix this issue and what will be achieved with the fix?: Fulfills the user's latest explicit requirement to show candidate-level details in the role drill-down rather than role-level aggregated stats.
+     - Status: IN PROGRESS
+     - Is recurring issue? N
+     - Should Test frontend/backend/both after fix? both
+     - Blocked on other issue: None
 
 **In progress Task List**:
-  Task 1: Complete the Stateful/Persistent Dashboard Refactor
-  - Where to resume: Restart the backend supervisor to apply the newly written . Run linters. Then, extensively test the new endpoints and frontend Dashboard behavior using .
-  - What will be achieved with this?: Completion of the user's latest and most complex feature request.
-  - Status: IN PROGRESS (Code written, testing pending)
-  - Should Test frontend/backend/both after fix? both
-  - Blocked on something: None
+  Task 1: Derive Status for individual applicants in 
+     - Where to resume: In , within the  endpoint.
+     - What will be achieved with this?: Proper categorization of each candidate as Shortlisted, Rejected, Interview Scheduled, Interview Not Scheduled, Interview Attended, or Interview Not Attended per the user's strict derivation rules.
+     - Status: NOT STARTED
+     - Should Test frontend/backend/both after fix? both
+     - Blocked on something: None
 
-**Upcoming and Future Tasks**:
-  Upcoming Tasks:
-  - P0: Restart  and  supervisor services to apply the latest file changes.
-  - P0: Run  and  to fix any syntax/import errors in the newly created files.
-  - P0: Call  to validate the entire DB-driven drill-down workflow, focusing heavily on UPSERT logic and accurate data retrieval for the floating modals.
-  - P1: Verify that the exact specific data fields requested for Unregistered, Rejected, Not Scheduled, Not Attended, and Attended are mapped correctly in the floating modals.
+**Upcoming and Future Tasks**
+    Upcoming Tasks:
+    - P1: Add CSV export/download functionality from the summary and role drill-down tables.
+    - P1: Ensure session persistence across page refreshes (Playwright/AuthContext stability).
+    
+    Future Tasks:
+    - P2: Add an Upload History view.
+    - P2: Add advanced chart visualizations to the dashboard.
+    - P2: Implement Role-based access control (Admin vs Recruiter).
 
-  Future Tasks:
-  - P2: Verify session persistence across page refreshes (an issue cropped up in a previous iteration where playwright dropped cookies during navigation, resulting in 401s; ensure AuthContext mitigates this).
+**Completed work in this session**
+- Stateful DB-Driven Dashboard Refactor (DONE)
+- Relational Integrity Refactor using  JOIN collection (DONE)
+- Schema Alignment Refactor with precise Header Mapping Dictionaries (DONE)
+- Frontend Restructure: new , ,  pages (DONE)
+- Role API 404 Fix (Switched path params to query params ) (DONE)
+- Independent Upload Flow restoration (DONE)
+- Data Flow Stabilization & E2E Validation (DONE)
 
-**Completed work in this session**:
-- Initial MVP Setup (JWT Auth, Dashboard, Uploads) (DONE)
-- Dynamic Schema Generation Refactor (Auto-detecting columns from uploaded files) (DONE)
-- Sequential Workflow Refactor (Guarded routes, forced Step 1 -> Step 2 -> Dashboard) (DONE)
-- Swiss & High-Contrast Archetype 4 design implementation (DONE)
+**Earlier issues found/mentioned but not fixed**
+   - None. All major bugs identified by the user (404 on role routes, data extraction failures, independent upload blocking) were successfully resolved in this session.
 
-**Earlier issues found/mentioned but not fixed**:
-  Issue 1: Auth Cookie Persistence During Navigation
-  - Debug checklist: Check  JWT cookie settings (, ) and frontend . In iteration 3, Playwright tests showed 401 Unauthorized errors when navigating from login to dashboard due to cookies not carrying over natively in the testing environment. 
-  - Why to solve this issue and what will be achieved with this?: Ensures users do not get logged out unexpectedly on page refresh or navigation, fulfilling the persistent requirement.
-  - Should Test frontend/backend/both after fix: both
-  - Is recurring issue? Y
-
-**Known issue recurrence from previous fork**:
-  - Issue recurrence in previous fork: None (first session)
+**Known issue recurrence from previous fork**
+  - Issue recurrence in previous fork: None
   - Recurrence count: 0
-  - Status: NA
+  - Status: RESOLVED
 
-**Code Architecture**:
+**Code Architecture**
 
 
-**Key Technical Concepts**:
-- Frontend: React, Shadcn UI components, Tailwind CSS, Context API for Auth state management.
-- Backend: FastAPI, PyJWT (Cookies for auth).
-- Database: MongoDB, PyMongo (Aggregations, UPSERT logic on composite keys).
-- Architecture: REST API, independent decoupled uploads, stateful session-based architecture.
+**Key Technical Concepts**
+- Frontend: React, Shadcn UI, Tailwind CSS, Axios, React Router.
+- Backend: FastAPI, PyJWT.
+- Database: MongoDB.
+- Architecture: Mapping-driven data extraction, robust UPSERT logic on composite keys (email/phone), and strictly enforced JOINs () for relational integrity in NoSQL.
 
-**key DB schema**:
-- : {email, password, role}
-- : {id, name, email, phone, job_title, date_of_application, gender, date_of_birth, created_at}
-- : {id, name, email, phone, job_title, result_status, schedule_date, schedule_time, otp_verified, ...}
+**key DB schema**
+  - : {email, password, role}
+  - : {email, phone, job_title, date_of_application, name, gender, date_of_birth...}
+  - : {email, phone, job_role, email_type, schedule_date, schedule_time, otp_verified...}
+  - : Aggregated collection formed by matching  and  via email or phone.
 
-**changes in tech stack**: 
-- None.
+**changes in tech stack**
+  - None
 
-**All files of reference**:
--  (Overwritten heavily with new stateful DB endpoints)
--  (Overwritten to replace sequential UI with hierarchical drill-down and modals)
--  (Updated)
--  (Updated)
+**All files of reference**
+  -  (Contains exact schema mapping dictionaries and new endpoints)
+  -  (Uploads & status)
+  -  (Funnel analytics table)
+  -  (Dynamic job role grid)
+  -  (Needs updating to detailed applicant table)
 
 **Areas that need refactoring**: 
-- The previous pages  and  might now be obsolete or require deletion/cleanup, as the latest prompt requested modal-based uploads directly inside the  UI. Verify if routing to these old pages is still active.
+  - None currently, architecture is highly stable following recent refactors.
 
-**key api endpoints**:
-- 
-- 
-- 
-- 
-- 
+**key api endpoints**
+  -  (Returns DB counts for Naukri, Pipeline, and Registered)
+  -  (Returns funnel counts grouped by job role)
+  -  (Returns unique roles)
+  -  (Currently returns funnel stats, MUST be updated to return applicant details)
 
-**Critical Info for New Agent**: 
-- The user completely changed the workflow in the final message. The app is **no longer sequential**. It is now independent uploads where records are merged/UPSERTED into the DB using  as a composite unique key.
-- The UI must NOT rely on frontend state for counts. All counts must come from .
-- All tables must be opened in floating modal windows with scrollbars, featuring strict column visibility rules based on the category clicked (refer to the  section 6).
-- The agent wrote the code for this final refactor but ran out of context before running Error: restart requires a process name
-restart <name>		Restart a process
-restart <gname>:*	Restart all processes in a group
-restart <name> <name>	Restart multiple processes or groups
-restart all		Restart all processes
-Note: restart does not reread config files. For that, see reread and update., , or . **Your first action must be to restart services and validate the new code.**
+**Critical Info for New Agent** 
+- The user's LAST message heavily reiterated previous requirements (which have already been completed successfully, like mapping, independent uploads, and query params). **DO NOT** rewrite the upload or summary logic. 
+- **The ONLY actionable change** in the last prompt is under **SECTION 8: ROLE DRILLDOWN PAGE**: The UI and API must be changed to display a **Detailed Applicant Table** showing rows of individual candidates with  instead of the current aggregate stats. You must derive the  field per user instruction.
+- The previous agent cleared the DB just before the session ended. You must implement the changes to  and , upload test data, and then verify.
 
-**documents and test reports created in this job**:
-- 
-- 
-- 
-- 
-- 
+**documents and test reports created in this job** 
+  - /app/memory/PRD.md
+  - /app/memory/test_credentials.md
+  - /app/test_reports/iteration_4.json
+  - /app/test_reports/iteration_5.json
+  - /app/test_reports/iteration_6.json
+  - /app/test_reports/iteration_7.json
+  - /app/test_reports/iteration_8.json
 
-**Last 10 User Messages and any pending HUMAN messages**:
-- Latest: User uploaded a new  file and requested a major architectural change: Refactor the app into a stateful, persistent, database-driven system with hierarchical drill-down panels (Registered -> Shortlisted -> Scheduled -> Attended), modal-based uploads, floating tables for data, and composite key (email + phone) UPSERT logic. (COMPLETION STATUS: Code written, Testing/Verification PENDING).
+**Last 10 User Messages and any pending HUMAN messages** 
+ - *Message 141*: Refactor to fix Role API 404s (use query params), restore independent uploads, and ensure DB-driven status. (COMPLETED)
+ - *Message 164*: Fix data flow, ensure schema column mapping is exact, test end-to-end. (COMPLETED)
+ - *Message 179 (Latest)*: Reiterated mapping/flow requirements, but included a **NEW change**: Update the Role Drilldown page () to show a detailed applicant table (name, email, phone, etc.) with a derived  field instead of aggregate numbers. (PENDING)
 
-**Project Health Check**:
-- Broken: The backend server is currently running older code. The newly written  has not been loaded via supervisor restart, meaning the app is effectively in a broken/transitional state until restarted and debugged.
-- Mocked: Hardcoded admin login ( / ).
+**Project Health Check:**
+- Broken: None. (But the Role Drilldown endpoint needs structural updates per latest prompt).
+- Mocked: Admin auth is hardcoded /.
 
-**3rd Party Integrations**:
-- None beyond standard MongoDB and JWT.
+**3rd Party Integrations** 
+- None beyond standard stack.
 
-**Testing status**:
-- Testing agent used after significant changes: NO (Pending for the latest DB-driven refactor).
-- Troubleshoot agent used after agent stuck in loop: NO
-- Test files created:  (for previous features).
-- Known regressions: Auth context cookie handling across hard navigations.
+**Testing status**
+  - Testing agent used after significant changes: YES (iterations 4 through 8).
+  - Troubleshoot agent used after agent stuck in loop: NO
+  - Test files created: /app/test_reports/iteration_4.json to iteration_8.json
+  - Known regressions: None currently.
 
-**Credentials to test flow**:
-- Username: 
-- Password: 
+**Credentials to test flow:**
+  - Username: 
+  - Password: 
 
-**What agent forgot to execute**:
-- The agent forgot to restart the backend supervisor after overwriting  with the massive stateful architecture changes.
-- The agent forgot to run  and .
-- The agent forgot to run  to ensure the complex DB queries, upserts, and UI modals were actually functional.
+**What agent forgot to execute**
+  - The agent cleared the database to prepare for the final change (Role Drilldown detailed table) but ran out of context before implementing the API logic in  or the UI in .
 
 **Debugging checklist for current issue**
-    Issue: Unverified Stateful Architecture and DB Drill-down endpoints
+    Issue: Update Role Drilldown API and UI to Applicant Table
     Frontend files to check: 
-    -  (Check if modals and drill-downs trigger correct API calls)
+      - : Update the table headers and map over the array of applicant objects instead of summary metrics.
     Backend files to check: 
-    -  (Check UPSERT logic on email/phone and data field filtering in  routes)
-    Database to check: 
-    - Verify  and  collections appropriately UPSERT and avoid duplicates.</analysis>
+      - : Update  to fetch individual documents from  for the given . Ensure you map the backend fields to the  string as strictly requested.</analysis>
