@@ -61,10 +61,22 @@ async def get_current_user(request: Request) -> str:
 def normalize_phone(phone) -> str:
     if pd.isna(phone) or phone is None:
         return ""
-    phone_str = str(phone).strip()
+    # Handle numeric types — pandas reads phone columns as float when NaN present
+    # e.g. 9876543210.0 → must become "9876543210", NOT "98765432100"
+    if isinstance(phone, (int, float)):
+        try:
+            phone_str = str(int(phone))
+        except (ValueError, OverflowError):
+            return ""
+    else:
+        phone_str = str(phone).strip()
     phone_str = re.sub(r'[^\d]', '', phone_str)
+    # Strip country code +91 / 91
     if phone_str.startswith('91') and len(phone_str) > 10:
         phone_str = phone_str[2:]
+    # Strip leading zeros (e.g. 09876543210 → 9876543210)
+    if len(phone_str) > 10:
+        phone_str = phone_str.lstrip('0')
     return phone_str
 
 def normalize_email(email) -> str:
@@ -418,13 +430,47 @@ def is_null_or_empty(val):
     """Check if a value is None, empty string, or missing"""
     return val is None or val == ""
 
+async def renormalize_collection(collection_name: str):
+    """Re-normalize email and phone fields in an existing collection."""
+    coll = db[collection_name]
+    cursor = coll.find({})
+    fixed = 0
+    async for doc in cursor:
+        old_email = doc.get("email", "")
+        old_phone = doc.get("phone", "")
+        new_email = normalize_email(old_email)
+        new_phone = normalize_phone(old_phone)
+        if new_email != old_email or new_phone != old_phone:
+            await coll.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {"email": new_email, "phone": new_phone}}
+            )
+            fixed += 1
+    return fixed
+
+
 async def reprocess_matching():
-    """Rebuild registered_candidates via INNER JOIN — merges ALL fields from both collections"""
+    """Rebuild registered_candidates via INNER JOIN — merges ALL fields from both collections.
+    Re-normalizes identifiers before matching to catch format mismatches."""
+
+    # Step 1: Re-normalize existing data in place
+    await renormalize_collection("naukri_applies")
+    await renormalize_collection("pipeline_data")
+
+    # Step 2: Load fresh data
     naukri_list = await db.naukri_applies.find({}).to_list(None)
     pipeline_list = await db.pipeline_data.find({}).to_list(None)
 
-    pipeline_by_email = {p['email']: p for p in pipeline_list if p.get('email')}
-    pipeline_by_phone = {p['phone']: p for p in pipeline_list if p.get('phone')}
+    # Step 3: Build lookup dicts with normalized keys
+    pipeline_by_email = {}
+    pipeline_by_phone = {}
+    for p in pipeline_list:
+        em = normalize_email(p.get('email'))
+        ph = normalize_phone(p.get('phone'))
+        if em:
+            pipeline_by_email[em] = p
+        if ph:
+            pipeline_by_phone[ph] = p
 
     await db.registered_candidates.drop()
 
@@ -432,9 +478,11 @@ async def reprocess_matching():
     _skip_keys = {"_id", "_is_registered", "created_at", "updated_at"}
 
     for naukri in naukri_list:
-        email = naukri.get('email', '')
-        phone = naukri.get('phone', '')
+        # Re-normalize naukri identifiers for matching
+        email = normalize_email(naukri.get('email'))
+        phone = normalize_phone(naukri.get('phone'))
 
+        # Match on email OR phone (either is sufficient)
         pipeline_match = None
         if email and email in pipeline_by_email:
             pipeline_match = pipeline_by_email[email]
@@ -898,6 +946,88 @@ async def get_status(user: str = Depends(get_current_user)):
         "naukri_count": naukri_count,
         "pipeline_count": pipeline_count,
         "registered_count": registered_count,
+    }
+
+
+@api_router.post("/reprocess")
+async def trigger_reprocess(user: str = Depends(get_current_user)):
+    """Re-normalize all data and rebuild registered_candidates from scratch."""
+    naukri_before = await db.naukri_applies.count_documents({})
+    pipeline_before = await db.pipeline_data.count_documents({})
+    registered_before = await db.registered_candidates.count_documents({})
+
+    await reprocess_matching()
+
+    registered_after = await db.registered_candidates.count_documents({})
+    return {
+        "success": True,
+        "message": "Reprocessing complete — data re-normalized and matching rebuilt",
+        "naukri_count": naukri_before,
+        "pipeline_count": pipeline_before,
+        "registered_before": registered_before,
+        "registered_after": registered_after,
+        "change": registered_after - registered_before,
+    }
+
+
+@api_router.get("/debug/matching")
+async def debug_matching(user: str = Depends(get_current_user)):
+    """Debug endpoint: shows every naukri record, its normalized identifiers,
+    and whether a pipeline match was found (and why/why not)."""
+    naukri_list = await db.naukri_applies.find({}, {"_id": 0}).to_list(None)
+    pipeline_list = await db.pipeline_data.find({}, {"_id": 0}).to_list(None)
+
+    # Build normalized pipeline lookups
+    pipeline_by_email = {}
+    pipeline_by_phone = {}
+    for p in pipeline_list:
+        em = normalize_email(p.get('email'))
+        ph = normalize_phone(p.get('phone'))
+        if em:
+            pipeline_by_email[em] = {"name": p.get("name"), "email": em, "phone": ph, "job_role": p.get("job_role")}
+        if ph:
+            pipeline_by_phone[ph] = {"name": p.get("name"), "email": em, "phone": ph, "job_role": p.get("job_role")}
+
+    results = []
+    matched_count = 0
+    unmatched_count = 0
+
+    for naukri in naukri_list:
+        n_email = normalize_email(naukri.get('email'))
+        n_phone = normalize_phone(naukri.get('phone'))
+
+        match_type = None
+        pipeline_info = None
+
+        if n_email and n_email in pipeline_by_email:
+            match_type = "email"
+            pipeline_info = pipeline_by_email[n_email]
+        elif n_phone and n_phone in pipeline_by_phone:
+            match_type = "phone"
+            pipeline_info = pipeline_by_phone[n_phone]
+
+        is_matched = match_type is not None
+        if is_matched:
+            matched_count += 1
+        else:
+            unmatched_count += 1
+
+        results.append({
+            "naukri_name": naukri.get("name"),
+            "naukri_email": n_email,
+            "naukri_phone": n_phone,
+            "naukri_job_title": naukri.get("job_title"),
+            "matched": is_matched,
+            "match_type": match_type,
+            "pipeline_match": pipeline_info,
+        })
+
+    return {
+        "total_naukri": len(naukri_list),
+        "total_pipeline": len(pipeline_list),
+        "matched": matched_count,
+        "unmatched": unmatched_count,
+        "details": results,
     }
 
 
