@@ -11,7 +11,7 @@ Full-stack recruitment analytics system. Ingests Naukri Applies and HR Pipeline 
 
 ## Data Flow (Verified E2E)
 ```
-Upload File → Parse → Normalize Fields → UPSERT into DB → Verify DB → Run JOIN → API Response → Render in UI
+Upload File → Parse → Normalize Fields → UPSERT into DB → Re-normalize → Run JOIN → API Response → Render in UI
 ```
 
 ## Key Design Decisions
@@ -21,6 +21,26 @@ Upload File → Parse → Normalize Fields → UPSERT into DB → Verify DB → 
 4. **Registered = INNER JOIN** of naukri + pipeline on email OR phone
 5. **Schema mapping** — NAUKRI_COLUMN_MAP (72 fields), PIPELINE_EXPECTED_COLUMNS (40 fields)
 6. **Shortlisted uses `result_status`** (not `email_type`) — per user's explicit data model
+7. **Robust normalization** — Email: lowercase+trim. Phone: float→int, strip +91/91/leading zeros, digits only.
+8. **Re-normalization on every match cycle** — Both collections re-normalized before JOIN to catch format drift.
+
+## Normalization Rules
+### Email: `LOWERCASE + TRIM`
+- `"ALICE@Test.COM "` → `"alice@test.com"`
+### Phone: `float→int, digits only, strip country code, strip leading zeros`
+- `9876543210.0` → `"9876543210"` (float fix)
+- `"+91 98765 43210"` → `"9876543210"` (country code + spaces)
+- `"09876543210"` → `"9876543210"` (leading zero)
+
+## Matching Logic
+```
+ON (
+  LOWER(TRIM(naukri.email)) = LOWER(TRIM(pipeline.email))
+  OR
+  CLEAN_PHONE(naukri.phone) = CLEAN_PHONE(pipeline.phone)
+)
+```
+- Works with email-only, phone-only, or both matching
 
 ## Status Derivation Logic (Priority order)
 1. **Rejected** — `result_status` matches "Reject" or "Rejected"
@@ -36,7 +56,9 @@ Upload File → Parse → Normalize Fields → UPSERT into DB → Verify DB → 
 - GET /api/dashboard-counts
 - GET /api/summary?startDate=&endDate=&search=
 - GET /api/job-roles
-- GET /api/role?jobRole=&startDate=&endDate=&page=&limit= (returns individual applicants with derived status)
+- GET /api/role?jobRole=&startDate=&endDate=&page=&limit= (individual applicants with derived status)
+- POST /api/reprocess (re-normalize all data and rebuild matching)
+- GET /api/debug/matching (detailed match report per naukri record)
 - GET /api/data/{category} (unregistered, registered, shortlisted, rejected, scheduled, not-scheduled, attended, not-attended)
 
 ## Pages
@@ -55,6 +77,8 @@ Upload File → Parse → Normalize Fields → UPSERT into DB → Verify DB → 
 - [x] Data Flow Stabilization & E2E Validation
 - [x] Role Drilldown: Detailed Applicant Table with derived status (Apr 9, 2026)
 - [x] Shortlisted field correction: result_status instead of email_type (Apr 9, 2026)
+- [x] Matching Logic Fix: phone normalization (float→int, leading zeros), re-normalization during matching (Apr 9, 2026)
+- [x] Debug/Reprocess endpoints for matching validation (Apr 9, 2026)
 
 ## Backlog
 ### P1
