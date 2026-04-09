@@ -30,10 +30,10 @@ export default function RoleDrillDown() {
     const fetchData = useCallback(async (filters = {}) => {
         setLoading(true);
         try {
-            const params = new URLSearchParams();
-            if (filters.startDate) params.append('startDate', filters.startDate);
-            if (filters.endDate) params.append('endDate', filters.endDate);
-            const res = await axios.get(`${API}/api/role/${encodeURIComponent(decodedRole)}?${params}`, { withCredentials: true });
+            const params = { jobRole: decodedRole };
+            if (filters.startDate) params.startDate = filters.startDate;
+            if (filters.endDate) params.endDate = filters.endDate;
+            const res = await axios.get(`${API}/api/role`, { params, withCredentials: true });
             setData(res.data.data);
             setTotalRegistered(res.data.total_registered);
         } catch (err) {
@@ -43,7 +43,11 @@ export default function RoleDrillDown() {
         }
     }, [decodedRole]);
 
-    useEffect(() => { fetchData(); }, [fetchData]);
+    useEffect(() => {
+        let mounted = true;
+        if (mounted) fetchData();
+        return () => { mounted = false; };
+    }, [fetchData]);
 
     const handleFilter = () => fetchData({ startDate, endDate });
 

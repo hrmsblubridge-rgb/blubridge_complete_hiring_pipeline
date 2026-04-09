@@ -44,7 +44,11 @@ export default function Summary() {
         }
     }, []);
 
-    useEffect(() => { fetchData(); }, [fetchData]);
+    useEffect(() => {
+        let mounted = true;
+        if (mounted) fetchData();
+        return () => { mounted = false; };
+    }, [fetchData]);
 
     const handleFilter = () => {
         const filters = { startDate, endDate, search };

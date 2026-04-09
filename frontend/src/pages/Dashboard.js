@@ -1,9 +1,9 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap } from '@phosphor-icons/react';
+import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, Database } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -13,22 +13,39 @@ export default function Dashboard() {
     const naukriRef = useRef(null);
     const pipelineRef = useRef(null);
     const [uploading, setUploading] = useState({ naukri: false, pipeline: false });
-    const [uploadStatus, setUploadStatus] = useState({ naukri: null, pipeline: null });
+    const [uploadResult, setUploadResult] = useState({ naukri: null, pipeline: null });
+    const [status, setStatus] = useState(null);
+
+    const fetchStatus = async () => {
+        try {
+            const res = await axios.get(`${API}/api/status`, { withCredentials: true });
+            setStatus(res.data);
+        } catch {}
+    };
+
+    useEffect(() => {
+        let mounted = true;
+        if (mounted) fetchStatus();
+        return () => { mounted = false; };
+    }, []);
 
     const handleUpload = async (type, file) => {
         if (!file) return;
         const formData = new FormData();
         formData.append('file', file);
         setUploading(prev => ({ ...prev, [type]: true }));
-        setUploadStatus(prev => ({ ...prev, [type]: null }));
+        setUploadResult(prev => ({ ...prev, [type]: null }));
         try {
             const res = await axios.post(`${API}/api/upload/${type}`, formData, { withCredentials: true });
-            setUploadStatus(prev => ({ ...prev, [type]: res.data }));
+            setUploadResult(prev => ({ ...prev, [type]: res.data }));
             toast.success(`${type === 'naukri' ? 'Naukri' : 'Pipeline'}: ${res.data.inserted} inserted, ${res.data.updated} updated`);
+            fetchStatus();
         } catch (err) {
             toast.error(err.response?.data?.detail || 'Upload failed');
         } finally {
             setUploading(prev => ({ ...prev, [type]: false }));
+            if (naukriRef.current) naukriRef.current.value = '';
+            if (pipelineRef.current) pipelineRef.current.value = '';
         }
     };
 
@@ -51,6 +68,22 @@ export default function Dashboard() {
             </header>
 
             <main className="max-w-3xl mx-auto px-6 py-12 space-y-8">
+                {/* DB Status */}
+                {status && (
+                    <section className="flex items-center gap-6 px-5 py-3 bg-zinc-900/50 border border-zinc-800 text-sm" data-testid="db-status">
+                        <Database size={18} className="text-zinc-500 shrink-0" />
+                        <span className="text-zinc-400">
+                            Naukri: <span className="text-white font-medium" data-testid="naukri-count">{status.naukri_count}</span>
+                        </span>
+                        <span className="text-zinc-400">
+                            Pipeline: <span className="text-white font-medium" data-testid="pipeline-count">{status.pipeline_count}</span>
+                        </span>
+                        <span className="text-zinc-400">
+                            Registered: <span className="text-white font-medium" data-testid="registered-count">{status.registered_count}</span>
+                        </span>
+                    </section>
+                )}
+
                 {/* Upload Section */}
                 <section className="space-y-4" data-testid="upload-section">
                     <h2 className="text-sm font-medium text-zinc-500 uppercase tracking-widest">Upload Datasets</h2>
@@ -62,12 +95,12 @@ export default function Dashboard() {
                         className="w-full flex items-center justify-between px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-emerald-600 hover:bg-zinc-900/80 transition-all group">
                         <span className="flex items-center gap-3">
                             {uploading.naukri ? <SpinnerGap size={22} className="animate-spin text-emerald-500" /> :
-                             uploadStatus.naukri ? <CheckCircle size={22} weight="fill" className="text-emerald-500" /> :
+                             uploadResult.naukri ? <CheckCircle size={22} weight="fill" className="text-emerald-500" /> :
                              <Upload size={22} className="text-zinc-500 group-hover:text-emerald-500 transition-colors" />}
                             <span className="text-base font-medium">Upload Naukri Applies Dataset</span>
                         </span>
-                        {uploadStatus.naukri && (
-                            <span className="text-xs text-zinc-500">{uploadStatus.naukri.inserted} new, {uploadStatus.naukri.updated} updated, {uploadStatus.naukri.mapped_columns} cols mapped</span>
+                        {uploadResult.naukri && (
+                            <span className="text-xs text-zinc-500">{uploadResult.naukri.inserted} new, {uploadResult.naukri.updated} updated</span>
                         )}
                     </button>
 
@@ -78,12 +111,12 @@ export default function Dashboard() {
                         className="w-full flex items-center justify-between px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-blue-600 hover:bg-zinc-900/80 transition-all group">
                         <span className="flex items-center gap-3">
                             {uploading.pipeline ? <SpinnerGap size={22} className="animate-spin text-blue-500" /> :
-                             uploadStatus.pipeline ? <CheckCircle size={22} weight="fill" className="text-blue-500" /> :
+                             uploadResult.pipeline ? <CheckCircle size={22} weight="fill" className="text-blue-500" /> :
                              <Upload size={22} className="text-zinc-500 group-hover:text-blue-500 transition-colors" />}
                             <span className="text-base font-medium">Upload HR Internal Pipeline Dataset</span>
                         </span>
-                        {uploadStatus.pipeline && (
-                            <span className="text-xs text-zinc-500">{uploadStatus.pipeline.inserted} new, {uploadStatus.pipeline.updated} updated, {uploadStatus.pipeline.mapped_columns} cols mapped</span>
+                        {uploadResult.pipeline && (
+                            <span className="text-xs text-zinc-500">{uploadResult.pipeline.inserted} new, {uploadResult.pipeline.updated} updated</span>
                         )}
                     </button>
                 </section>

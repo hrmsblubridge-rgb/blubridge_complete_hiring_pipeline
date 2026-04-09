@@ -12,17 +12,19 @@ export default function Roles() {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        const fetch = async () => {
+        let mounted = true;
+        const fetchRoles = async () => {
             try {
                 const res = await axios.get(`${API}/api/job-roles`, { withCredentials: true });
-                setRoles(res.data.job_roles);
+                if (mounted) setRoles(res.data.job_roles);
             } catch (err) {
-                toast.error('Failed to load job roles');
+                if (mounted) toast.error('Failed to load job roles');
             } finally {
-                setLoading(false);
+                if (mounted) setLoading(false);
             }
         };
-        fetch();
+        fetchRoles();
+        return () => { mounted = false; };
     }, []);
 
     return (
@@ -42,7 +44,7 @@ export default function Roles() {
                     </div>
                 ) : roles.length === 0 ? (
                     <div className="text-center py-20 text-zinc-500" data-testid="empty-state">
-                        No job roles found. Upload both datasets first.
+                        No registered applicants found. Upload both datasets to see role-wise data.
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4" data-testid="roles-grid">

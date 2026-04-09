@@ -818,15 +818,16 @@ async def get_job_roles(user: str = Depends(get_current_user)):
     return {"job_roles": results}
 
 
-@api_router.get("/role/{job_role}")
+@api_router.get("/role")
 async def get_role_analytics(
-    job_role: str,
+    jobRole: str = Query(..., description="Job role to analyze"),
     startDate: str = Query(None),
     endDate: str = Query(None),
     user: str = Depends(get_current_user)
 ):
-    """Funnel statistics for a single job role"""
-    match = {"job_title": {"$regex": f"^{re.escape(job_role)}$", "$options": "i"}}
+    """Funnel statistics for a single job role — uses query param to avoid URL encoding issues"""
+    role = jobRole.strip()
+    match = {"job_title": {"$regex": f"^{re.escape(role)}$", "$options": "i"}}
     if startDate or endDate:
         date_filter = {}
         if startDate:
@@ -837,6 +838,20 @@ async def get_role_analytics(
     results = await _aggregate_funnel_stats(match)
     total_registered = sum(r["total_applicants"] for r in results)
     return {"data": results, "total_registered": total_registered}
+
+
+# Status endpoint — DB-driven state
+@api_router.get("/status")
+async def get_status(user: str = Depends(get_current_user)):
+    """Returns current data availability from database"""
+    naukri_count = await db.naukri_applies.count_documents({})
+    pipeline_count = await db.pipeline_data.count_documents({})
+    registered_count = await db.registered_candidates.count_documents({})
+    return {
+        "naukri_count": naukri_count,
+        "pipeline_count": pipeline_count,
+        "registered_count": registered_count,
+    }
 
 
 # Health check
