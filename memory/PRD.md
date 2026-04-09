@@ -12,48 +12,32 @@ Full-stack recruitment analytics system with data-driven, database-backed UI. In
 ## Navigation Flow
 ```
 /login → /dashboard (Home)
-  ├── Upload Naukri / Pipeline datasets
+  ├── Upload Naukri / Pipeline datasets (independent)
   ├── /summary (Role-wise funnel table with filters)
   └── /roles (Job role grid)
        └── /roles/:jobRole (Drill-down for specific role)
 ```
 
-## Pages
-
-### Dashboard (/dashboard)
-- Upload Naukri Applies Dataset button
-- Upload HR Internal Pipeline Dataset button
-- View Applicants Summary Statistics → /summary
-- View Applicants → /roles
-
-### Summary (/summary)
-- Filters: Start Date, End Date, Search (job role), Filter, Reset, Back
-- Table: Job Role, Total Applicants, Shortlisted, Rejected, Scheduled, Not Scheduled, Attended, Not Attended
-- TOTAL row with column sums
-- All data from registered_candidates only
-
-### Roles (/roles)
-- Grid of clickable job role boxes
-- Each shows role name + registered applicant count
-- Click → /roles/:jobRole
-
-### Role Drill-Down (/roles/:jobRole)
-- Same table as Summary but filtered for one role
-- Date filters + Reset + Back
-
-## Schema Mapping
-- Naukri: NAUKRI_COLUMN_MAP (65+ fields, "Email ID"→email, "Phone Number"→phone, etc.)
-- Pipeline: PIPELINE_EXPECTED_COLUMNS (40 fields, confirm_box, job_role, etc.)
-- registered_candidates: INNER JOIN merging ALL fields from both
+## Key Design Decisions
+1. **Role API uses query param** (`/api/role?jobRole=`) not path param — avoids 404s from special chars (`&`, `/`, `+`)
+2. **Uploads are independent** — each works alone; matching runs with whatever data exists
+3. **DB-driven state** — `/api/status` returns live counts; dashboard reflects real DB state
+4. **Registered = JOIN** — all analytics use `registered_candidates` (INNER JOIN of naukri + pipeline)
 
 ## API Endpoints
 - POST /api/login, /api/logout, GET /api/auth/check
 - POST /api/upload/naukri, /api/upload/pipeline
+- GET /api/status (naukri_count, pipeline_count, registered_count)
 - GET /api/summary?startDate=&endDate=&search=
 - GET /api/job-roles
-- GET /api/role/{jobRole}?startDate=&endDate=
+- GET /api/role?jobRole=&startDate=&endDate= (query param, NOT path param)
 - GET /api/dashboard-counts (legacy)
-- GET /api/data/{category} (legacy, 8 categories)
+- GET /api/data/{category} (legacy)
+
+## Schema Mapping
+- Naukri: NAUKRI_COLUMN_MAP (65+ fields)
+- Pipeline: PIPELINE_EXPECTED_COLUMNS (40 fields, with dedup)
+- registered_candidates: INNER JOIN merging ALL fields
 
 ## Code Structure
 ```
@@ -66,11 +50,9 @@ frontend/src/
 ```
 
 ## Testing (April 9, 2026)
-- Backend: 21/21 passed (100%)
-- Frontend: 16/16 passed (100%)
-- Filters (date, search, reset): verified
-- Navigation flow: verified
-- Upload via dashboard: verified
+- Backend: 13/13 passed (100%)
+- Frontend: 19/19 passed (100%)
+- All 3 fixes verified: query param API, independent uploads, DB-driven status
 
 ## Backlog
 ### P1
