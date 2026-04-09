@@ -1,7 +1,7 @@
 # Recruitment Analytics System - PRD
 
 ## Project Overview
-Full-stack recruitment analytics system. Ingests Naukri Applies and HR Pipeline datasets independently, matches records via email/phone JOIN, provides role-wise funnel analytics and individual applicant drill-downs.
+Full-stack recruitment analytics system. Ingests Naukri Applies and HR Pipeline datasets (CSV or XLSX), matches records via email/phone JOIN, provides role-wise funnel analytics and individual applicant drill-downs.
 
 ## Architecture
 - **Frontend**: React + Tailwind CSS + Phosphor Icons
@@ -11,17 +11,8 @@ Full-stack recruitment analytics system. Ingests Naukri Applies and HR Pipeline 
 
 ## Data Flow
 ```
-Upload File → Parse CSV → Apply Column Mapping → Normalize email/phone → UPSERT into DB → Run JOIN matching → Rebuild registered_candidates → API serves from DB → UI renders
+Upload File (CSV/XLSX) → Parse → Apply Column Mapping → Normalize email/phone → clean_value (handle datetime.time, Timestamp) → UPSERT into DB → Re-normalize → Run JOIN matching → Rebuild registered_candidates → API → UI
 ```
-
-## Key Design Decisions
-1. **Role API uses query param** (`/api/role?jobRole=`) — no 404s from special chars
-2. **Uploads are independent** — each works alone; matching runs with available data
-3. **DB-driven state** — `/api/status` returns live counts
-4. **Registered = INNER JOIN** of naukri + pipeline on email OR phone (either sufficient)
-5. **Schema mapping** — NAUKRI_COLUMN_MAP (72 fields), PIPELINE_EXPECTED_COLUMNS (40 fields)
-6. **Robust normalization** — Email: lowercase+trim. Phone: float→int, strip +91/91/leading zeros, digits only
-7. **Re-normalization on every match cycle** — Both collections re-normalized before JOIN
 
 ## STRICT STATUS HIERARCHY (email_type field)
 ```
@@ -35,52 +26,32 @@ Registered (exists in both datasets via email OR phone match)
 └── (Other Registered — email_type is neither shortlist nor reject)
 ```
 
-### Hierarchy Constraints
-- ALL statuses are subsets of Registered
-- Scheduled is a STRICT SUBSET of Shortlisted
-- Attended is a STRICT SUBSET of Scheduled
-- shortlisted = scheduled + not_scheduled
-- scheduled = attended + not_attended
-
 ## Normalization Rules
-### Email: `LOWERCASE + TRIM`
-### Phone: `float→int, digits only, strip +91/91, strip leading zeros`
+- Email: LOWERCASE + TRIM
+- Phone: float→int, digits only, strip +91/91, strip leading zeros
 
 ## Matching Logic
 ```
-ON (LOWER(TRIM(NA.email)) = LOWER(TRIM(PD.email)) OR CLEAN_PHONE(NA.phone) = CLEAN_PHONE(PD.phone))
+ON (LOWER(TRIM(naukri.email)) = LOWER(TRIM(pipeline.email)) OR CLEAN_PHONE(naukri.phone) = CLEAN_PHONE(pipeline.phone))
 ```
 
 ## API Endpoints
 - POST /api/login, /api/logout, GET /api/auth/check
-- POST /api/upload/naukri, /api/upload/pipeline
-- GET /api/status
-- GET /api/dashboard-counts (strict hierarchy counts)
-- GET /api/summary?startDate=&endDate=&search= (role-wise funnel with hierarchy)
-- GET /api/job-roles
-- GET /api/role?jobRole=&page=&limit= (individual applicants with derived status)
-- POST /api/reprocess (re-normalize + rebuild matching)
-- GET /api/debug/matching (per-record match details)
-- GET /api/data/{category} (unregistered, registered, shortlisted, rejected, scheduled, not-scheduled, attended, not-attended)
-
-## Pages
-- /dashboard — Upload buttons + DB status + navigation
-- /summary — Role-wise funnel table with date/search filters
-- /roles — Clickable job role grid with registered counts
-- /roles/:jobRole — Detailed applicant table with status badges, date filters, pagination
+- POST /api/upload/naukri, /api/upload/pipeline (CSV + XLSX)
+- GET /api/status, /api/dashboard-counts, /api/summary, /api/job-roles
+- GET /api/role?jobRole= (individual applicants with derived status)
+- POST /api/reprocess, GET /api/debug/matching
+- GET /api/data/{category}
 
 ## Completed Work
-- [x] Stateful DB-Driven Dashboard Refactor
-- [x] Relational Integrity (registered_candidates JOIN collection)
-- [x] Schema Alignment (72 Naukri + 40 Pipeline column mappings)
-- [x] Frontend Restructure: /summary, /roles, /roles/:jobRole pages
-- [x] Role API 404 Fix (query params)
-- [x] Independent Upload Flow
-- [x] Role Drilldown: Applicant Table with derived status (Apr 9)
-- [x] Phone normalization fix: float→int, leading zeros (Apr 9)
-- [x] Re-normalization during matching (Apr 9)
-- [x] Debug/Reprocess endpoints (Apr 9)
-- [x] **STRICT HIERARCHY**: Shortlisted/Rejected via email_type, Scheduled⊂Shortlisted, Attended⊂Scheduled (Apr 9)
+- [x] Core upload, matching, and analytics pipeline
+- [x] Strict Status Hierarchy (email_type based)
+- [x] Phone normalization (float→int, country codes, leading zeros)
+- [x] Re-normalization during matching
+- [x] Debug/Reprocess endpoints
+- [x] Role Drilldown applicant table with status badges
+- [x] **XLSX datetime.time serialization fix** — clean_value() handles Excel time objects (Apr 9)
+- [x] **Date formatting** — midnight timestamps display as DD-Mon-YYYY (Apr 9)
 
 ## Backlog
 ### P1
