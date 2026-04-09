@@ -536,27 +536,41 @@ async def get_dashboard_counts(user: str = Depends(get_current_user)):
     registered = await db.registered_candidates.count_documents({})
     unregistered = total_applies - registered
 
-    # ALL sub-categories from registered_candidates (strict subsets of Registered)
-    shortlisted = await db.registered_candidates.count_documents({
-        "result_status": {"$regex": "shortlist", "$options": "i"}
-    })
-    rejected = await db.registered_candidates.count_documents({
-        "result_status": {"$regex": "^reject", "$options": "i"}
-    })
+    # ALL sub-categories use STRICT HIERARCHY via email_type field
+    # Shortlisted: email_type matches shortlist/shortlisted
+    _shortlist_filter = {"email_type": {"$regex": "shortlist", "$options": "i"}}
+    # Rejected: email_type matches reject/rejected
+    _reject_filter = {"email_type": {"$regex": "^reject", "$options": "i"}}
+
+    shortlisted = await db.registered_candidates.count_documents(_shortlist_filter)
+    rejected = await db.registered_candidates.count_documents(_reject_filter)
+
+    # Scheduled = Shortlisted AND schedule_date/time NOT NULL
     scheduled = await db.registered_candidates.count_documents({
+        **_shortlist_filter,
         "schedule_date": _not_null_filter,
         "schedule_time": _not_null_filter
     })
+    # Not Scheduled = Shortlisted AND schedule_date/time IS NULL
     not_scheduled = await db.registered_candidates.count_documents({
+        **_shortlist_filter,
         "$and": [
             {"$or": [{"schedule_date": None}, {"schedule_date": ""}, {"schedule_date": {"$exists": False}}]},
             {"$or": [{"schedule_time": None}, {"schedule_time": ""}, {"schedule_time": {"$exists": False}}]}
         ]
     })
+    # Attended = Scheduled AND otp_verified NOT NULL
     attended = await db.registered_candidates.count_documents({
+        **_shortlist_filter,
+        "schedule_date": _not_null_filter,
+        "schedule_time": _not_null_filter,
         "otp_verified": _not_null_filter
     })
+    # Not Attended = Scheduled AND otp_verified IS NULL
     not_attended = await db.registered_candidates.count_documents({
+        **_shortlist_filter,
+        "schedule_date": _not_null_filter,
+        "schedule_time": _not_null_filter,
         "$or": [
             {"otp_verified": None},
             {"otp_verified": ""},
@@ -623,18 +637,18 @@ async def get_shortlisted(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Shortlisted: registered_candidates WHERE result_status matches shortlist"""
+    """Shortlisted: registered_candidates WHERE email_type matches shortlist"""
     skip = (page - 1) * limit
-    query = {"result_status": {"$regex": "shortlist", "$options": "i"}}
+    query = {"email_type": {"$regex": "shortlist", "$options": "i"}}
     total = await db.registered_candidates.count_documents(query)
     cursor = db.registered_candidates.find(query, {
         "_id": 0, "name": 1, "email": 1, "phone": 1, "job_title": 1,
-        "date_of_application": 1, "gender": 1, "location": 1, "result_status": 1
+        "date_of_application": 1, "gender": 1, "location": 1, "email_type": 1
     }).skip(skip).limit(limit)
     data = await cursor.to_list(None)
     return {
         "data": data, "total": total, "page": page, "limit": limit,
-        "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "location", "result_status"]
+        "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "location", "email_type"]
     }
 
 @api_router.get("/data/rejected")
@@ -643,20 +657,19 @@ async def get_rejected(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Rejected: registered_candidates WHERE result_status IN (Reject, Rejected)"""
+    """Rejected: registered_candidates WHERE email_type IN (reject, rejected)"""
     skip = (page - 1) * limit
-    query = {"result_status": {"$regex": "^reject", "$options": "i"}}
+    query = {"email_type": {"$regex": "^reject", "$options": "i"}}
     total = await db.registered_candidates.count_documents(query)
     cursor = db.registered_candidates.find(query, {
         "_id": 0, "name": 1, "email": 1, "phone": 1, "job_title": 1,
         "date_of_application": 1, "gender": 1, "date_of_birth": 1,
-        "location": 1, "loca_change": 1, "attend_inperson": 1,
-        "email_type": 1, "confirm_box": 1
+        "location": 1, "email_type": 1
     }).skip(skip).limit(limit)
     data = await cursor.to_list(None)
     return {
         "data": data, "total": total, "page": page, "limit": limit,
-        "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "date_of_birth", "location", "loca_change", "attend_inperson", "email_type", "confirm_box"]
+        "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "date_of_birth", "location", "email_type"]
     }
 
 @api_router.get("/data/scheduled")
@@ -665,9 +678,10 @@ async def get_scheduled(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Scheduled: registered_candidates WHERE schedule_date IS NOT NULL AND schedule_time IS NOT NULL"""
+    """Scheduled: Shortlisted AND schedule_date/time NOT NULL (strict hierarchy)"""
     skip = (page - 1) * limit
     query = {
+        "email_type": {"$regex": "shortlist", "$options": "i"},
         "schedule_date": _not_null_filter,
         "schedule_time": _not_null_filter
     }
@@ -689,9 +703,10 @@ async def get_not_scheduled(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Not Scheduled: registered_candidates WHERE schedule_date IS NULL AND schedule_time IS NULL"""
+    """Not Scheduled: Shortlisted AND schedule_date/time IS NULL (strict hierarchy)"""
     skip = (page - 1) * limit
     query = {
+        "email_type": {"$regex": "shortlist", "$options": "i"},
         "$and": [
             {"$or": [{"schedule_date": None}, {"schedule_date": ""}, {"schedule_date": {"$exists": False}}]},
             {"$or": [{"schedule_time": None}, {"schedule_time": ""}, {"schedule_time": {"$exists": False}}]}
@@ -716,9 +731,14 @@ async def get_attended(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Attended: registered_candidates WHERE otp_verified IS NOT NULL"""
+    """Attended: Shortlisted AND Scheduled AND otp_verified NOT NULL (strict hierarchy)"""
     skip = (page - 1) * limit
-    query = {"otp_verified": _not_null_filter}
+    query = {
+        "email_type": {"$regex": "shortlist", "$options": "i"},
+        "schedule_date": _not_null_filter,
+        "schedule_time": _not_null_filter,
+        "otp_verified": _not_null_filter
+    }
     total = await db.registered_candidates.count_documents(query)
     cursor = db.registered_candidates.find(query, {
         "_id": 0, "name": 1, "email": 1, "phone": 1, "job_title": 1,
@@ -738,9 +758,12 @@ async def get_not_attended(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Not Attended: registered_candidates WHERE otp_verified IS NULL"""
+    """Not Attended: Shortlisted AND Scheduled AND otp_verified IS NULL (strict hierarchy)"""
     skip = (page - 1) * limit
     query = {
+        "email_type": {"$regex": "shortlist", "$options": "i"},
+        "schedule_date": _not_null_filter,
+        "schedule_time": _not_null_filter,
         "$or": [
             {"otp_verified": None},
             {"otp_verified": ""},
@@ -763,54 +786,61 @@ async def get_not_attended(
 # ============ SUMMARY & ROLE ANALYTICS ENDPOINTS ============
 
 async def _aggregate_funnel_stats(match_filter: dict) -> list:
-    """Aggregate funnel statistics grouped by job_title from registered_candidates"""
+    """Aggregate funnel statistics grouped by job_title from registered_candidates.
+    Uses STRICT HIERARCHY: Shortlisted/Rejected from email_type,
+    Scheduled = subset of Shortlisted, Attended = subset of Scheduled."""
+
+    # Helper expressions for reuse
+    _is_shortlisted = {"$regexMatch": {"input": {"$ifNull": ["$email_type", ""]}, "regex": "shortlist", "options": "i"}}
+    _has_schedule = {"$and": [
+        {"$ne": [{"$ifNull": ["$schedule_date", ""]}, ""]},
+        {"$ne": [{"$ifNull": ["$schedule_date", None]}, None]},
+        {"$ne": [{"$ifNull": ["$schedule_time", ""]}, ""]},
+        {"$ne": [{"$ifNull": ["$schedule_time", None]}, None]}
+    ]}
+    _no_schedule = {"$and": [
+        {"$or": [{"$eq": [{"$ifNull": ["$schedule_date", None]}, None]}, {"$eq": ["$schedule_date", ""]}]},
+        {"$or": [{"$eq": [{"$ifNull": ["$schedule_time", None]}, None]}, {"$eq": ["$schedule_time", ""]}]}
+    ]}
+    _has_otp = {"$and": [
+        {"$ne": [{"$ifNull": ["$otp_verified", ""]}, ""]},
+        {"$ne": [{"$ifNull": ["$otp_verified", None]}, None]}
+    ]}
+    _no_otp = {"$or": [
+        {"$eq": [{"$ifNull": ["$otp_verified", None]}, None]},
+        {"$eq": ["$otp_verified", ""]}
+    ]}
+
     pipeline = [
         {"$match": match_filter},
         {"$group": {
             "_id": "$job_title",
             "total_applicants": {"$sum": 1},
-            "shortlisted": {"$sum": {"$cond": [
-                {"$regexMatch": {"input": {"$ifNull": ["$result_status", ""]}, "regex": "shortlist", "options": "i"}},
-                1, 0
-            ]}},
+            # Shortlisted: email_type matches shortlist
+            "shortlisted": {"$sum": {"$cond": [_is_shortlisted, 1, 0]}},
+            # Rejected: email_type matches reject
             "rejected": {"$sum": {"$cond": [
-                {"$regexMatch": {"input": {"$ifNull": ["$result_status", ""]}, "regex": "^reject", "options": "i"}},
+                {"$regexMatch": {"input": {"$ifNull": ["$email_type", ""]}, "regex": "^reject", "options": "i"}},
                 1, 0
             ]}},
+            # Scheduled = Shortlisted AND has schedule
             "scheduled": {"$sum": {"$cond": [
-                {"$and": [
-                    {"$ne": [{"$ifNull": ["$schedule_date", ""]}, ""]},
-                    {"$ne": [{"$ifNull": ["$schedule_date", None]}, None]},
-                    {"$ne": [{"$ifNull": ["$schedule_time", ""]}, ""]},
-                    {"$ne": [{"$ifNull": ["$schedule_time", None]}, None]}
-                ]},
+                {"$and": [_is_shortlisted, _has_schedule]},
                 1, 0
             ]}},
+            # Not Scheduled = Shortlisted AND no schedule
             "not_scheduled": {"$sum": {"$cond": [
-                {"$and": [
-                    {"$or": [
-                        {"$eq": [{"$ifNull": ["$schedule_date", None]}, None]},
-                        {"$eq": ["$schedule_date", ""]}
-                    ]},
-                    {"$or": [
-                        {"$eq": [{"$ifNull": ["$schedule_time", None]}, None]},
-                        {"$eq": ["$schedule_time", ""]}
-                    ]}
-                ]},
+                {"$and": [_is_shortlisted, _no_schedule]},
                 1, 0
             ]}},
+            # Attended = Shortlisted AND scheduled AND otp_verified
             "attended": {"$sum": {"$cond": [
-                {"$and": [
-                    {"$ne": [{"$ifNull": ["$otp_verified", ""]}, ""]},
-                    {"$ne": [{"$ifNull": ["$otp_verified", None]}, None]}
-                ]},
+                {"$and": [_is_shortlisted, _has_schedule, _has_otp]},
                 1, 0
             ]}},
+            # Not Attended = Shortlisted AND scheduled AND no otp_verified
             "not_attended": {"$sum": {"$cond": [
-                {"$or": [
-                    {"$eq": [{"$ifNull": ["$otp_verified", None]}, None]},
-                    {"$eq": ["$otp_verified", ""]}
-                ]},
+                {"$and": [_is_shortlisted, _has_schedule, _no_otp]},
                 1, 0
             ]}}
         }},
@@ -867,20 +897,31 @@ async def get_job_roles(user: str = Depends(get_current_user)):
 
 
 def derive_status(doc: dict) -> str:
-    """Derive candidate status from pipeline fields, most advanced stage first."""
-    result_status = str(doc.get("result_status") or "").strip()
+    """Derive candidate status using STRICT HIERARCHY based on email_type field.
+    Hierarchy: Registered → Shortlisted → Interview Scheduled → Attended/Not Attended
+               Registered → Rejected
+    """
+    email_type = str(doc.get("email_type") or "").strip()
     otp_verified = str(doc.get("otp_verified") or "").strip()
     schedule_date = str(doc.get("schedule_date") or "").strip()
     schedule_time = str(doc.get("schedule_time") or "").strip()
 
-    if re.match(r"^reject", result_status, re.IGNORECASE):
+    # Rejected: email_type IN ('reject', 'rejected')
+    if re.match(r"^reject", email_type, re.IGNORECASE):
         return "Rejected"
-    if otp_verified:
-        return "Attended"
-    if schedule_date and schedule_time:
-        return "Interview Scheduled"
-    if re.search(r"shortlist", result_status, re.IGNORECASE):
+
+    # Shortlisted hierarchy: email_type IN ('shortlist', 'shortlisted')
+    if re.search(r"shortlist", email_type, re.IGNORECASE):
+        # Interview Scheduled = Shortlisted AND has schedule
+        if schedule_date and schedule_time:
+            # Attended = Interview Scheduled AND otp_verified
+            if otp_verified:
+                return "Attended"
+            # Not Attended = Interview Scheduled AND no otp_verified
+            return "Not Attended"
+        # Shortlisted but not yet scheduled
         return "Shortlisted"
+
     return "Registered"
 
 

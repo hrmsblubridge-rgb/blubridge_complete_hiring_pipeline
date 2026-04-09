@@ -1,0 +1,109 @@
+{
+  "summary": "Comprehensive testing of STRICT STATUS HIERARCHY (Iteration 11). All 16 backend tests passed (100%). All frontend tests passed (100%). The new hierarchy correctly uses email_type field for Shortlisted/Rejected status, with Scheduled as subset of Shortlisted and Attended as subset of Scheduled.",
+  
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  
+  "passed_tests": {
+    "backend": [
+      "Login with admin/admin credentials - returns 200",
+      "GET /api/status shows correct counts (naukri=10, pipeline=9, registered=9)",
+      "GET /api/dashboard-counts: shortlisted=6, rejected=2, scheduled=4, not_scheduled=2, attended=2, not_attended=2",
+      "Hierarchy constraint: shortlisted(6) = scheduled(4) + not_scheduled(2)",
+      "Hierarchy constraint: scheduled(4) = attended(2) + not_attended(2)",
+      "GET /api/role?jobRole=Software Developer: 5 applicants (Alice=Attended, Bob=Not Attended, Dave=Attended, Frank=Not Attended, Henry=Shortlisted)",
+      "GET /api/role?jobRole=Data Analyst: 4 applicants (Carol=Shortlisted, Eve=Rejected, Grace=Registered, Ivy Wang=Rejected)",
+      "GET /api/summary: Software Developer (total=5, shortlisted=5, rejected=0, scheduled=4, attended=2)",
+      "GET /api/summary: Data Analyst (total=4, shortlisted=1, rejected=2, scheduled=0, attended=0)",
+      "GET /api/data/shortlisted: returns 6 records (email_type based)",
+      "GET /api/data/rejected: returns 2 records (email_type based, NOT result_status)",
+      "GET /api/data/scheduled: returns 4 records (SUBSET of shortlisted)",
+      "GET /api/data/not-scheduled: returns 2 records (SUBSET of shortlisted)",
+      "GET /api/data/attended: returns 2 records (SUBSET of scheduled)",
+      "GET /api/data/not-attended: returns 2 records (SUBSET of scheduled)",
+      "GET /api/debug/matching: 9 matched, 1 unmatched (Jack Brown)"
+    ],
+    "frontend": [
+      "Login page loads with form elements",
+      "Login with admin/admin redirects to /dashboard",
+      "Dashboard shows DB Status: Naukri=10, Pipeline=9, Registered=9",
+      "Roles page shows 2 role cards (Software Developer: 5, Data Analyst: 4)",
+      "Software Developer drilldown: 5 applicants with correct status badges",
+      "Software Developer drilldown: Attended=green, Not Attended=orange, Shortlisted=amber",
+      "Data Analyst drilldown: 4 applicants with correct status badges",
+      "Data Analyst drilldown: Shortlisted=amber, Rejected=red, Registered=gray"
+    ]
+  },
+  
+  "verified_hierarchy": {
+    "email_type_based_status": {
+      "shortlisted": "email_type matches 'shortlist' (6 records)",
+      "rejected": "email_type matches '^reject' (2 records: Eve Brown, Ivy Wang)"
+    },
+    "strict_subsets": {
+      "scheduled": "Shortlisted AND has schedule_date/time (4 records)",
+      "not_scheduled": "Shortlisted AND no schedule_date/time (2 records)",
+      "attended": "Scheduled AND has otp_verified (2 records)",
+      "not_attended": "Scheduled AND no otp_verified (2 records)"
+    },
+    "hierarchy_constraints_verified": [
+      "shortlisted(6) = scheduled(4) + not_scheduled(2) ✓",
+      "scheduled(4) = attended(2) + not_attended(2) ✓"
+    ]
+  },
+  
+  "applicant_status_verification": {
+    "Software Developer (5)": {
+      "Alice Johnson": "Attended (shortlisted + scheduled + otp_verified)",
+      "Bob Smith": "Not Attended (shortlisted + scheduled + no otp_verified)",
+      "Dave Wilson": "Attended (shortlisted + scheduled + otp_verified)",
+      "Frank Lee": "Not Attended (shortlisted + scheduled + no otp_verified)",
+      "Henry Chen": "Shortlisted (shortlisted + no schedule)"
+    },
+    "Data Analyst (4)": {
+      "Carol Davis": "Shortlisted (email_type=shortlist, no schedule)",
+      "Eve Brown": "Rejected (email_type=reject)",
+      "Grace Kim": "Registered (email_type=general, not shortlist/reject)",
+      "Ivy Wang": "Rejected (email_type=rejected)"
+    }
+  },
+  
+  "test_report_links": [
+    "/app/backend/tests/test_iteration11_strict_hierarchy.py",
+    "/app/test_reports/pytest/pytest_results_iteration11.xml"
+  ],
+  
+  "action_items": [],
+  
+  "critical_code_review_comments": [],
+  
+  "updated_files": [
+    "/app/backend/tests/test_iteration11_strict_hierarchy.py"
+  ],
+  
+  "success_rate": {
+    "backend": "100% (16/16 tests passed)",
+    "frontend": "100% (all features working)"
+  },
+  
+  "test_credentials": {
+    "username": "admin",
+    "password": "admin"
+  },
+  
+  "seed_data_creation": "Test data: 10 Naukri records, 9 Pipeline records. Jack Brown has no pipeline match (unregistered). 9 registered candidates with various email_type values (shortlist, shortlisted, reject, rejected, general).",
+  
+  "retest_needed": false,
+  
+  "should_main_agent_self_test": false,
+  
+  "context_for_next_testing_agent": "STRICT HIERARCHY verified working: (1) Shortlisted/Rejected now use email_type field (NOT result_status), (2) Scheduled = subset of Shortlisted (has schedule_date/time), (3) Attended = subset of Scheduled (has otp_verified), (4) derive_status() correctly implements hierarchy, (5) All dashboard counts and data endpoints use email_type-based filtering, (6) Grace Kim with email_type='general' correctly shows as 'Registered' (not counted in shortlisted/rejected), (7) Both 'reject' and 'rejected' email_type values are handled for Rejected status."
+}

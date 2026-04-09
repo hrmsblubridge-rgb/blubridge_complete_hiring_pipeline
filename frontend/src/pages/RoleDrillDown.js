@@ -19,7 +19,7 @@ const COLUMNS = [
 const STATUS_STYLES = {
     'Rejected': 'bg-red-900/40 text-red-400 border border-red-800/50',
     'Attended': 'bg-emerald-900/40 text-emerald-400 border border-emerald-800/50',
-    'Interview Scheduled': 'bg-blue-900/40 text-blue-400 border border-blue-800/50',
+    'Not Attended': 'bg-orange-900/40 text-orange-400 border border-orange-800/50',
     'Shortlisted': 'bg-amber-900/40 text-amber-400 border border-amber-800/50',
     'Registered': 'bg-zinc-800/60 text-zinc-400 border border-zinc-700/50',
 };
