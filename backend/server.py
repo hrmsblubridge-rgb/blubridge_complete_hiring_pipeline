@@ -712,6 +712,133 @@ async def get_not_attended(
         "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "date_of_birth", "schedule_date", "schedule_time", "reschedule_count", "otp_verified", "otp_expired"]
     }
 
+# ============ SUMMARY & ROLE ANALYTICS ENDPOINTS ============
+
+async def _aggregate_funnel_stats(match_filter: dict) -> list:
+    """Aggregate funnel statistics grouped by job_title from registered_candidates"""
+    pipeline = [
+        {"$match": match_filter},
+        {"$group": {
+            "_id": "$job_title",
+            "total_applicants": {"$sum": 1},
+            "shortlisted": {"$sum": {"$cond": [
+                {"$regexMatch": {"input": {"$ifNull": ["$email_type", ""]}, "regex": "shortlist", "options": "i"}},
+                1, 0
+            ]}},
+            "rejected": {"$sum": {"$cond": [
+                {"$regexMatch": {"input": {"$ifNull": ["$result_status", ""]}, "regex": "^reject", "options": "i"}},
+                1, 0
+            ]}},
+            "scheduled": {"$sum": {"$cond": [
+                {"$and": [
+                    {"$ne": [{"$ifNull": ["$schedule_date", ""]}, ""]},
+                    {"$ne": [{"$ifNull": ["$schedule_date", None]}, None]},
+                    {"$ne": [{"$ifNull": ["$schedule_time", ""]}, ""]},
+                    {"$ne": [{"$ifNull": ["$schedule_time", None]}, None]}
+                ]},
+                1, 0
+            ]}},
+            "not_scheduled": {"$sum": {"$cond": [
+                {"$and": [
+                    {"$or": [
+                        {"$eq": [{"$ifNull": ["$schedule_date", None]}, None]},
+                        {"$eq": ["$schedule_date", ""]}
+                    ]},
+                    {"$or": [
+                        {"$eq": [{"$ifNull": ["$schedule_time", None]}, None]},
+                        {"$eq": ["$schedule_time", ""]}
+                    ]}
+                ]},
+                1, 0
+            ]}},
+            "attended": {"$sum": {"$cond": [
+                {"$and": [
+                    {"$ne": [{"$ifNull": ["$otp_verified", ""]}, ""]},
+                    {"$ne": [{"$ifNull": ["$otp_verified", None]}, None]}
+                ]},
+                1, 0
+            ]}},
+            "not_attended": {"$sum": {"$cond": [
+                {"$or": [
+                    {"$eq": [{"$ifNull": ["$otp_verified", None]}, None]},
+                    {"$eq": ["$otp_verified", ""]}
+                ]},
+                1, 0
+            ]}}
+        }},
+        {"$sort": {"_id": 1}},
+        {"$project": {
+            "_id": 0,
+            "job_role": "$_id",
+            "total_applicants": 1,
+            "shortlisted": 1,
+            "rejected": 1,
+            "scheduled": 1,
+            "not_scheduled": 1,
+            "attended": 1,
+            "not_attended": 1
+        }}
+    ]
+    return await db.registered_candidates.aggregate(pipeline).to_list(None)
+
+
+@api_router.get("/summary")
+async def get_summary(
+    startDate: str = Query(None),
+    endDate: str = Query(None),
+    search: str = Query(None),
+    user: str = Depends(get_current_user)
+):
+    """Job role-wise funnel statistics with date & search filters"""
+    match = {}
+    if startDate or endDate:
+        date_filter = {}
+        if startDate:
+            date_filter["$gte"] = startDate
+        if endDate:
+            date_filter["$lte"] = endDate
+        match["date_of_application"] = date_filter
+    if search:
+        match["job_title"] = {"$regex": re.escape(search), "$options": "i"}
+    results = await _aggregate_funnel_stats(match)
+    total_registered = sum(r["total_applicants"] for r in results)
+    return {"data": results, "total_registered": total_registered}
+
+
+@api_router.get("/job-roles")
+async def get_job_roles(user: str = Depends(get_current_user)):
+    """Unique job roles with registered applicant counts"""
+    pipeline = [
+        {"$match": {"job_title": {"$nin": [None, ""]}}},
+        {"$group": {"_id": "$job_title", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$project": {"_id": 0, "job_role": "$_id", "count": 1}}
+    ]
+    results = await db.registered_candidates.aggregate(pipeline).to_list(None)
+    return {"job_roles": results}
+
+
+@api_router.get("/role/{job_role}")
+async def get_role_analytics(
+    job_role: str,
+    startDate: str = Query(None),
+    endDate: str = Query(None),
+    user: str = Depends(get_current_user)
+):
+    """Funnel statistics for a single job role"""
+    match = {"job_title": {"$regex": f"^{re.escape(job_role)}$", "$options": "i"}}
+    if startDate or endDate:
+        date_filter = {}
+        if startDate:
+            date_filter["$gte"] = startDate
+        if endDate:
+            date_filter["$lte"] = endDate
+        match["date_of_application"] = date_filter
+    results = await _aggregate_funnel_stats(match)
+    total_registered = sum(r["total_applicants"] for r in results)
+    return {"data": results, "total_registered": total_registered}
+
+
 # Health check
 @api_router.get("/")
 async def root():
