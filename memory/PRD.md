@@ -9,76 +9,78 @@ Full-stack recruitment analytics system. Ingests Naukri Applies and HR Pipeline 
 - **Database**: MongoDB (naukri_applies, pipeline_data, registered_candidates)
 - **Auth**: JWT cookie-based (admin/admin)
 
-## Data Flow (Verified E2E)
+## Data Flow
 ```
-Upload File → Parse → Normalize Fields → UPSERT into DB → Re-normalize → Run JOIN → API Response → Render in UI
+Upload File → Parse CSV → Apply Column Mapping → Normalize email/phone → UPSERT into DB → Run JOIN matching → Rebuild registered_candidates → API serves from DB → UI renders
 ```
 
 ## Key Design Decisions
 1. **Role API uses query param** (`/api/role?jobRole=`) — no 404s from special chars
 2. **Uploads are independent** — each works alone; matching runs with available data
-3. **DB-driven state** — `/api/status` returns live counts; no frontend state dependency
-4. **Registered = INNER JOIN** of naukri + pipeline on email OR phone
+3. **DB-driven state** — `/api/status` returns live counts
+4. **Registered = INNER JOIN** of naukri + pipeline on email OR phone (either sufficient)
 5. **Schema mapping** — NAUKRI_COLUMN_MAP (72 fields), PIPELINE_EXPECTED_COLUMNS (40 fields)
-6. **Shortlisted uses `result_status`** (not `email_type`) — per user's explicit data model
-7. **Robust normalization** — Email: lowercase+trim. Phone: float→int, strip +91/91/leading zeros, digits only.
-8. **Re-normalization on every match cycle** — Both collections re-normalized before JOIN to catch format drift.
+6. **Robust normalization** — Email: lowercase+trim. Phone: float→int, strip +91/91/leading zeros, digits only
+7. **Re-normalization on every match cycle** — Both collections re-normalized before JOIN
+
+## STRICT STATUS HIERARCHY (email_type field)
+```
+Registered (exists in both datasets via email OR phone match)
+├── Shortlisted (email_type IN 'shortlist', 'shortlisted')
+│   ├── Interview Scheduled (has schedule_date AND schedule_time)
+│   │   ├── Attended (otp_verified IS NOT NULL)
+│   │   └── Not Attended (otp_verified IS NULL)
+│   └── Interview Not Scheduled (no schedule_date/time)
+├── Rejected (email_type IN 'reject', 'rejected')
+└── (Other Registered — email_type is neither shortlist nor reject)
+```
+
+### Hierarchy Constraints
+- ALL statuses are subsets of Registered
+- Scheduled is a STRICT SUBSET of Shortlisted
+- Attended is a STRICT SUBSET of Scheduled
+- shortlisted = scheduled + not_scheduled
+- scheduled = attended + not_attended
 
 ## Normalization Rules
 ### Email: `LOWERCASE + TRIM`
-- `"ALICE@Test.COM "` → `"alice@test.com"`
-### Phone: `float→int, digits only, strip country code, strip leading zeros`
-- `9876543210.0` → `"9876543210"` (float fix)
-- `"+91 98765 43210"` → `"9876543210"` (country code + spaces)
-- `"09876543210"` → `"9876543210"` (leading zero)
+### Phone: `float→int, digits only, strip +91/91, strip leading zeros`
 
 ## Matching Logic
 ```
-ON (
-  LOWER(TRIM(naukri.email)) = LOWER(TRIM(pipeline.email))
-  OR
-  CLEAN_PHONE(naukri.phone) = CLEAN_PHONE(pipeline.phone)
-)
+ON (LOWER(TRIM(NA.email)) = LOWER(TRIM(PD.email)) OR CLEAN_PHONE(NA.phone) = CLEAN_PHONE(PD.phone))
 ```
-- Works with email-only, phone-only, or both matching
-
-## Status Derivation Logic (Priority order)
-1. **Rejected** — `result_status` matches "Reject" or "Rejected"
-2. **Attended** — `otp_verified` is not NULL/empty
-3. **Interview Scheduled** — `schedule_date` AND `schedule_time` not NULL/empty
-4. **Shortlisted** — `result_status` matches "shortlist"
-5. **Registered** — default (exists in registered_candidates)
 
 ## API Endpoints
 - POST /api/login, /api/logout, GET /api/auth/check
 - POST /api/upload/naukri, /api/upload/pipeline
 - GET /api/status
-- GET /api/dashboard-counts
-- GET /api/summary?startDate=&endDate=&search=
+- GET /api/dashboard-counts (strict hierarchy counts)
+- GET /api/summary?startDate=&endDate=&search= (role-wise funnel with hierarchy)
 - GET /api/job-roles
-- GET /api/role?jobRole=&startDate=&endDate=&page=&limit= (individual applicants with derived status)
-- POST /api/reprocess (re-normalize all data and rebuild matching)
-- GET /api/debug/matching (detailed match report per naukri record)
+- GET /api/role?jobRole=&page=&limit= (individual applicants with derived status)
+- POST /api/reprocess (re-normalize + rebuild matching)
+- GET /api/debug/matching (per-record match details)
 - GET /api/data/{category} (unregistered, registered, shortlisted, rejected, scheduled, not-scheduled, attended, not-attended)
 
 ## Pages
 - /dashboard — Upload buttons + DB status + navigation
 - /summary — Role-wise funnel table with date/search filters
-- /roles — Clickable job role grid with applicant counts
+- /roles — Clickable job role grid with registered counts
 - /roles/:jobRole — Detailed applicant table with status badges, date filters, pagination
 
 ## Completed Work
 - [x] Stateful DB-Driven Dashboard Refactor
-- [x] Relational Integrity Refactor using `registered_candidates` JOIN collection
-- [x] Schema Alignment Refactor with precise Header Mapping Dictionaries
+- [x] Relational Integrity (registered_candidates JOIN collection)
+- [x] Schema Alignment (72 Naukri + 40 Pipeline column mappings)
 - [x] Frontend Restructure: /summary, /roles, /roles/:jobRole pages
 - [x] Role API 404 Fix (query params)
 - [x] Independent Upload Flow
-- [x] Data Flow Stabilization & E2E Validation
-- [x] Role Drilldown: Detailed Applicant Table with derived status (Apr 9, 2026)
-- [x] Shortlisted field correction: result_status instead of email_type (Apr 9, 2026)
-- [x] Matching Logic Fix: phone normalization (float→int, leading zeros), re-normalization during matching (Apr 9, 2026)
-- [x] Debug/Reprocess endpoints for matching validation (Apr 9, 2026)
+- [x] Role Drilldown: Applicant Table with derived status (Apr 9)
+- [x] Phone normalization fix: float→int, leading zeros (Apr 9)
+- [x] Re-normalization during matching (Apr 9)
+- [x] Debug/Reprocess endpoints (Apr 9)
+- [x] **STRICT HIERARCHY**: Shortlisted/Rejected via email_type, Scheduled⊂Shortlisted, Attended⊂Scheduled (Apr 9)
 
 ## Backlog
 ### P1
