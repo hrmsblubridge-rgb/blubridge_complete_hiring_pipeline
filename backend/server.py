@@ -84,11 +84,21 @@ def normalize_email(email) -> str:
         return ""
     return str(email).strip().lower()
 
+import time as _time_module
+
 def clean_value(val):
     if pd.isna(val) or val is None:
         return None
     if isinstance(val, (pd.Timestamp, datetime)):
+        # Format midnight timestamps as clean dates (DD-Mon-YYYY)
+        if hasattr(val, 'hour') and val.hour == 0 and val.minute == 0 and val.second == 0:
+            return val.strftime("%d-%b-%Y")
         return val.isoformat()
+    if isinstance(val, _time_module.struct_time):
+        return str(val)
+    # Handle datetime.time objects (from Excel time columns like schedule_time)
+    if hasattr(val, 'hour') and hasattr(val, 'minute') and not isinstance(val, datetime):
+        return val.strftime("%I:%M %p") if hasattr(val, 'strftime') else str(val)
     return val
 
 def parse_file(file_content: bytes, filename: str) -> pd.DataFrame:
