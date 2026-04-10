@@ -1035,11 +1035,12 @@ async def get_role_applicants(
     jobRole: str = Query(..., description="Job role to analyze"),
     startDate: str = Query(None),
     endDate: str = Query(None),
+    search: str = Query(None),
     page: int = Query(1, ge=1),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int = Query(100, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Detailed applicant table for a single job role — returns individual candidate rows with derived status and scores"""
+    """Lightweight applicant table — no score fetching. Supports search by name/email/phone."""
     role = jobRole.strip()
     match = {"job_title": {"$regex": f"^{re.escape(role)}$", "$options": "i"}}
     if startDate or endDate:
@@ -1049,22 +1050,94 @@ async def get_role_applicants(
         if endDate:
             date_filter["$lte"] = endDate
         match["date_of_application"] = date_filter
+    if search:
+        search_re = {"$regex": re.escape(search), "$options": "i"}
+        match["$or"] = [{"name": search_re}, {"email": search_re}, {"phone": search_re}]
 
     total = await db.registered_candidates.count_documents(match)
     skip = (page - 1) * limit
     cursor = db.registered_candidates.find(match, {
         "_id": 0, "name": 1, "email": 1, "phone": 1, "gender": 1,
         "date_of_birth": 1, "date_of_application": 1,
-        "email_type": 1, "result_status": 1, "otp_verified": 1,
+        "email_type": 1, "otp_verified": 1,
         "schedule_date": 1, "schedule_time": 1
     }).skip(skip).limit(limit)
     docs = await cursor.to_list(None)
 
-    # Build score lookup: match score_sheet with pipeline_data via email/phone
-    # Then map to applicants who have "Attended" status
-    score_records = await db.score_sheet.find({}, {"_id": 0}).to_list(None)
+    applicants = [{
+        "name": doc.get("name") or "-",
+        "email": doc.get("email") or "-",
+        "phone": doc.get("phone") or "-",
+        "gender": doc.get("gender") or "-",
+        "date_of_birth": doc.get("date_of_birth") or "-",
+        "date_of_application": doc.get("date_of_application") or "-",
+        "status": derive_status(doc),
+    } for doc in docs]
 
-    # Build lookup: (normalized_email, normalized_phone) → list of score records
+    return {
+        "data": applicants,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "columns": ["name", "email", "phone", "gender", "date_of_birth", "date_of_application", "status"]
+    }
+
+
+# ============ ATTENDED APPLICANTS MODULE ============
+
+@api_router.get("/attended-roles")
+async def get_attended_roles(user: str = Depends(get_current_user)):
+    """Job role boxes with attended applicant counts."""
+    pipeline = [
+        {"$match": {
+            "email_type": {"$regex": "shortlist", "$options": "i"},
+            "schedule_date": _not_null_filter,
+            "schedule_time": _not_null_filter,
+            "otp_verified": _not_null_filter,
+        }},
+        {"$group": {"_id": "$job_title", "count": {"$sum": 1}}},
+        {"$sort": {"_id": 1}},
+        {"$project": {"_id": 0, "job_role": "$_id", "count": 1}}
+    ]
+    roles = await db.registered_candidates.aggregate(pipeline).to_list(None)
+    return {"job_roles": roles}
+
+
+@api_router.get("/attended")
+async def get_attended_applicants(
+    jobRole: str = Query(...),
+    startDate: str = Query(None),
+    endDate: str = Query(None),
+    search: str = Query(None),
+    round: str = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(100, ge=1, le=500),
+    user: str = Depends(get_current_user)
+):
+    """Attended applicants table with scores — data from pipeline_data joined with naukri and score_sheet."""
+    role = jobRole.strip()
+
+    # Base match: registered candidates who attended
+    match = {
+        "job_title": {"$regex": f"^{re.escape(role)}$", "$options": "i"},
+        "email_type": {"$regex": "shortlist", "$options": "i"},
+        "schedule_date": _not_null_filter,
+        "schedule_time": _not_null_filter,
+        "otp_verified": _not_null_filter,
+    }
+    if startDate or endDate:
+        date_filter = {}
+        if startDate:
+            date_filter["$gte"] = startDate
+        if endDate:
+            date_filter["$lte"] = endDate
+        match["date_of_application"] = date_filter
+    if search:
+        search_re = {"$regex": re.escape(search), "$options": "i"}
+        match["$or"] = [{"name": search_re}, {"email": search_re}, {"phone": search_re}]
+
+    # Pre-fetch all score records and build lookups (batch — avoids N+1)
+    score_records = await db.score_sheet.find({}, {"_id": 0}).to_list(None)
     score_by_email = {}
     score_by_phone = {}
     for sr in score_records:
@@ -1075,69 +1148,76 @@ async def get_role_applicants(
         if sp:
             score_by_phone.setdefault(sp, []).append(sr)
 
+    # Fetch all matching attended candidates (pre-filter, then apply round filter in-memory)
+    cursor = db.registered_candidates.find(match, {"_id": 0}).sort("name", 1)
+    all_docs = await cursor.to_list(None)
+
+    # Build applicant rows with scores
     applicants = []
-    for doc in docs:
-        status = derive_status(doc)
+    for doc in all_docs:
+        doc_email = normalize_email(doc.get("email"))
+        doc_phone = normalize_phone(doc.get("phone"))
+
+        # Fetch matched scores
+        matched_scores = []
+        if doc_email and doc_email in score_by_email:
+            matched_scores.extend(score_by_email[doc_email])
+        if doc_phone and doc_phone in score_by_phone:
+            for s in score_by_phone[doc_phone]:
+                if s not in matched_scores:
+                    matched_scores.append(s)
+
+        # Map round_name → column
+        round_scores = {}
+        for sr in matched_scores:
+            rn = sr.get("round_name", "").strip().lower()
+            canonical = ROUND_NAME_MAP.get(rn)
+            if canonical:
+                round_scores[canonical] = sr.get("score", 0)
+
+        # Apply round filter: only include rows that have a score for the selected round
+        if round:
+            canonical_round = ROUND_NAME_MAP.get(round.strip().lower())
+            if canonical_round and canonical_round not in round_scores:
+                continue
+
+        total_score = sum(round_scores.values()) if round_scores else None
+
         row = {
             "name": doc.get("name") or "-",
             "email": doc.get("email") or "-",
             "phone": doc.get("phone") or "-",
+            "age": doc.get("age") or "-",
             "gender": doc.get("gender") or "-",
-            "date_of_birth": doc.get("date_of_birth") or "-",
-            "date_of_application": doc.get("date_of_application") or "-",
-            "status": status,
+            "college": doc.get("college") or "-",
+            "degree": doc.get("degree") or "-",
+            "course": doc.get("course") or "-",
+            "year_of_graduation": doc.get("year_of_graduation") or "-",
+            "job_role": doc.get("job_role") or doc.get("job_title") or "-",
+            "schedule_date": doc.get("schedule_date") or "-",
         }
-
-        # Initialize all score columns to "-"
         for col in SCORE_ROUND_COLUMNS:
-            row[col] = "-"
-        row["Total Score"] = "-"
-
-        # Only fetch scores if status is "Attended"
-        if status == "Attended":
-            doc_email = normalize_email(doc.get("email"))
-            doc_phone = normalize_phone(doc.get("phone"))
-
-            # Match score_sheet via pipeline (email OR phone)
-            matched_scores = []
-            if doc_email and doc_email in score_by_email:
-                matched_scores.extend(score_by_email[doc_email])
-            if doc_phone and doc_phone in score_by_phone:
-                for s in score_by_phone[doc_phone]:
-                    if s not in matched_scores:
-                        matched_scores.append(s)
-
-            if matched_scores:
-                # Map round_name → column, latest entry wins for same round
-                round_scores = {}
-                for sr in matched_scores:
-                    rn = sr.get("round_name", "").strip().lower()
-                    canonical = ROUND_NAME_MAP.get(rn)
-                    if canonical:
-                        round_scores[canonical] = sr.get("score", 0)
-
-                total_score = 0
-                has_any_score = False
-                for col in SCORE_ROUND_COLUMNS:
-                    if col in round_scores:
-                        row[col] = round_scores[col]
-                        total_score += round_scores[col]
-                        has_any_score = True
-
-                if has_any_score:
-                    row["Total Score"] = total_score
+            row[col] = round_scores.get(col, "-")
+        row["Total Score"] = total_score if total_score is not None else "-"
+        row["result_status"] = doc.get("result_status") or "-"
 
         applicants.append(row)
 
-    base_columns = ["name", "email", "phone", "gender", "date_of_birth", "date_of_application", "status"]
-    all_columns = base_columns + SCORE_ROUND_COLUMNS + ["Total Score"]
+    total = len(applicants)
+    # Server-side pagination AFTER all filters
+    start = (page - 1) * limit
+    end = start + limit
+    paginated = applicants[start:end]
+
+    columns = ["name", "email", "phone", "age", "gender", "college", "degree", "course",
+               "year_of_graduation", "job_role", "schedule_date"] + SCORE_ROUND_COLUMNS + ["Total Score", "result_status"]
 
     return {
-        "data": applicants,
+        "data": paginated,
         "total": total,
         "page": page,
         "limit": limit,
-        "columns": all_columns
+        "columns": columns
     }
 
 
