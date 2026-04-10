@@ -1,54 +1,51 @@
-# Recruitment Analytics System - PRD
+# Recruitment Analytics PRD
 
-## Project Overview
-Full-stack recruitment analytics system. Ingests Naukri Applies, HR Pipeline, and Score Sheet datasets. Matches records via email/phone JOIN, provides role-wise funnel analytics, individual applicant drill-downs with per-round scores.
+## Original Problem Statement
+Refactor and rebuild the application to enforce correct data flow from upload -> database -> analytics -> UI. The application must process Naukri Applies and HR Internal Pipeline datasets with exact column mapping, enforce relational integrity (Registered Users = INNER JOIN on email/phone), and operate as a stateful, database-driven system.
 
 ## Architecture
-- **Frontend**: React + Tailwind CSS + Phosphor Icons
-- **Backend**: FastAPI + Motor (async MongoDB)
-- **Database**: MongoDB (naukri_applies, pipeline_data, registered_candidates, score_sheet)
-- **Auth**: JWT cookie-based (admin/admin)
+- Frontend: React, Shadcn UI, Tailwind CSS, Axios, React Router
+- Backend: FastAPI, PyJWT, Pandas
+- Database: MongoDB
+- Auth: Cookie-based JWT (hardcoded admin/admin)
 
-## Date Storage
-All dates stored as **ISO YYYY-MM-DD** (e.g., "2026-03-24"). `normalize_date()` converts DD-MMM-YYYY, DD-MM-YYYY, and Timestamp formats at upload time.
+## Core Collections
+- `naukri_applies`: Uploaded Naukri dataset
+- `pipeline_data`: Uploaded HR pipeline dataset
+- `registered_candidates`: Auto-computed INNER JOIN on email/phone
+- `score_sheet`: Uploaded score sheets mapped to attendees
+- `users`: Auth credentials
 
-## STRICT STATUS HIERARCHY (email_type field)
-```
-Registered
-├── Shortlisted (email_type IN 'shortlist', 'shortlisted')
-│   ├── Interview Scheduled → Attended / Not Attended
-│   └── Interview Not Scheduled
-├── Rejected (email_type IN 'reject', 'rejected')
-└── Other Registered
-```
+## Implemented Features
+1. Independent CSV/XLSX uploads (Naukri, Pipeline, Score Sheet)
+2. Automatic matching/join when both datasets exist
+3. Dashboard with DB status bar and navigation
+4. Summary Statistics page (`/summary`) with funnel metrics
+5. View Applicants (`/roles`) -> Role Drilldown (`/roles/:jobRole`) with simplified table (no scores), search, date filters, pagination (100/page)
+6. View Attended Applicants (`/attended-roles`) -> Attended Drilldown (`/attended/:jobRole`) with score columns, round filter, search, date filters, pagination
+7. Strict status classification hierarchy (Shortlisted, Rejected, Attended, Not Attended, Registered)
+8. Phone/email normalization, datetime serialization fixes
 
-## Score Sheet Integration
-- Upload CSV/XLSX: name, email, phone, score, round_name
-- Match via pipeline_data (email OR phone)
-- Only display for "Attended" status
-- 11 round columns + Total Score
+## Routes
+- `/login` - Auth
+- `/dashboard` - Upload + Navigation hub
+- `/summary` - Funnel analytics table
+- `/roles` - Job role cards
+- `/roles/:jobRole` - Applicant table (simplified, no scores)
+- `/attended-roles` - Attended role cards
+- `/attended/:jobRole` - Attended applicant table with scores
 
 ## API Endpoints
-- POST /api/upload/naukri, /api/upload/pipeline, /api/upload/scoresheet
-- GET /api/status, /api/dashboard-counts, /api/summary, /api/job-roles
-- GET /api/role?jobRole=&startDate=&endDate=&page=&limit=
-- POST /api/reprocess, GET /api/debug/matching
-
-## Completed Work
-- [x] Core upload, matching, analytics pipeline
-- [x] Strict Status Hierarchy
-- [x] Phone normalization (float→int)
-- [x] XLSX datetime.time serialization fix
-- [x] Summary: Naukri/Registered/Unregistered columns
-- [x] Score Sheet upload + per-round scoring in drilldown
-- [x] **Date filtering fix**: ISO YYYY-MM-DD storage + normalize_date() (Apr 10)
+- POST `/api/login`, POST `/api/logout`, GET `/api/auth/check`
+- POST `/api/upload/naukri`, POST `/api/upload/pipeline`, POST `/api/upload/scoresheet`
+- GET `/api/status`, GET `/api/summary`, GET `/api/job-roles`
+- GET `/api/role?jobRole=&page=&search=&startDate=&endDate=`
+- GET `/api/attended-roles`
+- GET `/api/attended?jobRole=&page=&search=&startDate=&endDate=&round=`
 
 ## Backlog
-### P1
-- [ ] CSV export from summary and role drill-down tables
-- [ ] Session persistence across page refreshes
-
-### P2
-- [ ] Upload history view
-- [ ] Advanced chart visualizations
-- [ ] Role-based access control
+- P1: CSV export/download from tables
+- P1: Session persistence across page refreshes
+- P2: Upload History view
+- P2: Advanced chart visualizations
+- P2: Role-based access control (Admin vs Recruiter)
