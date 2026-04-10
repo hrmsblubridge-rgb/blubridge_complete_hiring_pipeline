@@ -86,13 +86,48 @@ def normalize_email(email) -> str:
 
 import time as _time_module
 
+MONTH_MAP = {
+    "jan": "01", "feb": "02", "mar": "03", "apr": "04",
+    "may": "05", "jun": "06", "jul": "07", "aug": "08",
+    "sep": "09", "oct": "10", "nov": "11", "dec": "12"
+}
+
+
+def normalize_date(val) -> str:
+    """Convert any date value/string to canonical YYYY-MM-DD format.
+    Handles: pd.Timestamp, datetime, DD-MMM-YYYY, DD-MM-YYYY, YYYY-MM-DD, etc."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    if isinstance(val, (pd.Timestamp, datetime)):
+        return val.strftime("%Y-%m-%d")
+    s = str(val).strip()
+    if not s:
+        return None
+    # Already ISO? (YYYY-MM-DD)
+    if re.match(r'^\d{4}-\d{2}-\d{2}', s):
+        return s[:10]
+    parts = re.split(r'[-/]', s)
+    if len(parts) == 3:
+        # DD-MMM-YYYY (24-Mar-2026)
+        if parts[1].lower() in MONTH_MAP:
+            mm = MONTH_MAP[parts[1].lower()]
+            return f"{parts[2]}-{mm}-{parts[0].zfill(2)}"
+        # DD-MM-YYYY (24-03-2026) — day first if parts[0] <= 31
+        if len(parts[0]) <= 2 and len(parts[2]) == 4:
+            return f"{parts[2]}-{parts[1].zfill(2)}-{parts[0].zfill(2)}"
+        # MM-DD-YYYY fallback
+        if len(parts[2]) == 4:
+            return f"{parts[2]}-{parts[0].zfill(2)}-{parts[1].zfill(2)}"
+    return s
+
+
 def clean_value(val):
     if pd.isna(val) or val is None:
         return None
     if isinstance(val, (pd.Timestamp, datetime)):
-        # Format midnight timestamps as clean dates (DD-Mon-YYYY)
+        # Date-only timestamps → ISO YYYY-MM-DD
         if hasattr(val, 'hour') and val.hour == 0 and val.minute == 0 and val.second == 0:
-            return val.strftime("%d-%b-%Y")
+            return val.strftime("%Y-%m-%d")
         return val.isoformat()
     if isinstance(val, _time_module.struct_time):
         return str(val)
@@ -292,6 +327,12 @@ async def upload_naukri(file: UploadFile = File(...), user: str = Depends(get_cu
                 phone = normalize_phone(doc.get("phone"))
                 doc["email"] = email
                 doc["phone"] = phone
+
+                # Normalize date fields to ISO YYYY-MM-DD
+                for date_field in ("date_of_application", "date_of_birth"):
+                    if doc.get(date_field):
+                        doc[date_field] = normalize_date(doc[date_field])
+
                 doc["updated_at"] = datetime.now(timezone.utc)
 
                 if not email and not phone:
@@ -441,20 +482,29 @@ def is_null_or_empty(val):
     return val is None or val == ""
 
 async def renormalize_collection(collection_name: str):
-    """Re-normalize email and phone fields in an existing collection."""
+    """Re-normalize email, phone, and date fields in an existing collection."""
     coll = db[collection_name]
     cursor = coll.find({})
     fixed = 0
     async for doc in cursor:
+        updates = {}
         old_email = doc.get("email", "")
         old_phone = doc.get("phone", "")
         new_email = normalize_email(old_email)
         new_phone = normalize_phone(old_phone)
-        if new_email != old_email or new_phone != old_phone:
-            await coll.update_one(
-                {"_id": doc["_id"]},
-                {"$set": {"email": new_email, "phone": new_phone}}
-            )
+        if new_email != old_email:
+            updates["email"] = new_email
+        if new_phone != old_phone:
+            updates["phone"] = new_phone
+        # Normalize date fields
+        for df_field in ("date_of_application", "date_of_birth"):
+            old_val = doc.get(df_field)
+            if old_val:
+                new_val = normalize_date(old_val)
+                if new_val and new_val != str(old_val):
+                    updates[df_field] = new_val
+        if updates:
+            await coll.update_one({"_id": doc["_id"]}, {"$set": updates})
             fixed += 1
     return fixed
 
