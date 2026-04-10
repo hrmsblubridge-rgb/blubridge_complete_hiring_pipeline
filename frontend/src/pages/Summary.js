@@ -8,13 +8,15 @@ const API = process.env.REACT_APP_BACKEND_URL;
 
 const COLUMNS = [
     { key: 'job_role', label: 'Job Role' },
-    { key: 'total_applicants', label: 'Total Applicants' },
-    { key: 'shortlisted', label: 'Total Shortlisted' },
-    { key: 'rejected', label: 'Total Rejected' },
-    { key: 'scheduled', label: 'Total Interview Scheduled' },
-    { key: 'not_scheduled', label: 'Total Interview Not Scheduled' },
-    { key: 'attended', label: 'Total Attended' },
-    { key: 'not_attended', label: 'Total Not Attended' },
+    { key: 'total_naukri', label: 'Total Naukri Applicants' },
+    { key: 'total_registered', label: 'Total Registered Applicants' },
+    { key: 'total_unregistered', label: 'Total Unregistered Applicants' },
+    { key: 'shortlisted', label: 'Total Shortlisted Applicants' },
+    { key: 'rejected', label: 'Total Rejected Applicants' },
+    { key: 'scheduled', label: 'Total Applicants with Interview Scheduled' },
+    { key: 'not_scheduled', label: 'Total Applicants without Interview' },
+    { key: 'attended', label: 'Total Applicants who Attended' },
+    { key: 'not_attended', label: 'Total Applicants who Didn\'t Attend' },
 ];
 
 export default function Summary() {

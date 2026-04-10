@@ -877,7 +877,8 @@ async def get_summary(
     search: str = Query(None),
     user: str = Depends(get_current_user)
 ):
-    """Job role-wise funnel statistics with date & search filters"""
+    """Job role-wise funnel statistics with date & search filters.
+    Includes total_naukri (unique applicants from naukri_applies per role) and unregistered counts."""
     match = {}
     if startDate or endDate:
         date_filter = {}
@@ -889,7 +890,51 @@ async def get_summary(
     if search:
         match["job_title"] = {"$regex": re.escape(search), "$options": "i"}
     results = await _aggregate_funnel_stats(match)
-    total_registered = sum(r["total_applicants"] for r in results)
+
+    # Get unique naukri applicant counts per job role
+    naukri_match = {}
+    if startDate or endDate:
+        naukri_match["date_of_application"] = match.get("date_of_application", {})
+    if search:
+        naukri_match["job_title"] = match.get("job_title", {})
+
+    naukri_pipeline = [
+        {"$match": naukri_match} if naukri_match else {"$match": {}},
+        {"$group": {
+            "_id": {"job_title": "$job_title", "email": "$email", "phone": "$phone"},
+        }},
+        {"$group": {
+            "_id": "$_id.job_title",
+            "total_naukri": {"$sum": 1}
+        }},
+        {"$project": {"_id": 0, "job_role": "$_id", "total_naukri": 1}}
+    ]
+    naukri_counts = await db.naukri_applies.aggregate(naukri_pipeline).to_list(None)
+    naukri_map = {r["job_role"]: r["total_naukri"] for r in naukri_counts}
+
+    # Merge naukri counts into results and compute unregistered
+    for r in results:
+        role = r["job_role"]
+        r["total_naukri"] = naukri_map.get(role, 0)
+        r["total_registered"] = r["total_applicants"]
+        r["total_unregistered"] = max(r["total_naukri"] - r["total_registered"], 0)
+
+    # Add roles that have naukri applicants but NO registered (all unregistered)
+    existing_roles = {r["job_role"] for r in results}
+    for role, count in naukri_map.items():
+        if role not in existing_roles:
+            results.append({
+                "job_role": role,
+                "total_naukri": count,
+                "total_applicants": 0,
+                "total_registered": 0,
+                "total_unregistered": count,
+                "shortlisted": 0, "rejected": 0,
+                "scheduled": 0, "not_scheduled": 0,
+                "attended": 0, "not_attended": 0
+            })
+
+    total_registered = sum(r.get("total_registered", r.get("total_applicants", 0)) for r in results)
     return {"data": results, "total_registered": total_registered}
 
 
@@ -944,7 +989,7 @@ async def get_role_applicants(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Detailed applicant table for a single job role — returns individual candidate rows with derived status"""
+    """Detailed applicant table for a single job role — returns individual candidate rows with derived status and scores"""
     role = jobRole.strip()
     match = {"job_title": {"$regex": f"^{re.escape(role)}$", "$options": "i"}}
     if startDate or endDate:
@@ -965,24 +1010,84 @@ async def get_role_applicants(
     }).skip(skip).limit(limit)
     docs = await cursor.to_list(None)
 
+    # Build score lookup: match score_sheet with pipeline_data via email/phone
+    # Then map to applicants who have "Attended" status
+    score_records = await db.score_sheet.find({}, {"_id": 0}).to_list(None)
+
+    # Build lookup: (normalized_email, normalized_phone) → list of score records
+    score_by_email = {}
+    score_by_phone = {}
+    for sr in score_records:
+        se = normalize_email(sr.get("email"))
+        sp = normalize_phone(sr.get("phone"))
+        if se:
+            score_by_email.setdefault(se, []).append(sr)
+        if sp:
+            score_by_phone.setdefault(sp, []).append(sr)
+
     applicants = []
     for doc in docs:
-        applicants.append({
+        status = derive_status(doc)
+        row = {
             "name": doc.get("name") or "-",
             "email": doc.get("email") or "-",
             "phone": doc.get("phone") or "-",
             "gender": doc.get("gender") or "-",
             "date_of_birth": doc.get("date_of_birth") or "-",
             "date_of_application": doc.get("date_of_application") or "-",
-            "status": derive_status(doc)
-        })
+            "status": status,
+        }
+
+        # Initialize all score columns to "-"
+        for col in SCORE_ROUND_COLUMNS:
+            row[col] = "-"
+        row["Total Score"] = "-"
+
+        # Only fetch scores if status is "Attended"
+        if status == "Attended":
+            doc_email = normalize_email(doc.get("email"))
+            doc_phone = normalize_phone(doc.get("phone"))
+
+            # Match score_sheet via pipeline (email OR phone)
+            matched_scores = []
+            if doc_email and doc_email in score_by_email:
+                matched_scores.extend(score_by_email[doc_email])
+            if doc_phone and doc_phone in score_by_phone:
+                for s in score_by_phone[doc_phone]:
+                    if s not in matched_scores:
+                        matched_scores.append(s)
+
+            if matched_scores:
+                # Map round_name → column, latest entry wins for same round
+                round_scores = {}
+                for sr in matched_scores:
+                    rn = sr.get("round_name", "").strip().lower()
+                    canonical = ROUND_NAME_MAP.get(rn)
+                    if canonical:
+                        round_scores[canonical] = sr.get("score", 0)
+
+                total_score = 0
+                has_any_score = False
+                for col in SCORE_ROUND_COLUMNS:
+                    if col in round_scores:
+                        row[col] = round_scores[col]
+                        total_score += round_scores[col]
+                        has_any_score = True
+
+                if has_any_score:
+                    row["Total Score"] = total_score
+
+        applicants.append(row)
+
+    base_columns = ["name", "email", "phone", "gender", "date_of_birth", "date_of_application", "status"]
+    all_columns = base_columns + SCORE_ROUND_COLUMNS + ["Total Score"]
 
     return {
         "data": applicants,
         "total": total,
         "page": page,
         "limit": limit,
-        "columns": ["name", "email", "phone", "gender", "date_of_birth", "date_of_application", "status"]
+        "columns": all_columns
     }
 
 
@@ -993,10 +1098,82 @@ async def get_status(user: str = Depends(get_current_user)):
     naukri_count = await db.naukri_applies.count_documents({})
     pipeline_count = await db.pipeline_data.count_documents({})
     registered_count = await db.registered_candidates.count_documents({})
+    score_sheet_count = await db.score_sheet.count_documents({})
     return {
         "naukri_count": naukri_count,
         "pipeline_count": pipeline_count,
         "registered_count": registered_count,
+        "score_sheet_count": score_sheet_count,
+    }
+
+
+# ============ SCORE SHEET UPLOAD ============
+
+SCORE_ROUND_COLUMNS = ["ZA", "C++", "Java", "BA", "LA", "Mensa Org", "Accounts2", "Accounts1", "BE", "Mensa", "BP"]
+# Lowercase lookup map for case-insensitive matching
+ROUND_NAME_MAP = {r.strip().lower(): r for r in SCORE_ROUND_COLUMNS}
+
+
+@api_router.post("/upload/scoresheet")
+async def upload_score_sheet(
+    file: UploadFile = File(...),
+    user: str = Depends(get_current_user)
+):
+    """Upload score sheet (CSV/XLSX). Fields: name, email, phone, score, round_name.
+    Multiple rows per applicant (different rounds) are allowed — no overwrite."""
+    content = await file.read()
+    df = parse_file(content, file.filename)
+    df.columns = df.columns.str.strip().str.lower()
+
+    required = {"name", "email", "phone", "score", "round_name"}
+    if not required.issubset(set(df.columns)):
+        missing = required - set(df.columns)
+        raise HTTPException(status_code=400, detail=f"Missing columns: {missing}")
+
+    inserted = 0
+    errors = []
+
+    for idx, row in df.iterrows():
+        try:
+            email = normalize_email(row.get("email"))
+            phone = normalize_phone(row.get("phone"))
+            name = str(row.get("name") or "").strip()
+            round_name = str(row.get("round_name") or "").strip()
+            score_val = row.get("score")
+
+            if not email and not phone:
+                errors.append(f"Row {idx + 2}: Missing email and phone")
+                continue
+            if not round_name:
+                errors.append(f"Row {idx + 2}: Missing round_name")
+                continue
+
+            # Parse score as float
+            try:
+                score = float(score_val) if not pd.isna(score_val) else 0.0
+            except (ValueError, TypeError):
+                score = 0.0
+
+            doc = {
+                "name": name,
+                "email": email,
+                "phone": phone,
+                "score": score,
+                "round_name": round_name,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+
+            await db.score_sheet.insert_one(doc)
+            inserted += 1
+
+        except Exception as e:
+            errors.append(f"Row {idx + 2}: {str(e)}")
+
+    return {
+        "success": True,
+        "message": f"Score sheet uploaded. Inserted: {inserted}",
+        "inserted": inserted,
+        "errors": errors[:20]
     }
 
 

@@ -6,6 +6,8 @@ import { ArrowLeft, FunnelSimple, ArrowCounterClockwise, SpinnerGap, CaretLeft, 
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
+const SCORE_COLUMNS = ['ZA', 'C++', 'Java', 'BA', 'LA', 'Mensa Org', 'Accounts2', 'Accounts1', 'BE', 'Mensa', 'BP', 'Total Score'];
+
 const COLUMNS = [
     { key: 'name', label: 'Name' },
     { key: 'email', label: 'Email' },
@@ -14,6 +16,7 @@ const COLUMNS = [
     { key: 'date_of_birth', label: 'Date of Birth' },
     { key: 'date_of_application', label: 'Date of Application' },
     { key: 'status', label: 'Status' },
+    ...SCORE_COLUMNS.map(c => ({ key: c, label: c })),
 ];
 
 const STATUS_STYLES = {
@@ -150,6 +153,10 @@ export default function RoleDrillDown() {
                                                         <span className={`inline-block px-2.5 py-0.5 text-xs font-medium rounded ${STATUS_STYLES[row.status] || STATUS_STYLES['Registered']}`}
                                                             data-testid={`status-badge-${i}`}>
                                                             {row.status}
+                                                        </span>
+                                                    ) : SCORE_COLUMNS.includes(col.key) ? (
+                                                        <span className={`tabular-nums ${row[col.key] !== '-' && row[col.key] !== undefined ? 'text-cyan-400 font-medium' : 'text-zinc-600'}`}>
+                                                            {row[col.key] ?? '-'}
                                                         </span>
                                                     ) : (
                                                         <span className={col.key === 'name' ? 'font-medium' : 'text-zinc-400'}>

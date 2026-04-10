@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, Database } from '@phosphor-icons/react';
+import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, Database, FileText } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -12,8 +12,9 @@ export default function Dashboard() {
     const navigate = useNavigate();
     const naukriRef = useRef(null);
     const pipelineRef = useRef(null);
-    const [uploading, setUploading] = useState({ naukri: false, pipeline: false });
-    const [uploadResult, setUploadResult] = useState({ naukri: null, pipeline: null });
+    const scoresheetRef = useRef(null);
+    const [uploading, setUploading] = useState({ naukri: false, pipeline: false, scoresheet: false });
+    const [uploadResult, setUploadResult] = useState({ naukri: null, pipeline: null, scoresheet: null });
     const [status, setStatus] = useState(null);
 
     const fetchStatus = async () => {
@@ -36,9 +37,11 @@ export default function Dashboard() {
         setUploading(prev => ({ ...prev, [type]: true }));
         setUploadResult(prev => ({ ...prev, [type]: null }));
         try {
-            const res = await axios.post(`${API}/api/upload/${type}`, formData, { withCredentials: true });
+            const endpoint = type === 'scoresheet' ? 'upload/scoresheet' : `upload/${type}`;
+            const res = await axios.post(`${API}/api/${endpoint}`, formData, { withCredentials: true });
             setUploadResult(prev => ({ ...prev, [type]: res.data }));
-            toast.success(`${type === 'naukri' ? 'Naukri' : 'Pipeline'}: ${res.data.inserted} inserted, ${res.data.updated} updated`);
+            const label = type === 'naukri' ? 'Naukri' : type === 'pipeline' ? 'Pipeline' : 'Score Sheet';
+            toast.success(`${label}: ${res.data.inserted} inserted${res.data.updated !== undefined ? `, ${res.data.updated} updated` : ''}`);
             fetchStatus();
         } catch (err) {
             toast.error(err.response?.data?.detail || 'Upload failed');
@@ -46,6 +49,7 @@ export default function Dashboard() {
             setUploading(prev => ({ ...prev, [type]: false }));
             if (naukriRef.current) naukriRef.current.value = '';
             if (pipelineRef.current) pipelineRef.current.value = '';
+            if (scoresheetRef.current) scoresheetRef.current.value = '';
         }
     };
 
@@ -80,6 +84,9 @@ export default function Dashboard() {
                         </span>
                         <span className="text-zinc-400">
                             Registered: <span className="text-white font-medium" data-testid="registered-count">{status.registered_count}</span>
+                        </span>
+                        <span className="text-zinc-400">
+                            Score Sheets: <span className="text-white font-medium" data-testid="scoresheet-count">{status.score_sheet_count || 0}</span>
                         </span>
                     </section>
                 )}
@@ -117,6 +124,22 @@ export default function Dashboard() {
                         </span>
                         {uploadResult.pipeline && (
                             <span className="text-xs text-zinc-500">{uploadResult.pipeline.inserted} new, {uploadResult.pipeline.updated} updated</span>
+                        )}
+                    </button>
+
+                    <input type="file" ref={scoresheetRef} accept=".csv,.xlsx,.xls" className="hidden"
+                        onChange={e => handleUpload('scoresheet', e.target.files[0])} data-testid="scoresheet-file-input" />
+                    <button onClick={() => scoresheetRef.current?.click()} disabled={uploading.scoresheet}
+                        data-testid="upload-scoresheet-btn"
+                        className="w-full flex items-center justify-between px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-purple-600 hover:bg-zinc-900/80 transition-all group">
+                        <span className="flex items-center gap-3">
+                            {uploading.scoresheet ? <SpinnerGap size={22} className="animate-spin text-purple-500" /> :
+                             uploadResult.scoresheet ? <CheckCircle size={22} weight="fill" className="text-purple-500" /> :
+                             <FileText size={22} className="text-zinc-500 group-hover:text-purple-500 transition-colors" />}
+                            <span className="text-base font-medium">Upload Score Sheet</span>
+                        </span>
+                        {uploadResult.scoresheet && (
+                            <span className="text-xs text-zinc-500">{uploadResult.scoresheet.inserted} scores imported</span>
                         )}
                     </button>
                 </section>
