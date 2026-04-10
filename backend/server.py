@@ -1064,13 +1064,9 @@ async def get_attended_applicants(
         "schedule_time": _not_null_filter,
         "otp_verified": _not_null_filter,
     }
-    if startDate or endDate:
-        date_filter = {}
-        if startDate:
-            date_filter["$gte"] = startDate
-        if endDate:
-            date_filter["$lte"] = endDate
-        match["date_of_application"] = date_filter
+    # Date filter on schedule_date (pipeline), only when BOTH dates provided
+    if startDate and endDate:
+        match["schedule_date"] = {**_not_null_filter, "$gte": startDate, "$lte": endDate}
     if search:
         search_re = {"$regex": re.escape(search), "$options": "i"}
         match["$or"] = [{"name": search_re}, {"email": search_re}, {"phone": search_re}]
