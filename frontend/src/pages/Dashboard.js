@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, Database, FileText } from '@phosphor-icons/react';
+import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, Database, FileText, UserCheck } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -163,6 +163,15 @@ export default function Dashboard() {
                         <div>
                             <div className="text-base font-medium">View Applicants</div>
                             <div className="text-sm text-zinc-500 mt-0.5">Browse applicants by job role</div>
+                        </div>
+                    </button>
+
+                    <button onClick={() => navigate('/attended-roles')} data-testid="nav-attended-btn"
+                        className="w-full flex items-center gap-4 px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-emerald-600 hover:bg-zinc-900/80 transition-all group text-left">
+                        <UserCheck size={28} className="text-zinc-500 group-hover:text-emerald-500 transition-colors" />
+                        <div>
+                            <div className="text-base font-medium">View Attended Applicants</div>
+                            <div className="text-sm text-zinc-500 mt-0.5">Attended applicants with scores by job role</div>
                         </div>
                     </button>
                 </section>

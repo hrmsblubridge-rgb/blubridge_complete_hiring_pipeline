@@ -88,7 +88,7 @@ export default function AttendedDrillDown() {
     return (
         <div className="min-h-screen bg-[#0a0a0a] text-white" data-testid="attended-drilldown-page">
             <header className="border-b border-zinc-800 px-8 py-5 flex items-center gap-4">
-                <button onClick={() => navigate('/attended')} data-testid="back-btn"
+                <button onClick={() => navigate('/attended-roles')} data-testid="back-btn"
                     className="p-2 hover:bg-zinc-800 transition-colors">
                     <ArrowLeft size={20} />
                 </button>
