@@ -588,67 +588,6 @@ async def reprocess_matching():
 _null_filter = {"$in": [None, ""]}
 _not_null_filter = {"$nin": [None, ""], "$exists": True}
 
-@api_router.get("/dashboard-counts")
-async def get_dashboard_counts(user: str = Depends(get_current_user)):
-    """All counts computed from DB. Sub-categories use registered_candidates ONLY."""
-
-    total_applies = await db.naukri_applies.count_documents({})
-    registered = await db.registered_candidates.count_documents({})
-    unregistered = total_applies - registered
-
-    # ALL sub-categories use STRICT HIERARCHY via email_type field
-    # Shortlisted: email_type matches shortlist/shortlisted
-    _shortlist_filter = {"email_type": {"$regex": "shortlist", "$options": "i"}}
-    # Rejected: email_type matches reject/rejected
-    _reject_filter = {"email_type": {"$regex": "^reject", "$options": "i"}}
-
-    shortlisted = await db.registered_candidates.count_documents(_shortlist_filter)
-    rejected = await db.registered_candidates.count_documents(_reject_filter)
-
-    # Scheduled = Shortlisted AND schedule_date/time NOT NULL
-    scheduled = await db.registered_candidates.count_documents({
-        **_shortlist_filter,
-        "schedule_date": _not_null_filter,
-        "schedule_time": _not_null_filter
-    })
-    # Not Scheduled = Shortlisted AND schedule_date/time IS NULL
-    not_scheduled = await db.registered_candidates.count_documents({
-        **_shortlist_filter,
-        "$and": [
-            {"$or": [{"schedule_date": None}, {"schedule_date": ""}, {"schedule_date": {"$exists": False}}]},
-            {"$or": [{"schedule_time": None}, {"schedule_time": ""}, {"schedule_time": {"$exists": False}}]}
-        ]
-    })
-    # Attended = Scheduled AND otp_verified NOT NULL
-    attended = await db.registered_candidates.count_documents({
-        **_shortlist_filter,
-        "schedule_date": _not_null_filter,
-        "schedule_time": _not_null_filter,
-        "otp_verified": _not_null_filter
-    })
-    # Not Attended = Scheduled AND otp_verified IS NULL
-    not_attended = await db.registered_candidates.count_documents({
-        **_shortlist_filter,
-        "schedule_date": _not_null_filter,
-        "schedule_time": _not_null_filter,
-        "$or": [
-            {"otp_verified": None},
-            {"otp_verified": ""},
-            {"otp_verified": {"$exists": False}}
-        ]
-    })
-
-    return {
-        "total_applies": total_applies,
-        "registered": registered,
-        "unregistered": unregistered,
-        "shortlisted": shortlisted,
-        "rejected": rejected,
-        "scheduled": scheduled,
-        "not_scheduled": not_scheduled,
-        "attended": attended,
-        "not_attended": not_attended
-    }
 
 # ============ DRILL-DOWN DATA ENDPOINTS ============
 
@@ -1181,8 +1120,6 @@ async def get_attended_applicants(
             if canonical_round and canonical_round not in round_scores:
                 continue
 
-        total_score = sum(round_scores.values()) if round_scores else None
-
         row = {
             "name": doc.get("name") or "-",
             "email": doc.get("email") or "-",
@@ -1198,7 +1135,6 @@ async def get_attended_applicants(
         }
         for col in SCORE_ROUND_COLUMNS:
             row[col] = round_scores.get(col, "-")
-        row["Total Score"] = total_score if total_score is not None else "-"
         row["result_status"] = doc.get("result_status") or "-"
 
         applicants.append(row)
@@ -1210,7 +1146,7 @@ async def get_attended_applicants(
     paginated = applicants[start:end]
 
     columns = ["name", "email", "phone", "age", "gender", "college", "degree", "course",
-               "year_of_graduation", "job_role", "schedule_date"] + SCORE_ROUND_COLUMNS + ["Total Score", "result_status"]
+               "year_of_graduation", "job_role", "schedule_date"] + SCORE_ROUND_COLUMNS + ["result_status"]
 
     return {
         "data": paginated,
@@ -1218,22 +1154,6 @@ async def get_attended_applicants(
         "page": page,
         "limit": limit,
         "columns": columns
-    }
-
-
-# Status endpoint — DB-driven state
-@api_router.get("/status")
-async def get_status(user: str = Depends(get_current_user)):
-    """Returns current data availability from database"""
-    naukri_count = await db.naukri_applies.count_documents({})
-    pipeline_count = await db.pipeline_data.count_documents({})
-    registered_count = await db.registered_candidates.count_documents({})
-    score_sheet_count = await db.score_sheet.count_documents({})
-    return {
-        "naukri_count": naukri_count,
-        "pipeline_count": pipeline_count,
-        "registered_count": registered_count,
-        "score_sheet_count": score_sheet_count,
     }
 
 

@@ -24,7 +24,6 @@ const BASE_COLS = [
 const ALL_COLS = [
     ...BASE_COLS,
     ...SCORE_COLS.map(c => ({ key: c, label: c })),
-    { key: 'Total Score', label: 'Total Score' },
     { key: 'result_status', label: 'Result Status' },
 ];
 
@@ -167,10 +166,8 @@ export default function AttendedDrillDown() {
                                         <tr key={i} className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors" data-testid={`attended-row-${i}`}>
                                             {ALL_COLS.map(col => (
                                                 <td key={col.key} className="px-4 py-3 whitespace-nowrap">
-                                                    {SCORE_COLS.includes(col.key) || col.key === 'Total Score' ? (
-                                                        <span className={`tabular-nums ${row[col.key] !== '-' && row[col.key] !== undefined ? 'text-cyan-400 font-medium' : 'text-zinc-600'}`}>
-                                                            {row[col.key] ?? '-'}
-                                                        </span>
+                                                    {SCORE_COLS.includes(col.key) ? (
+                                                        <span className={`tabular-nums ${row[col.key] !== '-' && row[col.key] !== undefined ? 'text-cyan-400 font-medium' : 'text-zinc-600'}`}>{row[col.key] ?? '-'}</span>
                                                     ) : col.key === 'result_status' ? (
                                                         <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded ${
                                                             String(row[col.key]).toLowerCase().includes('reject') ? 'bg-red-900/40 text-red-400 border border-red-800/50' :

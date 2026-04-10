@@ -19,11 +19,11 @@ Refactor and rebuild the application to enforce correct data flow from upload ->
 ## Implemented Features
 1. Independent CSV/XLSX uploads (Naukri, Pipeline, Score Sheet)
 2. Automatic matching/join when both datasets exist
-3. Dashboard with DB status bar and navigation
+3. Dashboard with uploads + analytics navigation (no dataset count bar)
 4. Summary Statistics page (`/summary`) with funnel metrics
-5. View Applicants (`/roles`) -> Role Drilldown (`/roles/:jobRole`) with simplified table (no scores), search, date filters, pagination (100/page)
-6. View Attended Applicants (`/attended-roles`) -> Attended Drilldown (`/attended/:jobRole`) with score columns, round filter, search, date filters, pagination
-7. Strict status classification hierarchy (Shortlisted, Rejected, Attended, Not Attended, Registered)
+5. View Applicants (`/roles`) -> Role Drilldown (`/roles/:jobRole`) — simplified table (no scores), search, date filters, pagination (100/page)
+6. View Attended Applicants (`/attended-roles`) -> Attended Drilldown (`/attended/:jobRole`) — round-wise score columns (no Total Score), round filter, search, date filters, pagination
+7. Strict status classification hierarchy
 8. Phone/email normalization, datetime serialization fixes
 
 ## Routes
@@ -33,15 +33,21 @@ Refactor and rebuild the application to enforce correct data flow from upload ->
 - `/roles` - Job role cards
 - `/roles/:jobRole` - Applicant table (simplified, no scores)
 - `/attended-roles` - Attended role cards
-- `/attended/:jobRole` - Attended applicant table with scores
+- `/attended/:jobRole` - Attended applicant table with round-wise scores
 
 ## API Endpoints
 - POST `/api/login`, POST `/api/logout`, GET `/api/auth/check`
 - POST `/api/upload/naukri`, POST `/api/upload/pipeline`, POST `/api/upload/scoresheet`
-- GET `/api/status`, GET `/api/summary`, GET `/api/job-roles`
+- GET `/api/summary`, GET `/api/job-roles`
 - GET `/api/role?jobRole=&page=&search=&startDate=&endDate=`
 - GET `/api/attended-roles`
 - GET `/api/attended?jobRole=&page=&search=&startDate=&endDate=&round=`
+
+## Removed (2026-04-10)
+- `/api/status` endpoint (dashboard dataset counts)
+- `/api/dashboard-counts` endpoint
+- "Total Score" column and computation from attended applicants
+- Dashboard dataset count bar UI
 
 ## Backlog
 - P1: CSV export/download from tables

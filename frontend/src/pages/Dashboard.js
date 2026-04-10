@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, Database, FileText, UserCheck } from '@phosphor-icons/react';
+import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, FileText, UserCheck } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -15,20 +15,6 @@ export default function Dashboard() {
     const scoresheetRef = useRef(null);
     const [uploading, setUploading] = useState({ naukri: false, pipeline: false, scoresheet: false });
     const [uploadResult, setUploadResult] = useState({ naukri: null, pipeline: null, scoresheet: null });
-    const [status, setStatus] = useState(null);
-
-    const fetchStatus = async () => {
-        try {
-            const res = await axios.get(`${API}/api/status`, { withCredentials: true });
-            setStatus(res.data);
-        } catch {}
-    };
-
-    useEffect(() => {
-        let mounted = true;
-        if (mounted) fetchStatus();
-        return () => { mounted = false; };
-    }, []);
 
     const handleUpload = async (type, file) => {
         if (!file) return;
@@ -42,7 +28,6 @@ export default function Dashboard() {
             setUploadResult(prev => ({ ...prev, [type]: res.data }));
             const label = type === 'naukri' ? 'Naukri' : type === 'pipeline' ? 'Pipeline' : 'Score Sheet';
             toast.success(`${label}: ${res.data.inserted} inserted${res.data.updated !== undefined ? `, ${res.data.updated} updated` : ''}`);
-            fetchStatus();
         } catch (err) {
             toast.error(err.response?.data?.detail || 'Upload failed');
         } finally {
@@ -72,25 +57,6 @@ export default function Dashboard() {
             </header>
 
             <main className="max-w-3xl mx-auto px-6 py-12 space-y-8">
-                {/* DB Status */}
-                {status && (
-                    <section className="flex items-center gap-6 px-5 py-3 bg-zinc-900/50 border border-zinc-800 text-sm" data-testid="db-status">
-                        <Database size={18} className="text-zinc-500 shrink-0" />
-                        <span className="text-zinc-400">
-                            Naukri: <span className="text-white font-medium" data-testid="naukri-count">{status.naukri_count}</span>
-                        </span>
-                        <span className="text-zinc-400">
-                            Pipeline: <span className="text-white font-medium" data-testid="pipeline-count">{status.pipeline_count}</span>
-                        </span>
-                        <span className="text-zinc-400">
-                            Registered: <span className="text-white font-medium" data-testid="registered-count">{status.registered_count}</span>
-                        </span>
-                        <span className="text-zinc-400">
-                            Score Sheets: <span className="text-white font-medium" data-testid="scoresheet-count">{status.score_sheet_count || 0}</span>
-                        </span>
-                    </section>
-                )}
-
                 {/* Upload Section */}
                 <section className="space-y-4" data-testid="upload-section">
                     <h2 className="text-sm font-medium text-zinc-500 uppercase tracking-widest">Upload Datasets</h2>
