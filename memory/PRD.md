@@ -9,45 +9,39 @@ Full-stack recruitment analytics system. Ingests Naukri Applies, HR Pipeline, an
 - **Database**: MongoDB (naukri_applies, pipeline_data, registered_candidates, score_sheet)
 - **Auth**: JWT cookie-based (admin/admin)
 
+## Date Storage
+All dates stored as **ISO YYYY-MM-DD** (e.g., "2026-03-24"). `normalize_date()` converts DD-MMM-YYYY, DD-MM-YYYY, and Timestamp formats at upload time.
+
 ## STRICT STATUS HIERARCHY (email_type field)
 ```
 Registered
 ├── Shortlisted (email_type IN 'shortlist', 'shortlisted')
-│   ├── Interview Scheduled (has schedule_date AND schedule_time)
-│   │   ├── Attended (otp_verified IS NOT NULL)
-│   │   └── Not Attended (otp_verified IS NULL)
-│   └── Interview Not Scheduled (no schedule_date/time)
+│   ├── Interview Scheduled → Attended / Not Attended
+│   └── Interview Not Scheduled
 ├── Rejected (email_type IN 'reject', 'rejected')
 └── Other Registered
 ```
 
 ## Score Sheet Integration
-- Upload: CSV/XLSX with fields: name, email, phone, score, round_name
-- Storage: score_sheet collection, multiple rows per applicant (different rounds)
-- Matching: via pipeline_data (email OR phone), NOT naukri directly
-- Display: Only for "Attended" status candidates
-- Round columns: ZA, C++, Java, BA, LA, Mensa Org, Accounts2, Accounts1, BE, Mensa, BP
-- Total Score: Sum of all round scores
-
-## Summary Table Columns (10)
-Job Role | Total Naukri | Total Registered | Total Unregistered | Total Shortlisted | Total Rejected | Interview Scheduled | Without Interview | Attended | Didn't Attend
+- Upload CSV/XLSX: name, email, phone, score, round_name
+- Match via pipeline_data (email OR phone)
+- Only display for "Attended" status
+- 11 round columns + Total Score
 
 ## API Endpoints
-- POST /api/upload/naukri, /api/upload/pipeline, /api/upload/scoresheet (CSV + XLSX)
-- GET /api/status (includes score_sheet_count)
-- GET /api/summary (includes total_naukri, total_registered, total_unregistered)
-- GET /api/role?jobRole= (19 columns: 7 base + 11 score + Total Score)
+- POST /api/upload/naukri, /api/upload/pipeline, /api/upload/scoresheet
+- GET /api/status, /api/dashboard-counts, /api/summary, /api/job-roles
+- GET /api/role?jobRole=&startDate=&endDate=&page=&limit=
 - POST /api/reprocess, GET /api/debug/matching
 
 ## Completed Work
 - [x] Core upload, matching, analytics pipeline
-- [x] Strict Status Hierarchy (email_type based)
-- [x] Phone normalization (float→int, country codes, leading zeros)
+- [x] Strict Status Hierarchy
+- [x] Phone normalization (float→int)
 - [x] XLSX datetime.time serialization fix
-- [x] Summary: Total Naukri, Registered, Unregistered columns (Apr 10)
-- [x] Score Sheet upload endpoint + collection (Apr 10)
-- [x] Role Drilldown: 12 score columns with round mapping (Apr 10)
-- [x] Score display restricted to Attended status only (Apr 10)
+- [x] Summary: Naukri/Registered/Unregistered columns
+- [x] Score Sheet upload + per-round scoring in drilldown
+- [x] **Date filtering fix**: ISO YYYY-MM-DD storage + normalize_date() (Apr 10)
 
 ## Backlog
 ### P1
@@ -56,5 +50,5 @@ Job Role | Total Naukri | Total Registered | Total Unregistered | Total Shortlis
 
 ### P2
 - [ ] Upload history view
-- [ ] Advanced chart visualizations on dashboard
-- [ ] Role-based access control (Admin vs Recruiter)
+- [ ] Advanced chart visualizations
+- [ ] Role-based access control
