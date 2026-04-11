@@ -1062,8 +1062,36 @@ async def get_global_applicants(
 
     applicants = []
     for doc in docs:
+        email_type = str(doc.get("email_type") or "").strip().lower()
         otp_verified = str(doc.get("otp_verified") or "").strip()
+        schedule_date = str(doc.get("schedule_date") or "").strip()
+        schedule_time = str(doc.get("schedule_time") or "").strip()
         result_status_raw = str(doc.get("result_status") or "").strip()
+
+        # Derive registered_status using strict priority hierarchy
+        if (email_type in ("shortlist", "shortlisted") and schedule_date and schedule_time
+                and otp_verified and otp_verified != "0"):
+            reg_status = "Attended"
+        elif (email_type in ("shortlist", "shortlisted") and schedule_date and schedule_time
+                and (not otp_verified or otp_verified == "0")):
+            reg_status = "Not Attended"
+        elif email_type in ("shortlist", "shortlisted") and schedule_date and schedule_time:
+            reg_status = "Interview Scheduled"
+        elif email_type in ("shortlist", "shortlisted") and (not schedule_date) and (not schedule_time):
+            reg_status = "Interview Not Scheduled"
+        elif email_type in ("reject", "rejected"):
+            reg_status = "Rejected"
+        elif email_type in ("shortlist", "shortlisted"):
+            reg_status = "Shortlisted"
+        else:
+            reg_status = "Registered"
+
+        # Result status only for Attended
+        if reg_status == "Attended":
+            res_status = result_status_raw if result_status_raw and result_status_raw not in ("-", "") else "NA"
+        else:
+            res_status = "NA"
+
         applicants.append({
             "name": doc.get("name") or "-",
             "email": doc.get("email") or "-",
@@ -1071,12 +1099,12 @@ async def get_global_applicants(
             "college": doc.get("college") or "-",
             "degree": doc.get("degree") or "-",
             "job_role": doc.get("job_role") or doc.get("job_title") or "-",
-            "registered_status": "Registered",
+            "registered_status": reg_status,
             "registered_date": doc.get("last_update") or "-",
             "schedule_date": doc.get("schedule_date") or "-",
             "schedule_time": doc.get("schedule_time") or "-",
-            "attended_or_not": "Attended" if otp_verified else "Not Attended",
-            "result_status": result_status_raw if result_status_raw and result_status_raw != "-" else "NA",
+            "attended_or_not": "Attended" if reg_status == "Attended" else "Not Attended",
+            "result_status": res_status,
         })
 
     return {
