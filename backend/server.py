@@ -1022,6 +1022,71 @@ async def get_role_applicants(
     }
 
 
+# ============ GLOBAL APPLICANTS TABLE ============
+
+@api_router.get("/applicants")
+async def get_global_applicants(
+    jobRole: str = Query(None),
+    dateType: str = Query("Registered"),
+    startDate: str = Query(None),
+    endDate: str = Query(None),
+    search: str = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(100, ge=1, le=500),
+    user: str = Depends(get_current_user)
+):
+    """Global registered applicants table with job role, date type, and search filters."""
+    match = {}
+
+    # Job role filter
+    if jobRole and jobRole.strip() and jobRole.strip().lower() != "all jobs":
+        match["job_title"] = {"$regex": f"^{re.escape(jobRole.strip())}$", "$options": "i"}
+
+    # Date filter based on dateType
+    if startDate and endDate:
+        date_field = "last_update" if dateType == "Registered" else "schedule_date"
+        match[date_field] = {"$gte": startDate, "$lte": endDate}
+
+    # Search filter
+    if search:
+        search_re = {"$regex": re.escape(search), "$options": "i"}
+        match["$or"] = [
+            {"name": search_re}, {"email": search_re},
+            {"phone": search_re}, {"job_title": search_re}
+        ]
+
+    total = await db.registered_candidates.count_documents(match)
+    skip = (page - 1) * limit
+    cursor = db.registered_candidates.find(match, {"_id": 0}).sort("name", 1).skip(skip).limit(limit)
+    docs = await cursor.to_list(None)
+
+    applicants = []
+    for doc in docs:
+        otp_verified = str(doc.get("otp_verified") or "").strip()
+        result_status_raw = str(doc.get("result_status") or "").strip()
+        applicants.append({
+            "name": doc.get("name") or "-",
+            "email": doc.get("email") or "-",
+            "phone": doc.get("phone") or "-",
+            "college": doc.get("college") or "-",
+            "degree": doc.get("degree") or "-",
+            "job_role": doc.get("job_role") or doc.get("job_title") or "-",
+            "registered_status": "Registered",
+            "registered_date": doc.get("last_update") or "-",
+            "schedule_date": doc.get("schedule_date") or "-",
+            "schedule_time": doc.get("schedule_time") or "-",
+            "attended_or_not": "Attended" if otp_verified else "Not Attended",
+            "result_status": result_status_raw if result_status_raw and result_status_raw != "-" else "NA",
+        })
+
+    return {
+        "data": applicants,
+        "total": total,
+        "page": page,
+        "limit": limit,
+    }
+
+
 # ============ ATTENDED APPLICANTS MODULE ============
 
 @api_router.get("/attended-roles")
@@ -1044,7 +1109,7 @@ async def get_attended_roles(user: str = Depends(get_current_user)):
 
 @api_router.get("/attended")
 async def get_attended_applicants(
-    jobRole: str = Query(...),
+    jobRole: str = Query(None),
     startDate: str = Query(None),
     endDate: str = Query(None),
     search: str = Query(None),
@@ -1053,23 +1118,24 @@ async def get_attended_applicants(
     limit: int = Query(100, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Attended applicants table with scores — data from pipeline_data joined with naukri and score_sheet."""
-    role = jobRole.strip()
+    """Global attended applicants table with scores."""
 
-    # Base match: registered candidates who attended
+    # Base match: registered candidates who attended (otp_verified NOT NULL)
     match = {
-        "job_title": {"$regex": f"^{re.escape(role)}$", "$options": "i"},
-        "email_type": {"$regex": "shortlist", "$options": "i"},
-        "schedule_date": _not_null_filter,
-        "schedule_time": _not_null_filter,
         "otp_verified": _not_null_filter,
     }
-    # Date filter on schedule_date (pipeline), only when BOTH dates provided
+
+    # Optional job role filter
+    if jobRole and jobRole.strip() and jobRole.strip().lower() != "all jobs":
+        role = jobRole.strip()
+        match["job_title"] = {"$regex": f"^{re.escape(role)}$", "$options": "i"}
+
+    # Date filter on schedule_date, only when BOTH dates provided
     if startDate and endDate:
         match["schedule_date"] = {**_not_null_filter, "$gte": startDate, "$lte": endDate}
     if search:
         search_re = {"$regex": re.escape(search), "$options": "i"}
-        match["$or"] = [{"name": search_re}, {"email": search_re}, {"phone": search_re}]
+        match["$or"] = [{"name": search_re}, {"email": search_re}, {"phone": search_re}, {"job_title": search_re}]
 
     # Pre-fetch all score records and build lookups (batch — avoids N+1)
     score_records = await db.score_sheet.find({}, {"_id": 0}).to_list(None)
@@ -1120,18 +1186,16 @@ async def get_attended_applicants(
             "name": doc.get("name") or "-",
             "email": doc.get("email") or "-",
             "phone": doc.get("phone") or "-",
-            "age": doc.get("age") or "-",
-            "gender": doc.get("gender") or "-",
             "college": doc.get("college") or "-",
             "degree": doc.get("degree") or "-",
             "course": doc.get("course") or "-",
             "year_of_graduation": doc.get("year_of_graduation") or "-",
             "job_role": doc.get("job_role") or doc.get("job_title") or "-",
             "schedule_date": doc.get("schedule_date") or "-",
+            "result_status": doc.get("result_status") or "-",
         }
         for col in SCORE_ROUND_COLUMNS:
             row[col] = round_scores.get(col, "-")
-        row["result_status"] = doc.get("result_status") or "-"
 
         applicants.append(row)
 
@@ -1141,8 +1205,8 @@ async def get_attended_applicants(
     end = start + limit
     paginated = applicants[start:end]
 
-    columns = ["name", "email", "phone", "age", "gender", "college", "degree", "course",
-               "year_of_graduation", "job_role", "schedule_date"] + SCORE_ROUND_COLUMNS + ["result_status"]
+    columns = ["name", "email", "phone", "college", "degree", "course",
+               "year_of_graduation", "job_role", "schedule_date", "result_status"] + SCORE_ROUND_COLUMNS
 
     return {
         "data": paginated,

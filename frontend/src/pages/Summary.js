@@ -11,12 +11,12 @@ const COLUMNS = [
     { key: 'total_naukri', label: 'Total Naukri Applicants' },
     { key: 'total_registered', label: 'Total Registered Applicants' },
     { key: 'total_unregistered', label: 'Total Unregistered Applicants' },
-    { key: 'shortlisted', label: 'Total Shortlisted Applicants' },
-    { key: 'rejected', label: 'Total Rejected Applicants' },
-    { key: 'scheduled', label: 'Total Applicants with Interview Scheduled' },
-    { key: 'not_scheduled', label: 'Total Applicants without Interview' },
-    { key: 'attended', label: 'Total Applicants who Attended' },
-    { key: 'not_attended', label: 'Total Applicants who Didn\'t Attend' },
+    { key: 'shortlisted', label: 'Shortlisted' },
+    { key: 'rejected', label: 'Rejected' },
+    { key: 'scheduled', label: 'Interview Scheduled' },
+    { key: 'not_scheduled', label: 'Interview Not Scheduled' },
+    { key: 'attended', label: 'Attended' },
+    { key: 'not_attended', label: 'Not Attended' },
 ];
 
 export default function Summary() {

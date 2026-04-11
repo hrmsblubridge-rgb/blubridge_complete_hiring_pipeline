@@ -128,7 +128,7 @@ export default function Dashboard() {
                         <Users size={28} className="text-zinc-500 group-hover:text-violet-500 transition-colors" />
                         <div>
                             <div className="text-base font-medium">View Applicants</div>
-                            <div className="text-sm text-zinc-500 mt-0.5">Browse applicants by job role</div>
+                            <div className="text-sm text-zinc-500 mt-0.5">All registered applicants with filters</div>
                         </div>
                     </button>
 
@@ -137,7 +137,7 @@ export default function Dashboard() {
                         <UserCheck size={28} className="text-zinc-500 group-hover:text-emerald-500 transition-colors" />
                         <div>
                             <div className="text-base font-medium">View Attended Applicants</div>
-                            <div className="text-sm text-zinc-500 mt-0.5">Attended applicants with scores by job role</div>
+                            <div className="text-sm text-zinc-500 mt-0.5">Attended applicants with scores and filters</div>
                         </div>
                     </button>
                 </section>

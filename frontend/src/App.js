@@ -5,10 +5,8 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Summary from "./pages/Summary";
-import Roles from "./pages/Roles";
-import RoleDrillDown from "./pages/RoleDrillDown";
-import AttendedRoles from "./pages/AttendedRoles";
-import AttendedDrillDown from "./pages/AttendedDrillDown";
+import Applicants from "./pages/Roles";
+import AttendedApplicants from "./pages/AttendedRoles";
 import { Toaster } from "./components/ui/sonner";
 
 function App() {
@@ -20,10 +18,8 @@ function App() {
                         <Route path="/login" element={<Login />} />
                         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                         <Route path="/summary" element={<ProtectedRoute><Summary /></ProtectedRoute>} />
-                        <Route path="/roles" element={<ProtectedRoute><Roles /></ProtectedRoute>} />
-                        <Route path="/roles/:jobRole" element={<ProtectedRoute><RoleDrillDown /></ProtectedRoute>} />
-                        <Route path="/attended-roles" element={<ProtectedRoute><AttendedRoles /></ProtectedRoute>} />
-                        <Route path="/attended/:jobRole" element={<ProtectedRoute><AttendedDrillDown /></ProtectedRoute>} />
+                        <Route path="/roles" element={<ProtectedRoute><Applicants /></ProtectedRoute>} />
+                        <Route path="/attended-roles" element={<ProtectedRoute><AttendedApplicants /></ProtectedRoute>} />
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                         <Route path="*" element={<Navigate to="/dashboard" replace />} />
                     </Routes>
