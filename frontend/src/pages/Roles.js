@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { ArrowLeft, FunnelSimple, ArrowCounterClockwise, SpinnerGap, CaretLeft, CaretRight, CaretDoubleLeft, CaretDoubleRight, MagnifyingGlass } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
-const PAGE_SIZE = 100;
+const PAGE_SIZES = [10, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500];
 
 const COLUMNS = [
     { key: 'name', label: 'Name' },
@@ -36,6 +36,7 @@ export default function Applicants() {
     const [data, setData] = useState([]);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(100);
     const [loading, setLoading] = useState(true);
     const [jobRoles, setJobRoles] = useState([]);
     const [jobRole, setJobRole] = useState('');
@@ -54,10 +55,10 @@ export default function Applicants() {
         })();
     }, []);
 
-    const fetchData = useCallback(async (filters = {}, pg = 1) => {
+    const fetchData = useCallback(async (filters = {}, pg = 1, size = 100) => {
         setLoading(true);
         try {
-            const params = { page: pg, limit: PAGE_SIZE };
+            const params = { page: pg, limit: size };
             if (filters.jobRole) params.jobRole = filters.jobRole;
             if (filters.dateType) params.dateType = filters.dateType;
             if (filters.startDate) params.startDate = filters.startDate;
@@ -73,24 +74,30 @@ export default function Applicants() {
         }
     }, []);
 
-    useEffect(() => { fetchData({}, 1); }, [fetchData]);
+    useEffect(() => { fetchData({}, 1, 100); }, [fetchData]);
 
-    const totalPages = Math.ceil(total / PAGE_SIZE) || 1;
+    const totalPages = Math.ceil(total / pageSize) || 1;
 
     const applyFilters = (pg = 1) => {
         setPage(pg);
-        fetchData({ jobRole, dateType, startDate, endDate, search }, pg);
+        fetchData({ jobRole, dateType, startDate, endDate, search }, pg, pageSize);
     };
 
     const handleReset = () => {
-        setJobRole(''); setDateType('Registered'); setStartDate(''); setEndDate(''); setSearch(''); setPage(1);
-        fetchData({}, 1);
+        setJobRole(''); setDateType('Registered'); setStartDate(''); setEndDate(''); setSearch(''); setPage(1); setPageSize(100);
+        fetchData({}, 1, 100);
     };
 
     const navigatePage = (pg) => {
         if (pg < 1 || pg > totalPages) return;
         setPage(pg);
-        fetchData({ jobRole, dateType, startDate, endDate, search }, pg);
+        fetchData({ jobRole, dateType, startDate, endDate, search }, pg, pageSize);
+    };
+
+    const handlePageSizeChange = (newSize) => {
+        setPageSize(newSize);
+        setPage(1);
+        fetchData({ jobRole, dateType, startDate, endDate, search }, 1, newSize);
     };
 
     const handleGoToPage = () => {
@@ -209,22 +216,32 @@ export default function Applicants() {
 
                         {/* Pagination */}
                         <div className="flex items-center justify-between mt-4" data-testid="pagination">
-                            <span className="text-sm text-zinc-500">Page {page} of {totalPages} ({total} records)</span>
+                            <div className="flex items-center gap-3">
+                                <span className="text-sm text-zinc-500">Page {page} of {totalPages} ({total} records)</span>
+                                <select value={pageSize} onChange={e => handlePageSizeChange(Number(e.target.value))} data-testid="page-size-select"
+                                    className="bg-zinc-900 border border-zinc-700 px-2 py-1.5 text-sm focus:outline-none focus:border-zinc-500">
+                                    {PAGE_SIZES.map(s => <option key={s} value={s}>{s} / page</option>)}
+                                </select>
+                            </div>
                             <div className="flex items-center gap-2">
-                                <button onClick={() => navigatePage(1)} disabled={page <= 1} data-testid="first-page-btn"
-                                    className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed text-sm"><CaretDoubleLeft size={14} /></button>
-                                <button onClick={() => navigatePage(page - 1)} disabled={page <= 1} data-testid="prev-page-btn"
-                                    className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed text-sm"><CaretLeft size={14} /></button>
+                                {page > 1 && <>
+                                    <button onClick={() => navigatePage(1)} data-testid="first-page-btn"
+                                        className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm"><CaretDoubleLeft size={14} /></button>
+                                    <button onClick={() => navigatePage(page - 1)} data-testid="prev-page-btn"
+                                        className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm"><CaretLeft size={14} /></button>
+                                </>}
                                 <input type="number" value={goToPage} onChange={e => setGoToPage(e.target.value)}
                                     onKeyDown={e => e.key === 'Enter' && handleGoToPage()}
                                     placeholder={page} data-testid="page-input"
                                     className="w-16 bg-zinc-900 border border-zinc-700 px-2 py-1.5 text-sm text-center focus:outline-none focus:border-zinc-500" />
                                 <button onClick={handleGoToPage} data-testid="go-btn"
                                     className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm">Go</button>
-                                <button onClick={() => navigatePage(page + 1)} disabled={page >= totalPages} data-testid="next-page-btn"
-                                    className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed text-sm"><CaretRight size={14} /></button>
-                                <button onClick={() => navigatePage(totalPages)} disabled={page >= totalPages} data-testid="last-page-btn"
-                                    className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed text-sm"><CaretDoubleRight size={14} /></button>
+                                {page < totalPages && <>
+                                    <button onClick={() => navigatePage(page + 1)} data-testid="next-page-btn"
+                                        className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm"><CaretRight size={14} /></button>
+                                    <button onClick={() => navigatePage(totalPages)} data-testid="last-page-btn"
+                                        className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm"><CaretDoubleRight size={14} /></button>
+                                </>}
                             </div>
                         </div>
                     </>

@@ -62,7 +62,6 @@ def normalize_phone(phone) -> str:
     if pd.isna(phone) or phone is None:
         return ""
     # Handle numeric types — pandas reads phone columns as float when NaN present
-    # e.g. 9876543210.0 → must become "9876543210", NOT "98765432100"
     if isinstance(phone, (int, float)):
         try:
             phone_str = str(int(phone))
@@ -70,13 +69,18 @@ def normalize_phone(phone) -> str:
             return ""
     else:
         phone_str = str(phone).strip()
+    # Remove all spaces
+    phone_str = phone_str.replace(" ", "")
+    # Handle comma-separated: take first number
+    if "," in phone_str:
+        phone_str = phone_str.split(",")[0].strip()
+    # Strip non-digit characters (+, -, etc.)
     phone_str = re.sub(r'[^\d]', '', phone_str)
-    # Strip country code +91 / 91
-    if phone_str.startswith('91') and len(phone_str) > 10:
-        phone_str = phone_str[2:]
-    # Strip leading zeros (e.g. 09876543210 → 9876543210)
+    # Normalize to 10 digits based on length
+    if len(phone_str) == 10:
+        return phone_str
     if len(phone_str) > 10:
-        phone_str = phone_str.lstrip('0')
+        return phone_str[-10:]
     return phone_str
 
 def normalize_email(email) -> str:
