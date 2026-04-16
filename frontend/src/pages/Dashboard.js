@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, FileText, UserCheck, FolderPlus } from '@phosphor-icons/react';
+import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, FileText, UserCheck, FolderPlus, GraduationCap } from '@phosphor-icons/react';
 import BulkUploadModal from '../components/BulkUploadModal';
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -14,8 +14,9 @@ export default function Dashboard() {
     const naukriRef = useRef(null);
     const pipelineRef = useRef(null);
     const scoresheetRef = useRef(null);
-    const [uploading, setUploading] = useState({ naukri: false, pipeline: false, scoresheet: false });
-    const [uploadResult, setUploadResult] = useState({ naukri: null, pipeline: null, scoresheet: null });
+    const collegeRankRef = useRef(null);
+    const [uploading, setUploading] = useState({ naukri: false, pipeline: false, scoresheet: false, collegerank: false });
+    const [uploadResult, setUploadResult] = useState({ naukri: null, pipeline: null, scoresheet: null, collegerank: null });
     const [bulkType, setBulkType] = useState(null);
 
     const handleUpload = async (type, file) => {
@@ -25,11 +26,12 @@ export default function Dashboard() {
         setUploading(prev => ({ ...prev, [type]: true }));
         setUploadResult(prev => ({ ...prev, [type]: null }));
         try {
-            const endpoint = type === 'scoresheet' ? 'upload/scoresheet' : `upload/${type}`;
+            const endpointMap = { scoresheet: 'upload/scoresheet', collegerank: 'upload/college-rank' };
+            const endpoint = endpointMap[type] || `upload/${type}`;
             const res = await axios.post(`${API}/api/${endpoint}`, formData, { withCredentials: true });
             setUploadResult(prev => ({ ...prev, [type]: res.data }));
-            const label = type === 'naukri' ? 'Naukri' : type === 'pipeline' ? 'Pipeline' : 'Score Sheet';
-            toast.success(`${label}: ${res.data.inserted} inserted${res.data.updated !== undefined ? `, ${res.data.updated} updated` : ''}`);
+            const labelMap = { naukri: 'Naukri', pipeline: 'Pipeline', scoresheet: 'Score Sheet', collegerank: 'College Rank' };
+            toast.success(`${labelMap[type]}: ${res.data.inserted} inserted${res.data.updated !== undefined ? `, ${res.data.updated} updated` : ''}`);
         } catch (err) {
             toast.error(err.response?.data?.detail || 'Upload failed');
         } finally {
@@ -37,6 +39,7 @@ export default function Dashboard() {
             if (naukriRef.current) naukriRef.current.value = '';
             if (pipelineRef.current) pipelineRef.current.value = '';
             if (scoresheetRef.current) scoresheetRef.current.value = '';
+            if (collegeRankRef.current) collegeRankRef.current.value = '';
         }
     };
 
@@ -128,6 +131,22 @@ export default function Dashboard() {
                             <FolderPlus size={18} /> Bulk
                         </button>
                     </div>
+
+                    <input type="file" ref={collegeRankRef} accept=".csv,.xlsx,.xls" className="hidden"
+                        onChange={e => handleUpload('collegerank', e.target.files[0])} data-testid="collegerank-file-input" />
+                    <button onClick={() => collegeRankRef.current?.click()} disabled={uploading.collegerank}
+                        data-testid="upload-collegerank-btn"
+                        className="w-full flex items-center justify-between px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-amber-600 hover:bg-zinc-900/80 transition-all group">
+                        <span className="flex items-center gap-3">
+                            {uploading.collegerank ? <SpinnerGap size={22} className="animate-spin text-amber-500" /> :
+                             uploadResult.collegerank ? <CheckCircle size={22} weight="fill" className="text-amber-500" /> :
+                             <GraduationCap size={22} className="text-zinc-500 group-hover:text-amber-500 transition-colors" />}
+                            <span className="text-base font-medium">Upload College Rank List</span>
+                        </span>
+                        {uploadResult.collegerank && (
+                            <span className="text-xs text-zinc-500">{uploadResult.collegerank.inserted} colleges imported</span>
+                        )}
+                    </button>
                 </section>
 
                 {/* Navigation Panels */}

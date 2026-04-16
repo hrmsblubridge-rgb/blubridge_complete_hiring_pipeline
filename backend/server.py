@@ -873,8 +873,7 @@ async def get_summary(
     search: str = Query(None),
     user: str = Depends(get_current_user)
 ):
-    """Job role-wise funnel statistics with date & search filters.
-    Includes total_naukri (unique applicants from naukri_applies per role) and unregistered counts."""
+    """Job role-wise funnel statistics split by NIRF / Non-NIRF."""
     match = {}
     if startDate or endDate:
         date_filter = {}
@@ -885,52 +884,88 @@ async def get_summary(
         match["date_of_application"] = date_filter
     if search:
         match["job_title"] = {"$regex": re.escape(search), "$options": "i"}
-    results = await _aggregate_funnel_stats(match)
 
-    # Get unique naukri applicant counts per job role
+    # Build college status lookup
+    college_lookup = await _get_college_status_map()
+
+    # Get all registered candidates matching filters
+    reg_match = dict(match)
+    reg_cursor = db.registered_candidates.find(reg_match, {"_id": 0})
+    reg_docs = await reg_cursor.to_list(None)
+
+    # Helper expressions
+    def is_shortlisted(doc):
+        return bool(re.match(r"shortlist", str(doc.get("email_type") or ""), re.I))
+    def is_rejected(doc):
+        return bool(re.match(r"reject", str(doc.get("email_type") or ""), re.I))
+    def has_schedule(doc):
+        sd = str(doc.get("schedule_date") or "").strip()
+        st = str(doc.get("schedule_time") or "").strip()
+        return bool(sd and st)
+    def has_otp(doc):
+        return bool(str(doc.get("otp_verified") or "").strip())
+
+    # Group by (job_role, nirf_category)
+    from collections import defaultdict
+    buckets = defaultdict(lambda: {"total": 0, "shortlisted": 0, "rejected": 0,
+                                    "scheduled": 0, "not_scheduled": 0, "attended": 0, "not_attended": 0})
+    for doc in reg_docs:
+        role = doc.get("job_title") or "Unknown"
+        cs = _get_college_status(doc, college_lookup)
+        cat = "NIRF" if cs == "NIRF" else "Non NIRF"
+        key = (role, cat)
+        buckets[key]["total"] += 1
+        if is_shortlisted(doc):
+            buckets[key]["shortlisted"] += 1
+            if has_schedule(doc):
+                buckets[key]["scheduled"] += 1
+                if has_otp(doc):
+                    buckets[key]["attended"] += 1
+                else:
+                    buckets[key]["not_attended"] += 1
+            else:
+                buckets[key]["not_scheduled"] += 1
+        if is_rejected(doc):
+            buckets[key]["rejected"] += 1
+
+    # Get naukri counts per (role, nirf_category)
     naukri_match = {}
     if startDate or endDate:
         naukri_match["date_of_application"] = match.get("date_of_application", {})
     if search:
         naukri_match["job_title"] = match.get("job_title", {})
+    naukri_cursor = db.naukri_applies.find(naukri_match if naukri_match else {}, {"_id": 0, "job_title": 1, "email": 1, "phone": 1, "ug_university": 1, "pg_university": 1})
+    naukri_docs = await naukri_cursor.to_list(None)
 
-    naukri_pipeline = [
-        {"$match": naukri_match} if naukri_match else {"$match": {}},
-        {"$group": {
-            "_id": {"job_title": "$job_title", "email": "$email", "phone": "$phone"},
-        }},
-        {"$group": {
-            "_id": "$_id.job_title",
-            "total_naukri": {"$sum": 1}
-        }},
-        {"$project": {"_id": 0, "job_role": "$_id", "total_naukri": 1}}
-    ]
-    naukri_counts = await db.naukri_applies.aggregate(naukri_pipeline).to_list(None)
-    naukri_map = {r["job_role"]: r["total_naukri"] for r in naukri_counts}
+    naukri_buckets = defaultdict(set)
+    for doc in naukri_docs:
+        role = doc.get("job_title") or "Unknown"
+        cs = _get_college_status(doc, college_lookup)
+        cat = "NIRF" if cs == "NIRF" else "Non NIRF"
+        key = (role, cat)
+        naukri_buckets[key].add((doc.get("email") or "", doc.get("phone") or ""))
 
-    # Merge naukri counts into results and compute unregistered
-    for r in results:
-        role = r["job_role"]
-        r["total_naukri"] = naukri_map.get(role, 0)
-        r["total_registered"] = r["total_applicants"]
-        r["total_unregistered"] = max(r["total_naukri"] - r["total_registered"], 0)
+    # Build results
+    results = []
+    all_keys = set(buckets.keys()) | set(naukri_buckets.keys())
+    for (role, cat) in sorted(all_keys):
+        b = buckets.get((role, cat), {"total": 0, "shortlisted": 0, "rejected": 0,
+                                       "scheduled": 0, "not_scheduled": 0, "attended": 0, "not_attended": 0})
+        naukri_count = len(naukri_buckets.get((role, cat), set()))
+        results.append({
+            "job_role": f"{role} - {cat}",
+            "total_naukri": naukri_count,
+            "total_registered": b["total"],
+            "total_unregistered": max(naukri_count - b["total"], 0),
+            "shortlisted": b["shortlisted"],
+            "rejected": b["rejected"],
+            "scheduled": b["scheduled"],
+            "not_scheduled": b["not_scheduled"],
+            "attended": b["attended"],
+            "not_attended": b["not_attended"],
+        })
 
-    # Add roles that have naukri applicants but NO registered (all unregistered)
-    existing_roles = {r["job_role"] for r in results}
-    for role, count in naukri_map.items():
-        if role not in existing_roles:
-            results.append({
-                "job_role": role,
-                "total_naukri": count,
-                "total_applicants": 0,
-                "total_registered": 0,
-                "total_unregistered": count,
-                "shortlisted": 0, "rejected": 0,
-                "scheduled": 0, "not_scheduled": 0,
-                "attended": 0, "not_attended": 0
-            })
-
-    total_registered = sum(r.get("total_registered", r.get("total_applicants", 0)) for r in results)
+    total_registered = sum(r["total_registered"] for r in results)
     return {"data": results, "total_registered": total_registered}
 
 
@@ -1038,11 +1073,12 @@ async def get_global_applicants(
     startDate: str = Query(None),
     endDate: str = Query(None),
     search: str = Query(None),
+    collegeStatus: str = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(100, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Global registered applicants table with job role, date type, and search filters."""
+    """Global registered applicants table with job role, date type, search, and college status filters."""
     match = {}
 
     # Job role filter
@@ -1062,13 +1098,22 @@ async def get_global_applicants(
             {"phone": search_re}, {"job_title": search_re}
         ]
 
-    total = await db.registered_candidates.count_documents(match)
-    skip = (page - 1) * limit
-    cursor = db.registered_candidates.find(match, {"_id": 0}).sort("name", 1).skip(skip).limit(limit)
-    docs = await cursor.to_list(None)
+    # Build college lookup once
+    college_lookup = await _get_college_status_map()
 
+    total_cursor = db.registered_candidates.find(match, {"_id": 0}).sort("name", 1)
+    all_docs = await total_cursor.to_list(None)
+
+    # Compute college_status and apply filter
     applicants = []
-    for doc in docs:
+    for doc in all_docs:
+        cs = _get_college_status(doc, college_lookup)
+
+        # College status filter
+        if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
+            if cs != collegeStatus.strip():
+                continue
+
         email_type = str(doc.get("email_type") or "").strip().lower()
         otp_verified = str(doc.get("otp_verified") or "").strip()
         schedule_date = str(doc.get("schedule_date") or "").strip()
@@ -1103,6 +1148,7 @@ async def get_global_applicants(
             "name": doc.get("name") or "-",
             "email": doc.get("email") or "-",
             "phone": doc.get("phone") or "-",
+            "college_status": cs,
             "college": doc.get("college") or "-",
             "degree": doc.get("degree") or "-",
             "job_role": doc.get("job_role") or doc.get("job_title") or "-",
@@ -1114,8 +1160,11 @@ async def get_global_applicants(
             "result_status": res_status,
         })
 
+    total = len(applicants)
+    start = (page - 1) * limit
+    end = start + limit
     return {
-        "data": applicants,
+        "data": applicants[start:end],
         "total": total,
         "page": page,
         "limit": limit,
@@ -1149,6 +1198,7 @@ async def get_attended_applicants(
     endDate: str = Query(None),
     search: str = Query(None),
     round: str = Query(None),
+    collegeStatus: str = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(100, ge=1, le=500),
     user: str = Depends(get_current_user)
@@ -1184,6 +1234,9 @@ async def get_attended_applicants(
         if sp:
             score_by_phone.setdefault(sp, []).append(sr)
 
+    # Build college lookup
+    college_lookup = await _get_college_status_map()
+
     # Fetch all matching attended candidates (pre-filter, then apply round filter in-memory)
     cursor = db.registered_candidates.find(match, {"_id": 0}).sort("name", 1)
     all_docs = await cursor.to_list(None)
@@ -1191,6 +1244,12 @@ async def get_attended_applicants(
     # Build applicant rows with scores
     applicants = []
     for doc in all_docs:
+        # College status filter
+        cs = _get_college_status(doc, college_lookup)
+        if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
+            if cs != collegeStatus.strip():
+                continue
+
         doc_email = normalize_email(doc.get("email"))
         doc_phone = normalize_phone(doc.get("phone"))
 
@@ -1203,7 +1262,7 @@ async def get_attended_applicants(
                 if s not in matched_scores:
                     matched_scores.append(s)
 
-        # Map round_name → column
+        # Map round_name -> column
         round_scores = {}
         for sr in matched_scores:
             rn = sr.get("round_name", "").strip().lower()
@@ -1221,6 +1280,7 @@ async def get_attended_applicants(
             "name": doc.get("name") or "-",
             "email": doc.get("email") or "-",
             "phone": doc.get("phone") or "-",
+            "college_status": cs,
             "college": doc.get("college") or "-",
             "degree": doc.get("degree") or "-",
             "course": doc.get("course") or "-",
@@ -1235,12 +1295,11 @@ async def get_attended_applicants(
         applicants.append(row)
 
     total = len(applicants)
-    # Server-side pagination AFTER all filters
     start = (page - 1) * limit
     end = start + limit
     paginated = applicants[start:end]
 
-    columns = ["name", "email", "phone", "college", "degree", "course",
+    columns = ["name", "email", "phone", "college_status", "college", "degree", "course",
                "year_of_graduation", "job_role", "schedule_date", "result_status"] + SCORE_ROUND_COLUMNS
 
     return {
@@ -1322,7 +1381,107 @@ async def upload_score_sheet(
     }
 
 
-# ============ BULK UPLOAD SYSTEM ============
+# ============ COLLEGE RANK UPLOAD ============
+
+COLLEGE_RANK_COLUMNS = {"rank", "college_name", "short_name", "city", "state"}
+
+@api_router.post("/upload/college-rank")
+async def upload_college_rank(
+    file: UploadFile = File(...),
+    user: str = Depends(get_current_user)
+):
+    """Upload college rank list (CSV/XLSX). Columns: Rank, College Name, Short Name, City, State."""
+    content = await file.read()
+    df = parse_file(content, file.filename)
+    df.columns = df.columns.str.strip()
+    # Map column names to snake_case
+    col_map = {}
+    for c in df.columns:
+        cl = c.strip().lower().replace(" ", "_")
+        if cl in COLLEGE_RANK_COLUMNS:
+            col_map[c] = cl
+    mapped = set(col_map.values())
+    if "college_name" not in mapped:
+        raise HTTPException(status_code=400, detail=f"Missing 'College Name' column. Found: {list(df.columns)}")
+
+    # Clear existing and re-insert
+    await db.college_rank_list.delete_many({})
+    inserted = 0
+    for _, row in df.iterrows():
+        try:
+            doc = {}
+            for csv_col, db_field in col_map.items():
+                val = row.get(csv_col)
+                if pd.isna(val):
+                    doc[db_field] = None
+                elif db_field == "rank":
+                    try:
+                        doc[db_field] = int(float(val))
+                    except (ValueError, TypeError):
+                        doc[db_field] = None
+                else:
+                    doc[db_field] = str(val).strip()
+            if not doc.get("college_name"):
+                continue
+            await db.college_rank_list.insert_one(doc)
+            inserted += 1
+        except Exception:
+            pass
+    return {"success": True, "inserted": inserted}
+
+
+async def _get_college_status_map() -> dict:
+    """Build a lookup: normalized college name/short_name -> best rank.
+    Returns dict: { normalized_name: rank }"""
+    docs = await db.college_rank_list.find({}, {"_id": 0}).to_list(None)
+    lookup = {}
+    for doc in docs:
+        rank = doc.get("rank")
+        if rank is None:
+            continue
+        for field in ("college_name", "short_name"):
+            name = (doc.get(field) or "").strip().lower()
+            if name:
+                if name not in lookup or rank < lookup[name]:
+                    lookup[name] = rank
+    return lookup
+
+
+def _classify_rank(rank) -> str:
+    """Classify rank into NIRF status."""
+    if rank is None:
+        return "Non NIRF"
+    if rank <= 100:
+        return "NIRF"
+    if rank <= 150:
+        return "Non NIRF 101-150"
+    if rank <= 200:
+        return "Non NIRF 151-200"
+    if rank <= 300:
+        return "Non NIRF 201-300"
+    return "Non NIRF"
+
+
+def _get_college_status(doc: dict, college_lookup: dict) -> str:
+    """Determine college_status for a candidate by matching ug_university/pg_university against rank list."""
+    best_rank = None
+    for field in ("ug_university", "pg_university"):
+        val = (doc.get(field) or "").strip().lower()
+        if not val:
+            continue
+        # Exact match first
+        if val in college_lookup:
+            rank = college_lookup[val]
+            if best_rank is None or rank < best_rank:
+                best_rank = rank
+            continue
+        # Partial match: check if any college name is contained in the candidate's value or vice versa
+        for cname, rank in college_lookup.items():
+            if cname in val or val in cname:
+                if best_rank is None or rank < best_rank:
+                    best_rank = rank
+                break
+    return _classify_rank(best_rank)
 
 UPLOAD_BASE = Path("/app/uploads")
 BULK_TYPES = {

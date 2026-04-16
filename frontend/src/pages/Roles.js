@@ -12,6 +12,7 @@ const COLUMNS = [
     { key: 'name', label: 'Name' },
     { key: 'email', label: 'Email' },
     { key: 'phone', label: 'Phone' },
+    { key: 'college_status', label: 'College Status' },
     { key: 'college', label: 'College' },
     { key: 'degree', label: 'Degree' },
     { key: 'job_role', label: 'Job Role' },
@@ -22,6 +23,8 @@ const COLUMNS = [
     { key: 'attended_or_not', label: 'Attended Or Not' },
     { key: 'result_status', label: 'Result Status' },
 ];
+
+const COLLEGE_STATUS_OPTIONS = ['All', 'NIRF', 'Non NIRF 101-150', 'Non NIRF 151-200', 'Non NIRF 201-300', 'Non NIRF'];
 
 const DATE_COLS = ['registered_date', 'schedule_date'];
 
@@ -44,6 +47,7 @@ export default function Applicants() {
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
     const [search, setSearch] = useState('');
+    const [collegeStatus, setCollegeStatus] = useState('');
     const [goToPage, setGoToPage] = useState('');
 
     useEffect(() => {
@@ -64,6 +68,7 @@ export default function Applicants() {
             if (filters.startDate) params.startDate = filters.startDate;
             if (filters.endDate) params.endDate = filters.endDate;
             if (filters.search) params.search = filters.search;
+            if (filters.collegeStatus) params.collegeStatus = filters.collegeStatus;
             const res = await axios.get(`${API}/api/applicants`, { params, withCredentials: true });
             setData(res.data.data);
             setTotal(res.data.total);
@@ -80,24 +85,24 @@ export default function Applicants() {
 
     const applyFilters = (pg = 1) => {
         setPage(pg);
-        fetchData({ jobRole, dateType, startDate, endDate, search }, pg, pageSize);
+        fetchData({ jobRole, dateType, startDate, endDate, search, collegeStatus }, pg, pageSize);
     };
 
     const handleReset = () => {
-        setJobRole(''); setDateType('Registered'); setStartDate(''); setEndDate(''); setSearch(''); setPage(1); setPageSize(100);
+        setJobRole(''); setDateType('Registered'); setStartDate(''); setEndDate(''); setSearch(''); setCollegeStatus(''); setPage(1); setPageSize(100);
         fetchData({}, 1, 100);
     };
 
     const navigatePage = (pg) => {
         if (pg < 1 || pg > totalPages) return;
         setPage(pg);
-        fetchData({ jobRole, dateType, startDate, endDate, search }, pg, pageSize);
+        fetchData({ jobRole, dateType, startDate, endDate, search, collegeStatus }, pg, pageSize);
     };
 
     const handlePageSizeChange = (newSize) => {
         setPageSize(newSize);
         setPage(1);
-        fetchData({ jobRole, dateType, startDate, endDate, search }, 1, newSize);
+        fetchData({ jobRole, dateType, startDate, endDate, search, collegeStatus }, 1, newSize);
     };
 
     const handleGoToPage = () => {
@@ -154,6 +159,13 @@ export default function Applicants() {
                                 className="block w-52 bg-zinc-900 border border-zinc-700 pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
                         </div>
                     </div>
+                    <div className="space-y-1.5">
+                        <label className="text-xs text-zinc-500 uppercase tracking-wider">College Status</label>
+                        <select value={collegeStatus} onChange={e => setCollegeStatus(e.target.value)} data-testid="college-status-filter"
+                            className="block w-48 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500">
+                            {COLLEGE_STATUS_OPTIONS.map(o => <option key={o} value={o === 'All' ? '' : o}>{o}</option>)}
+                        </select>
+                    </div>
                     <button onClick={() => applyFilters(1)} data-testid="filter-btn"
                         className="flex items-center gap-2 px-5 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm font-medium transition-colors">
                         <FunnelSimple size={16} /> Filter
@@ -191,6 +203,11 @@ export default function Applicants() {
                                                         <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded ${
                                                             row[col.key] === 'Attended' ? 'bg-emerald-900/40 text-emerald-400 border border-emerald-800/50' :
                                                             'bg-orange-900/40 text-orange-400 border border-orange-800/50'
+                                                        }`}>{row[col.key]}</span>
+                                                    ) : col.key === 'college_status' ? (
+                                                        <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded ${
+                                                            row[col.key] === 'NIRF' ? 'bg-cyan-900/40 text-cyan-400 border border-cyan-800/50' :
+                                                            'bg-zinc-800/60 text-zinc-400 border border-zinc-700/50'
                                                         }`}>{row[col.key]}</span>
                                                     ) : col.key === 'result_status' ? (
                                                         <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded ${
