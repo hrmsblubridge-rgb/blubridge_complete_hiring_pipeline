@@ -108,7 +108,7 @@ export default function BulkUploadModal({ type, onClose }) {
                             Process Now
                         </button>
                     )}
-                    <span className="ml-auto text-xs text-zinc-500">Auto-processes every 30s</span>
+                    <span className="ml-auto text-xs text-zinc-500">Files process sequentially</span>
                 </div>
 
                 {/* Content */}
