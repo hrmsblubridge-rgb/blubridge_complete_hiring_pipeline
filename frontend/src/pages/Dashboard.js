@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, FileText, UserCheck } from '@phosphor-icons/react';
+import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, FileText, UserCheck, FolderPlus } from '@phosphor-icons/react';
+import BulkUploadModal from '../components/BulkUploadModal';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -15,6 +16,7 @@ export default function Dashboard() {
     const scoresheetRef = useRef(null);
     const [uploading, setUploading] = useState({ naukri: false, pipeline: false, scoresheet: false });
     const [uploadResult, setUploadResult] = useState({ naukri: null, pipeline: null, scoresheet: null });
+    const [bulkType, setBulkType] = useState(null);
 
     const handleUpload = async (type, file) => {
         if (!file) return;
@@ -63,51 +65,69 @@ export default function Dashboard() {
 
                     <input type="file" ref={naukriRef} accept=".csv,.xlsx,.xls" className="hidden"
                         onChange={e => handleUpload('naukri', e.target.files[0])} data-testid="naukri-file-input" />
-                    <button onClick={() => naukriRef.current?.click()} disabled={uploading.naukri}
-                        data-testid="upload-naukri-btn"
-                        className="w-full flex items-center justify-between px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-emerald-600 hover:bg-zinc-900/80 transition-all group">
-                        <span className="flex items-center gap-3">
-                            {uploading.naukri ? <SpinnerGap size={22} className="animate-spin text-emerald-500" /> :
-                             uploadResult.naukri ? <CheckCircle size={22} weight="fill" className="text-emerald-500" /> :
-                             <Upload size={22} className="text-zinc-500 group-hover:text-emerald-500 transition-colors" />}
-                            <span className="text-base font-medium">Upload Naukri Applies Dataset</span>
-                        </span>
-                        {uploadResult.naukri && (
-                            <span className="text-xs text-zinc-500">{uploadResult.naukri.inserted} new, {uploadResult.naukri.updated} updated</span>
-                        )}
-                    </button>
+                    <div className="flex items-stretch gap-2">
+                        <button onClick={() => naukriRef.current?.click()} disabled={uploading.naukri}
+                            data-testid="upload-naukri-btn"
+                            className="flex-1 flex items-center justify-between px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-emerald-600 hover:bg-zinc-900/80 transition-all group">
+                            <span className="flex items-center gap-3">
+                                {uploading.naukri ? <SpinnerGap size={22} className="animate-spin text-emerald-500" /> :
+                                 uploadResult.naukri ? <CheckCircle size={22} weight="fill" className="text-emerald-500" /> :
+                                 <Upload size={22} className="text-zinc-500 group-hover:text-emerald-500 transition-colors" />}
+                                <span className="text-base font-medium">Upload Naukri Applies Dataset</span>
+                            </span>
+                            {uploadResult.naukri && (
+                                <span className="text-xs text-zinc-500">{uploadResult.naukri.inserted} new, {uploadResult.naukri.updated} updated</span>
+                            )}
+                        </button>
+                        <button onClick={() => setBulkType('naukri')} data-testid="bulk-naukri-btn"
+                            className="flex items-center gap-2 px-4 bg-zinc-900 border border-zinc-800 hover:border-emerald-600 hover:bg-zinc-900/80 transition-all text-sm text-zinc-400 hover:text-emerald-400">
+                            <FolderPlus size={18} /> Bulk
+                        </button>
+                    </div>
 
                     <input type="file" ref={pipelineRef} accept=".csv,.xlsx,.xls" className="hidden"
                         onChange={e => handleUpload('pipeline', e.target.files[0])} data-testid="pipeline-file-input" />
-                    <button onClick={() => pipelineRef.current?.click()} disabled={uploading.pipeline}
-                        data-testid="upload-pipeline-btn"
-                        className="w-full flex items-center justify-between px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-blue-600 hover:bg-zinc-900/80 transition-all group">
-                        <span className="flex items-center gap-3">
-                            {uploading.pipeline ? <SpinnerGap size={22} className="animate-spin text-blue-500" /> :
-                             uploadResult.pipeline ? <CheckCircle size={22} weight="fill" className="text-blue-500" /> :
-                             <Upload size={22} className="text-zinc-500 group-hover:text-blue-500 transition-colors" />}
-                            <span className="text-base font-medium">Upload HR Internal Pipeline Dataset</span>
-                        </span>
-                        {uploadResult.pipeline && (
-                            <span className="text-xs text-zinc-500">{uploadResult.pipeline.inserted} new, {uploadResult.pipeline.updated} updated</span>
-                        )}
-                    </button>
+                    <div className="flex items-stretch gap-2">
+                        <button onClick={() => pipelineRef.current?.click()} disabled={uploading.pipeline}
+                            data-testid="upload-pipeline-btn"
+                            className="flex-1 flex items-center justify-between px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-blue-600 hover:bg-zinc-900/80 transition-all group">
+                            <span className="flex items-center gap-3">
+                                {uploading.pipeline ? <SpinnerGap size={22} className="animate-spin text-blue-500" /> :
+                                 uploadResult.pipeline ? <CheckCircle size={22} weight="fill" className="text-blue-500" /> :
+                                 <Upload size={22} className="text-zinc-500 group-hover:text-blue-500 transition-colors" />}
+                                <span className="text-base font-medium">Upload HR Internal Pipeline Dataset</span>
+                            </span>
+                            {uploadResult.pipeline && (
+                                <span className="text-xs text-zinc-500">{uploadResult.pipeline.inserted} new, {uploadResult.pipeline.updated} updated</span>
+                            )}
+                        </button>
+                        <button onClick={() => setBulkType('pipeline')} data-testid="bulk-pipeline-btn"
+                            className="flex items-center gap-2 px-4 bg-zinc-900 border border-zinc-800 hover:border-blue-600 hover:bg-zinc-900/80 transition-all text-sm text-zinc-400 hover:text-blue-400">
+                            <FolderPlus size={18} /> Bulk
+                        </button>
+                    </div>
 
                     <input type="file" ref={scoresheetRef} accept=".csv,.xlsx,.xls" className="hidden"
                         onChange={e => handleUpload('scoresheet', e.target.files[0])} data-testid="scoresheet-file-input" />
-                    <button onClick={() => scoresheetRef.current?.click()} disabled={uploading.scoresheet}
-                        data-testid="upload-scoresheet-btn"
-                        className="w-full flex items-center justify-between px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-purple-600 hover:bg-zinc-900/80 transition-all group">
-                        <span className="flex items-center gap-3">
-                            {uploading.scoresheet ? <SpinnerGap size={22} className="animate-spin text-purple-500" /> :
-                             uploadResult.scoresheet ? <CheckCircle size={22} weight="fill" className="text-purple-500" /> :
-                             <FileText size={22} className="text-zinc-500 group-hover:text-purple-500 transition-colors" />}
-                            <span className="text-base font-medium">Upload Score Sheet</span>
-                        </span>
-                        {uploadResult.scoresheet && (
-                            <span className="text-xs text-zinc-500">{uploadResult.scoresheet.inserted} scores imported</span>
-                        )}
-                    </button>
+                    <div className="flex items-stretch gap-2">
+                        <button onClick={() => scoresheetRef.current?.click()} disabled={uploading.scoresheet}
+                            data-testid="upload-scoresheet-btn"
+                            className="flex-1 flex items-center justify-between px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-purple-600 hover:bg-zinc-900/80 transition-all group">
+                            <span className="flex items-center gap-3">
+                                {uploading.scoresheet ? <SpinnerGap size={22} className="animate-spin text-purple-500" /> :
+                                 uploadResult.scoresheet ? <CheckCircle size={22} weight="fill" className="text-purple-500" /> :
+                                 <FileText size={22} className="text-zinc-500 group-hover:text-purple-500 transition-colors" />}
+                                <span className="text-base font-medium">Upload Score Sheet</span>
+                            </span>
+                            {uploadResult.scoresheet && (
+                                <span className="text-xs text-zinc-500">{uploadResult.scoresheet.inserted} scores imported</span>
+                            )}
+                        </button>
+                        <button onClick={() => setBulkType('score')} data-testid="bulk-score-btn"
+                            className="flex items-center gap-2 px-4 bg-zinc-900 border border-zinc-800 hover:border-purple-600 hover:bg-zinc-900/80 transition-all text-sm text-zinc-400 hover:text-purple-400">
+                            <FolderPlus size={18} /> Bulk
+                        </button>
+                    </div>
                 </section>
 
                 {/* Navigation Panels */}
@@ -142,6 +162,7 @@ export default function Dashboard() {
                     </button>
                 </section>
             </main>
+            {bulkType && <BulkUploadModal type={bulkType} onClose={() => setBulkType(null)} />}
         </div>
     );
 }

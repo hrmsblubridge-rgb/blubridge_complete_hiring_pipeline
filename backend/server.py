@@ -9,6 +9,9 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
+import shutil
+import glob as glob_module
+import asyncio
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
@@ -1319,6 +1322,284 @@ async def upload_score_sheet(
     }
 
 
+# ============ BULK UPLOAD SYSTEM ============
+
+UPLOAD_BASE = Path("/app/uploads")
+BULK_TYPES = {
+    "naukri": {"pending": UPLOAD_BASE / "naukri" / "pending", "processed": UPLOAD_BASE / "naukri" / "processed"},
+    "pipeline": {"pending": UPLOAD_BASE / "pipeline" / "pending", "processed": UPLOAD_BASE / "pipeline" / "processed"},
+    "score": {"pending": UPLOAD_BASE / "score" / "pending", "processed": UPLOAD_BASE / "score" / "processed"},
+}
+
+# Create directories on module load
+for t in BULK_TYPES.values():
+    t["pending"].mkdir(parents=True, exist_ok=True)
+    t["processed"].mkdir(parents=True, exist_ok=True)
+
+
+async def _process_naukri_file(content: bytes, filename: str) -> dict:
+    """Core naukri processing — extracted from upload_naukri for reuse."""
+    df = parse_file(content, filename)
+    df.columns = df.columns.str.strip()
+    col_map = {}
+    for csv_col in df.columns:
+        if csv_col in NAUKRI_COLUMN_MAP:
+            col_map[csv_col] = NAUKRI_COLUMN_MAP[csv_col]
+        elif csv_col.strip().lower() in _NAUKRI_CI_LOOKUP:
+            col_map[csv_col] = _NAUKRI_CI_LOOKUP[csv_col.strip().lower()]
+    mapped_fields = set(col_map.values())
+    if "email" not in mapped_fields and "phone" not in mapped_fields:
+        return {"success": False, "error": "No email/phone column found"}
+    inserted = 0
+    updated = 0
+    for idx, row in df.iterrows():
+        try:
+            doc = {}
+            for csv_col, db_field in col_map.items():
+                doc[db_field] = clean_value(row.get(csv_col))
+            for csv_col in df.columns:
+                if csv_col not in col_map:
+                    safe = re.sub(r'[^\w]', '_', csv_col.strip().lower()).strip('_')
+                    doc[f"_extra_{safe}"] = clean_value(row.get(csv_col))
+            email = normalize_email(doc.get("email"))
+            phone = normalize_phone(doc.get("phone"))
+            doc["email"] = email
+            doc["phone"] = phone
+            for date_field in ("date_of_application", "date_of_birth"):
+                if doc.get(date_field):
+                    doc[date_field] = normalize_date(doc[date_field])
+            doc["updated_at"] = datetime.now(timezone.utc)
+            if not email and not phone:
+                continue
+            query = {"$or": []}
+            if email: query["$or"].append({"email": email})
+            if phone: query["$or"].append({"phone": phone})
+            existing = await db.naukri_applies.find_one(query)
+            if existing:
+                await db.naukri_applies.update_one({"_id": existing["_id"]}, {"$set": doc})
+                updated += 1
+            else:
+                doc["created_at"] = datetime.now(timezone.utc)
+                await db.naukri_applies.insert_one(doc)
+                inserted += 1
+        except Exception:
+            pass
+    await reprocess_matching()
+    return {"success": True, "inserted": inserted, "updated": updated}
+
+
+async def _process_pipeline_file(content: bytes, filename: str) -> dict:
+    """Core pipeline processing — extracted from upload_pipeline for reuse."""
+    df = parse_file(content, filename)
+    df.columns = df.columns.str.strip()
+    cols = df.columns.tolist()
+    seen_bases = set()
+    keep_indices = []
+    for i, col in enumerate(cols):
+        base = re.sub(r'\.\d+$', '', col.strip()).lower()
+        if base not in seen_bases:
+            seen_bases.add(base)
+            keep_indices.append(i)
+    df = df.iloc[:, keep_indices]
+    df.columns = [re.sub(r'\.\d+$', '', c.strip()) for c in df.columns]
+    col_map = {}
+    for csv_col in df.columns:
+        normalized = csv_col.strip().lower()
+        if normalized in _PIPELINE_CI_LOOKUP:
+            db_field = _PIPELINE_CI_LOOKUP[normalized]
+            col_map[csv_col] = "pipeline_id" if db_field == "id" else db_field
+    mapped_fields = set(col_map.values())
+    if "email" not in mapped_fields and "phone" not in mapped_fields:
+        return {"success": False, "error": "No email/phone column found"}
+    inserted = 0
+    updated = 0
+    for idx, row in df.iterrows():
+        try:
+            doc = {}
+            for csv_col, db_field in col_map.items():
+                doc[db_field] = clean_value(row.get(csv_col))
+            for csv_col in df.columns:
+                if csv_col not in col_map:
+                    safe = re.sub(r'[^\w]', '_', csv_col.strip().lower()).strip('_')
+                    doc[f"_extra_{safe}"] = clean_value(row.get(csv_col))
+            email = normalize_email(doc.get("email"))
+            phone = normalize_phone(doc.get("phone"))
+            doc["email"] = email
+            doc["phone"] = phone
+            doc["updated_at"] = datetime.now(timezone.utc)
+            if not email and not phone:
+                continue
+            query = {"$or": []}
+            if email: query["$or"].append({"email": email})
+            if phone: query["$or"].append({"phone": phone})
+            existing = await db.pipeline_data.find_one(query)
+            if existing:
+                await db.pipeline_data.update_one({"_id": existing["_id"]}, {"$set": doc})
+                updated += 1
+            else:
+                doc["created_at"] = datetime.now(timezone.utc)
+                await db.pipeline_data.insert_one(doc)
+                inserted += 1
+        except Exception:
+            pass
+    await reprocess_matching()
+    return {"success": True, "inserted": inserted, "updated": updated}
+
+
+async def _process_score_file(content: bytes, filename: str) -> dict:
+    """Core score sheet processing — extracted from upload_scoresheet for reuse."""
+    df = parse_file(content, filename)
+    df.columns = df.columns.str.strip().str.lower()
+    required = {"name", "email", "phone", "score", "round_name"}
+    if not required.issubset(set(df.columns)):
+        return {"success": False, "error": f"Missing columns: {required - set(df.columns)}"}
+    inserted = 0
+    for idx, row in df.iterrows():
+        try:
+            email = normalize_email(row.get("email"))
+            phone = normalize_phone(row.get("phone"))
+            name = str(row.get("name") or "").strip()
+            round_name = str(row.get("round_name") or "").strip()
+            score_val = row.get("score")
+            if not email and not phone:
+                continue
+            if not round_name:
+                continue
+            try:
+                score = float(score_val) if not pd.isna(score_val) else 0.0
+            except (ValueError, TypeError):
+                score = 0.0
+            doc = {"name": name, "email": email, "phone": phone, "score": score,
+                   "round_name": round_name, "created_at": datetime.now(timezone.utc).isoformat()}
+            await db.score_sheet.insert_one(doc)
+            inserted += 1
+        except Exception:
+            pass
+    return {"success": True, "inserted": inserted}
+
+
+_PROCESS_FN = {
+    "naukri": _process_naukri_file,
+    "pipeline": _process_pipeline_file,
+    "score": _process_score_file,
+}
+
+# Track processing status per file
+_bulk_file_status = {}  # key: "type/filename" -> {"status": "pending"|"processing"|"processed"|"failed", "result": {...}}
+
+
+@api_router.post("/bulk-upload/process-now")
+async def trigger_bulk_process(user: str = Depends(get_current_user)):
+    """Manually trigger immediate processing of all pending files."""
+    results = {}
+    for utype, dirs in BULK_TYPES.items():
+        process_fn = _PROCESS_FN[utype]
+        pending_dir = dirs["pending"]
+        processed_dir = dirs["processed"]
+        type_results = []
+        for filepath in sorted(pending_dir.iterdir()):
+            if not filepath.is_file():
+                continue
+            key = f"{utype}/{filepath.name}"
+            _bulk_file_status[key] = {"status": "processing", "result": None}
+            try:
+                content = filepath.read_bytes()
+                result = await process_fn(content, filepath.name)
+                if result.get("success"):
+                    shutil.move(str(filepath), str(processed_dir / filepath.name))
+                    _bulk_file_status[key] = {"status": "processed", "result": result}
+                else:
+                    _bulk_file_status[key] = {"status": "failed", "result": result}
+                type_results.append({"file": filepath.name, **result})
+            except Exception as e:
+                _bulk_file_status[key] = {"status": "failed", "result": {"error": str(e)}}
+                type_results.append({"file": filepath.name, "success": False, "error": str(e)})
+        results[utype] = type_results
+    return {"success": True, "results": results}
+
+
+@api_router.post("/bulk-upload/{upload_type}")
+async def bulk_upload_files(
+    upload_type: str,
+    files: List[UploadFile] = File(...),
+    user: str = Depends(get_current_user)
+):
+    """Save multiple files to pending directory for background processing."""
+    if upload_type not in BULK_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid type: {upload_type}. Must be naukri, pipeline, or score")
+    pending_dir = BULK_TYPES[upload_type]["pending"]
+    saved = []
+    for f in files:
+        if not f.filename.lower().endswith(('.csv', '.xlsx')):
+            continue
+        content = await f.read()
+        # Avoid name collisions with timestamp prefix
+        safe_name = f"{int(datetime.now(timezone.utc).timestamp())}_{f.filename}"
+        dest = pending_dir / safe_name
+        dest.write_bytes(content)
+        _bulk_file_status[f"{upload_type}/{safe_name}"] = {"status": "pending", "result": None}
+        saved.append(safe_name)
+    return {"success": True, "saved": saved, "count": len(saved)}
+
+
+@api_router.delete("/bulk-upload/{upload_type}/{filename}")
+async def delete_bulk_file(upload_type: str, filename: str, user: str = Depends(get_current_user)):
+    """Delete a file from the pending directory."""
+    if upload_type not in BULK_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid type")
+    filepath = BULK_TYPES[upload_type]["pending"] / filename
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail="File not found in pending")
+    filepath.unlink()
+    _bulk_file_status.pop(f"{upload_type}/{filename}", None)
+    return {"success": True, "deleted": filename}
+
+
+@api_router.get("/bulk-upload/status")
+async def bulk_upload_status(user: str = Depends(get_current_user)):
+    """Return pending and processed file lists for all types."""
+    result = {}
+    for utype, dirs in BULK_TYPES.items():
+        pending = []
+        for f in sorted(dirs["pending"].iterdir()):
+            if f.is_file():
+                key = f"{utype}/{f.name}"
+                status_info = _bulk_file_status.get(key, {"status": "pending", "result": None})
+                pending.append({"name": f.name, "size": f.stat().st_size, "status": status_info["status"],
+                                "result": status_info.get("result")})
+        processed = [{"name": f.name, "size": f.stat().st_size} for f in sorted(dirs["processed"].iterdir()) if f.is_file()]
+        result[utype] = {"pending": pending, "processed": processed}
+    return result
+
+
+async def _run_bulk_processor():
+    """Background worker: process all pending files every 30 seconds."""
+    while True:
+        await asyncio.sleep(30)
+        for utype, dirs in BULK_TYPES.items():
+            process_fn = _PROCESS_FN[utype]
+            pending_dir = dirs["pending"]
+            processed_dir = dirs["processed"]
+            for filepath in sorted(pending_dir.iterdir()):
+                if not filepath.is_file():
+                    continue
+                key = f"{utype}/{filepath.name}"
+                if _bulk_file_status.get(key, {}).get("status") == "processing":
+                    continue
+                _bulk_file_status[key] = {"status": "processing", "result": None}
+                try:
+                    content = filepath.read_bytes()
+                    result = await process_fn(content, filepath.name)
+                    if result.get("success"):
+                        shutil.move(str(filepath), str(processed_dir / filepath.name))
+                        _bulk_file_status[key] = {"status": "processed", "result": result}
+                    else:
+                        _bulk_file_status[key] = {"status": "failed", "result": result}
+                except Exception as e:
+                    logger.error(f"Bulk process error ({key}): {e}")
+                    _bulk_file_status[key] = {"status": "failed", "result": {"error": str(e)}}
+
+
 @api_router.post("/reprocess")
 async def trigger_reprocess(user: str = Depends(get_current_user)):
     """Re-normalize all data and rebuild registered_candidates from scratch."""
@@ -1444,6 +1725,10 @@ async def startup_event():
             f.write("- Password: admin\n")
     except Exception as e:
         logger.error(f"Failed to write test credentials: {e}")
+
+    # Start bulk upload background processor
+    asyncio.create_task(_run_bulk_processor())
+    logger.info("Bulk upload background processor started (30s interval)")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
