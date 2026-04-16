@@ -24,7 +24,7 @@ const COLUMNS = [
     { key: 'result_status', label: 'Result Status' },
 ];
 
-const COLLEGE_STATUS_OPTIONS = ['All', 'NIRF', 'Non NIRF 101-150', 'Non NIRF 151-200', 'Non NIRF 201-300', 'Non NIRF'];
+const COLLEGE_STATUS_OPTIONS = ['All', 'NIRF', 'Non NIRF'];
 
 const DATE_COLS = ['registered_date', 'schedule_date'];
 

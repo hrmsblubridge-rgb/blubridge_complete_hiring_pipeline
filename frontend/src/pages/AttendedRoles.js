@@ -28,7 +28,7 @@ const ALL_COLS = [
 ];
 
 const DATE_COLS = ['schedule_date'];
-const COLLEGE_STATUS_OPTIONS = ['All', 'NIRF', 'Non NIRF 101-150', 'Non NIRF 151-200', 'Non NIRF 201-300', 'Non NIRF'];
+const COLLEGE_STATUS_OPTIONS = ['All', 'NIRF', 'Non NIRF'];
 
 function fmtDate(val) {
     if (!val || val === '-') return '-';

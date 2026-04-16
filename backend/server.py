@@ -912,7 +912,7 @@ async def get_summary(
     for doc in reg_docs:
         role = doc.get("job_title") or "Unknown"
         cs = _get_college_status(doc, college_lookup)
-        cat = "NIRF" if cs == "NIRF" else "Non NIRF"
+        cat = "NIRF" if cs.startswith("NIRF - #") else "Non NIRF"
         key = (role, cat)
         buckets[key]["total"] += 1
         if is_shortlisted(doc):
@@ -941,7 +941,7 @@ async def get_summary(
     for doc in naukri_docs:
         role = doc.get("job_title") or "Unknown"
         cs = _get_college_status(doc, college_lookup)
-        cat = "NIRF" if cs == "NIRF" else "Non NIRF"
+        cat = "NIRF" if cs.startswith("NIRF - #") else "Non NIRF"
         key = (role, cat)
         naukri_buckets[key].add((doc.get("email") or "", doc.get("phone") or ""))
 
@@ -1111,7 +1111,14 @@ async def get_global_applicants(
 
         # College status filter
         if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
-            if cs != collegeStatus.strip():
+            fval = collegeStatus.strip()
+            if fval == "NIRF":
+                if not cs.startswith("NIRF - #"):
+                    continue
+            elif fval == "Non NIRF":
+                if cs != "Non NIRF":
+                    continue
+            elif cs != fval:
                 continue
 
         email_type = str(doc.get("email_type") or "").strip().lower()
@@ -1247,7 +1254,14 @@ async def get_attended_applicants(
         # College status filter
         cs = _get_college_status(doc, college_lookup)
         if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
-            if cs != collegeStatus.strip():
+            fval = collegeStatus.strip()
+            if fval == "NIRF":
+                if not cs.startswith("NIRF - #"):
+                    continue
+            elif fval == "Non NIRF":
+                if cs != "Non NIRF":
+                    continue
+            elif cs != fval:
                 continue
 
         doc_email = normalize_email(doc.get("email"))
@@ -1449,39 +1463,42 @@ async def _get_college_status_map() -> dict:
 
 def _classify_rank(rank) -> str:
     """Classify rank into NIRF status."""
-    if rank is None:
-        return "Non NIRF"
-    if rank <= 100:
-        return "NIRF"
-    if rank <= 150:
-        return "Non NIRF 101-150"
-    if rank <= 200:
-        return "Non NIRF 151-200"
-    if rank <= 300:
-        return "Non NIRF 201-300"
+    if rank is not None and rank <= 100:
+        return f"NIRF - #{rank}"
     return "Non NIRF"
 
 
 def _get_college_status(doc: dict, college_lookup: dict) -> str:
-    """Determine college_status for a candidate by matching ug_university/pg_university against rank list."""
-    best_rank = None
-    for field in ("ug_university", "pg_university"):
+    """Determine college_status for a candidate. Priority: both NIRF->PG rank, else whichever is NIRF."""
+    ug_rank = None
+    pg_rank = None
+    for field, target in [("ug_university", "ug"), ("pg_university", "pg")]:
         val = (doc.get(field) or "").strip().lower()
         if not val:
             continue
-        # Exact match first
+        rank = None
         if val in college_lookup:
             rank = college_lookup[val]
-            if best_rank is None or rank < best_rank:
-                best_rank = rank
-            continue
-        # Partial match: check if any college name is contained in the candidate's value or vice versa
-        for cname, rank in college_lookup.items():
-            if cname in val or val in cname:
-                if best_rank is None or rank < best_rank:
-                    best_rank = rank
-                break
-    return _classify_rank(best_rank)
+        else:
+            for cname, r in college_lookup.items():
+                if cname in val or val in cname:
+                    rank = r
+                    break
+        if target == "ug":
+            ug_rank = rank
+        else:
+            pg_rank = rank
+
+    ug_nirf = ug_rank is not None and ug_rank <= 100
+    pg_nirf = pg_rank is not None and pg_rank <= 100
+
+    if ug_nirf and pg_nirf:
+        return f"NIRF - #{pg_rank}"
+    if pg_nirf:
+        return f"NIRF - #{pg_rank}"
+    if ug_nirf:
+        return f"NIRF - #{ug_rank}"
+    return "Non NIRF"
 
 UPLOAD_BASE = Path("/app/uploads")
 BULK_TYPES = {
