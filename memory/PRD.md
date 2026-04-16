@@ -10,45 +10,29 @@ Refactor and rebuild the application to enforce correct data flow from upload ->
 - Auth: Cookie-based JWT (hardcoded admin/admin)
 
 ## Core Collections
-- `naukri_applies`: Uploaded Naukri dataset
-- `pipeline_data`: Uploaded HR pipeline dataset
-- `registered_candidates`: Auto-computed INNER JOIN on email/phone
-- `score_sheet`: Uploaded score sheets mapped to attendees
-- `users`: Auth credentials
+- `naukri_applies`, `pipeline_data`, `registered_candidates`, `score_sheet`, `users`
 
 ## Implemented Features
 1. Independent CSV/XLSX uploads (Naukri, Pipeline, Score Sheet)
-2. Automatic matching/join when both datasets exist
-3. Dashboard with uploads + analytics navigation (no dataset count bar)
-4. Summary Statistics page (`/summary`) — renamed columns: Shortlisted, Rejected, Interview Scheduled, Interview Not Scheduled, Attended, Not Attended
-5. View Applicants (`/roles`) — **global registered applicants table** with Job Role dropdown, Date Filter Type (Registered/Scheduled), date range, search, pagination (100/page)
-6. View Attended Applicants (`/attended-roles`) — **global attended applicants table** with Job Role dropdown, Round filter, date range, search, score columns in alphabetical order, pagination
-7. Date display format: DD-MM-YYYY (frontend only, DB stores YYYY-MM-DD)
-8. Strict status classification hierarchy
-9. Phone/email normalization, datetime serialization fixes
+2. **Bulk Upload** with background processing (30s interval) for all 3 dataset types
+3. Automatic matching/join when both datasets exist
+4. Dashboard with uploads + bulk buttons + analytics navigation
+5. Summary Statistics page with renamed columns
+6. View Applicants — global registered table with filters and pagination
+7. View Attended Applicants — global attended table with scores and filters
+8. Dynamic page size dropdown (10-500)
+9. Phone normalization (handles spaces, commas, +91/0091 prefixes)
+10. Date display: DD-MM-YYYY (frontend only)
+11. Strict status classification hierarchy
 
 ## Routes
-- `/login` - Auth
-- `/dashboard` - Upload + Navigation hub
-- `/summary` - Funnel analytics table
-- `/roles` - Global registered applicants table
-- `/attended-roles` - Global attended applicants table
-
-## Removed Routes (2026-04-11)
-- `/roles/:jobRole` - Old role drilldown (replaced by global table)
-- `/attended/:jobRole` - Old attended drilldown (replaced by global table)
+- `/login`, `/dashboard`, `/summary`, `/roles`, `/attended-roles`
 
 ## API Endpoints
-- POST `/api/login`, POST `/api/logout`, GET `/api/auth/check`
-- POST `/api/upload/naukri`, POST `/api/upload/pipeline`, POST `/api/upload/scoresheet`
-- GET `/api/summary`, GET `/api/job-roles`
-- GET `/api/applicants?jobRole=&dateType=&startDate=&endDate=&search=&page=&limit=` (NEW - global registered table)
-- GET `/api/attended?jobRole=&round=&startDate=&endDate=&search=&page=&limit=` (MODIFIED - jobRole now optional)
-- GET `/api/role?jobRole=&page=&search=&startDate=&endDate=` (legacy, still works)
-
-## Removed Endpoints
-- `/api/status` (dashboard dataset counts)
-- `/api/dashboard-counts`
+- Auth: POST `/api/login`, POST `/api/logout`, GET `/api/auth/check`
+- Upload: POST `/api/upload/naukri`, `/api/upload/pipeline`, `/api/upload/scoresheet`
+- Bulk: POST `/api/bulk-upload/{type}`, DELETE `/api/bulk-upload/{type}/{filename}`, GET `/api/bulk-upload/status`, POST `/api/bulk-upload/process-now`
+- Data: GET `/api/summary`, `/api/job-roles`, `/api/applicants`, `/api/attended`
 
 ## Backlog
 - P1: CSV export/download from tables
