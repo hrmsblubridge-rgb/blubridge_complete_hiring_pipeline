@@ -977,8 +977,8 @@ async def get_summary(
             date_filter["$lte"] = endDate
         match["date_of_application"] = date_filter
 
-    # Build college status lookup and keyword mappings
-    college_lookup = await _get_college_status_map()
+    # Build college rank lookup and keyword mappings
+    rank_lookup = await _build_college_rank_lookup()
     mappings = await _get_job_keyword_mappings()
 
     # Get all registered candidates matching filters
@@ -1007,7 +1007,8 @@ async def get_summary(
         # Apply search filter on normalized role
         if search and not re.search(re.escape(search), role, re.I):
             continue
-        cs = _get_college_status(doc, college_lookup)
+        cc = _classify_college(doc, rank_lookup)
+        cs = cc["college_status"]
         cat = "NIRF" if cs.startswith("NIRF - #") else "Non NIRF"
         key = (role, cat)
         buckets[key]["total"] += 1
@@ -1037,7 +1038,8 @@ async def get_summary(
         role = _resolve_normalized_job_role(raw_role, mappings)
         if search and not re.search(re.escape(search), role, re.I):
             continue
-        cs = _get_college_status(doc, college_lookup)
+        cc = _classify_college(doc, rank_lookup)
+        cs = cc["college_status"]
         cat = "NIRF" if cs.startswith("NIRF - #") else "Non NIRF"
         key = (role, cat)
         naukri_buckets[key].add((doc.get("email") or "", doc.get("phone") or ""))
@@ -1196,8 +1198,8 @@ async def get_global_applicants(
             {"phone": search_re}, {"job_title": search_re}
         ]
 
-    # Build college lookup and keyword mappings
-    college_lookup = await _get_college_status_map()
+    # Build college rank lookup and keyword mappings
+    rank_lookup = await _build_college_rank_lookup()
     mappings = await _get_job_keyword_mappings()
 
     total_cursor = db.registered_candidates.find(match, {"_id": 0}).sort("name", 1)
@@ -1206,7 +1208,8 @@ async def get_global_applicants(
     # Compute college_status and apply filters
     applicants = []
     for doc in all_docs:
-        cs = _get_college_status(doc, college_lookup)
+        cc = _classify_college(doc, rank_lookup)
+        cs = cc["college_status"]
 
         # College status filter
         if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
@@ -1264,7 +1267,8 @@ async def get_global_applicants(
             "email": doc.get("email") or "-",
             "phone": doc.get("phone") or "-",
             "college_status": cs,
-            "college": _get_college_name(doc, college_lookup),
+            "college": cc["college"],
+            "match_confidence": cc.get("match_confidence") or "-",
             "degree": doc.get("degree") or "-",
             "job_role": normalized_role or "-",
             "registered_status": reg_status,
@@ -1347,8 +1351,8 @@ async def get_attended_applicants(
         if sp:
             score_by_phone.setdefault(sp, []).append(sr)
 
-    # Build college lookup and keyword mappings
-    college_lookup = await _get_college_status_map()
+    # Build college rank lookup and keyword mappings
+    rank_lookup = await _build_college_rank_lookup()
     mappings = await _get_job_keyword_mappings()
 
     # Fetch all matching attended candidates (pre-filter, then apply round filter in-memory)
@@ -1359,7 +1363,8 @@ async def get_attended_applicants(
     applicants = []
     for doc in all_docs:
         # College status filter
-        cs = _get_college_status(doc, college_lookup)
+        cc = _classify_college(doc, rank_lookup)
+        cs = cc["college_status"]
         if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
             fval = collegeStatus.strip()
             if fval == "NIRF":
@@ -1411,7 +1416,8 @@ async def get_attended_applicants(
             "email": doc.get("email") or "-",
             "phone": doc.get("phone") or "-",
             "college_status": cs,
-            "college": _get_college_name(doc, college_lookup),
+            "college": cc["college"],
+            "match_confidence": cc.get("match_confidence") or "-",
             "degree": doc.get("degree") or "-",
             "course": doc.get("course") or "-",
             "year_of_graduation": doc.get("year_of_graduation") or "-",
@@ -1560,97 +1566,220 @@ async def upload_college_rank(
     return {"success": True, "inserted": inserted}
 
 
-async def _get_college_status_map() -> dict:
-    """Build a lookup: normalized college name/short_name -> best rank.
-    Returns dict: { normalized_name: rank }"""
+async def _build_college_rank_lookup() -> dict:
+    """Build structured lookup for multi-criteria college matching.
+    Groups rank entries by base_name for efficient lookup.
+    Returns: {entries_by_base: {base: [entries]}, cities: set, states: set}"""
     docs = await db.college_rank_list.find({}, {"_id": 0}).to_list(None)
-    lookup = {}
+
+    # First pass: collect all known cities and states (normalized)
+    city_set = set()
+    state_set = set()
+    for doc in docs:
+        city = _normalize_college_text(doc.get("city") or "")
+        state = _normalize_college_text(doc.get("state") or "")
+        if city:
+            city_set.add(city)
+        if state:
+            state_set.add(state)
+
+    # Second pass: build lookup keyed by base_name
+    entries_by_base = {}
+
     for doc in docs:
         rank = doc.get("rank")
-        if rank is None:
+        college_name = (doc.get("college_name") or "").strip()
+        short_name = (doc.get("short_name") or "").strip()
+        city = _normalize_college_text(doc.get("city") or "")
+        state = _normalize_college_text(doc.get("state") or "")
+
+        if not college_name:
             continue
-        for field in ("college_name", "short_name"):
-            name = (doc.get(field) or "").strip().lower()
-            if name:
-                if name not in lookup or rank < lookup[name]:
-                    lookup[name] = rank
-    return lookup
+
+        normalized = _normalize_college_text(college_name)
+
+        # For rank entries, remove generic words + own location tokens to get base
+        own_locations = set()
+        for token in normalized.split():
+            if token in city_set or token in state_set:
+                own_locations.add(token)
+        # Also check multi-word city/state phrases
+        if city:
+            for t in city.split():
+                if t in normalized:
+                    own_locations.add(t)
+        if state:
+            for t in state.split():
+                if t in normalized:
+                    own_locations.add(t)
+
+        base = _extract_college_base(normalized, own_locations)
+
+        entry = {
+            "college_name": college_name,
+            "short_name": short_name,
+            "normalized": normalized,
+            "base": base,
+            "city": city,
+            "state": state,
+            "rank": rank,
+        }
+
+        if base:
+            entries_by_base.setdefault(base, []).append(entry)
+
+        # Also index by short_name base
+        if short_name:
+            short_norm = _normalize_college_text(short_name)
+            short_base = _extract_college_base(short_norm, own_locations)
+            if short_base and short_base != base:
+                entries_by_base.setdefault(short_base, []).append(entry)
+
+    return {"entries_by_base": entries_by_base, "cities": city_set, "states": state_set}
 
 
-def _classify_rank(rank) -> str:
-    """Classify rank into NIRF status."""
-    if rank is not None and rank <= 100:
-        return f"NIRF - #{rank}"
-    return "Non NIRF"
+_GENERIC_COLLEGE_WORDS = frozenset({
+    "university", "institute", "college", "of", "the", "and", "for",
+})
 
 
-def _get_college_status(doc: dict, college_lookup: dict) -> str:
-    """Determine college_status for a candidate. Priority: both NIRF->PG rank, else whichever is NIRF."""
-    ug_rank = None
-    pg_rank = None
-    for field, target in [("ug_university", "ug"), ("pg_university", "pg")]:
-        val = (doc.get(field) or "").strip().lower()
-        if not val:
-            continue
-        rank = None
-        if val in college_lookup:
-            rank = college_lookup[val]
-        else:
-            for cname, r in college_lookup.items():
-                if cname in val or val in cname:
-                    rank = r
-                    break
-        if target == "ug":
-            ug_rank = rank
-        else:
-            pg_rank = rank
+def _normalize_college_text(text: str) -> str:
+    """Normalize: lowercase, trim, remove punctuation, single spaces."""
+    if not text:
+        return ""
+    text = text.lower().strip()
+    text = re.sub(r'[,.\-&()\[\]/]', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
-    ug_nirf = ug_rank is not None and ug_rank <= 100
-    pg_nirf = pg_rank is not None and pg_rank <= 100
 
+def _extract_college_base(normalized_text: str, location_tokens: set = None) -> str:
+    """Extract base name by removing generic words and location tokens."""
+    tokens = normalized_text.split()
+    remove = _GENERIC_COLLEGE_WORDS
+    if location_tokens:
+        remove = remove | location_tokens
+    base_tokens = [t for t in tokens if t not in remove]
+    return " ".join(base_tokens).strip()
+
+
+def _match_college_entry(university_text: str, rank_lookup: dict) -> dict:
+    """Match a university text against the rank lookup using multi-criteria matching.
+    Returns: {rank, college_name, confidence: HIGH|MEDIUM|LOW|None}"""
+    if not university_text or not university_text.strip():
+        return {"rank": None, "college_name": "", "confidence": None}
+
+    normalized = _normalize_college_text(university_text)
+    cities = rank_lookup["cities"]
+    states = rank_lookup["states"]
+    entries_by_base = rank_lookup["entries_by_base"]
+
+    # Extract location tokens from the university text
+    location_tokens = set()
+    extracted_city = None
+    extracted_state = None
+
+    # Single-word token matching
+    for token in normalized.split():
+        if token in cities:
+            location_tokens.add(token)
+            if not extracted_city:
+                extracted_city = token
+        if token in states:
+            location_tokens.add(token)
+            if not extracted_state:
+                extracted_state = token
+
+    # Multi-word city/state phrase matching
+    for city in cities:
+        if ' ' in city and city in normalized:
+            extracted_city = city
+            for t in city.split():
+                location_tokens.add(t)
+    for state in states:
+        if ' ' in state and state in normalized:
+            extracted_state = state
+            for t in state.split():
+                location_tokens.add(t)
+
+    # Extract base name (remove generic words + location tokens)
+    base = _extract_college_base(normalized, location_tokens)
+
+    if not base:
+        return {"rank": None, "college_name": university_text, "confidence": None}
+
+    # Step 1: Exact base match
+    candidates = list(entries_by_base.get(base, []))
+
+    # Step 1a: Token-subset fallback if no exact match
+    if not candidates:
+        base_tokens = set(base.split())
+        for key, entries in entries_by_base.items():
+            key_tokens = set(key.split())
+            if base_tokens and key_tokens:
+                if base_tokens.issubset(key_tokens) or key_tokens.issubset(base_tokens):
+                    candidates.extend(entries)
+        # Deduplicate
+        seen = set()
+        deduped = []
+        for c in candidates:
+            uid = (c["college_name"], c.get("rank"))
+            if uid not in seen:
+                seen.add(uid)
+                deduped.append(c)
+        candidates = deduped
+
+    if not candidates:
+        return {"rank": None, "college_name": university_text, "confidence": None}
+
+    # Step 2: Strong match (base + location)
+    if extracted_city or extracted_state:
+        for entry in candidates:
+            city_match = (extracted_city and entry["city"]
+                          and (extracted_city in entry["city"] or entry["city"] in extracted_city))
+            state_match = (extracted_state and entry["state"]
+                           and (extracted_state in entry["state"] or entry["state"] in extracted_state))
+            if city_match or state_match:
+                return {"rank": entry["rank"], "college_name": entry["college_name"], "confidence": "HIGH"}
+
+    # Step 3: Base-only — single match
+    if len(candidates) == 1:
+        return {"rank": candidates[0]["rank"], "college_name": candidates[0]["college_name"], "confidence": "MEDIUM"}
+
+    # Step 4: Multiple matches — disambiguate via NIRF
+    nirf_candidates = [e for e in candidates if e["rank"] is not None and e["rank"] <= 100]
+    if len(nirf_candidates) == 1:
+        return {"rank": nirf_candidates[0]["rank"], "college_name": nirf_candidates[0]["college_name"], "confidence": "MEDIUM"}
+
+    # Ambiguous — multiple NIRF or none
+    return {"rank": None, "college_name": university_text, "confidence": "LOW"}
+
+
+def _classify_college(doc: dict, rank_lookup: dict) -> dict:
+    """Classify a candidate's college using structured multi-criteria matching.
+    Returns: {college_status, college, match_confidence}"""
+    ug_text = (doc.get("ug_university") or "").strip()
+    pg_text = (doc.get("pg_university") or "").strip()
+
+    ug_match = _match_college_entry(ug_text, rank_lookup)
+    pg_match = _match_college_entry(pg_text, rank_lookup)
+
+    ug_nirf = ug_match["rank"] is not None and ug_match["rank"] <= 100
+    pg_nirf = pg_match["rank"] is not None and pg_match["rank"] <= 100
+
+    # UG/PG priority: Both NIRF→PG, else whichever is NIRF
     if ug_nirf and pg_nirf:
-        return f"NIRF - #{pg_rank}"
+        return {"college_status": f"NIRF - #{pg_match['rank']}", "college": pg_text or "-",
+                "match_confidence": pg_match["confidence"]}
     if pg_nirf:
-        return f"NIRF - #{pg_rank}"
+        return {"college_status": f"NIRF - #{pg_match['rank']}", "college": pg_text or "-",
+                "match_confidence": pg_match["confidence"]}
     if ug_nirf:
-        return f"NIRF - #{ug_rank}"
-    return "Non NIRF"
-
-
-def _get_college_name(doc: dict, college_lookup: dict) -> str:
-    """Derive the college name from Naukri UG/PG fields aligned with NIRF logic."""
-    ug_val = (doc.get("ug_university") or "").strip()
-    pg_val = (doc.get("pg_university") or "").strip()
-    ug_rank = None
-    pg_rank = None
-    ug_lower = ug_val.lower()
-    pg_lower = pg_val.lower()
-    if ug_lower:
-        if ug_lower in college_lookup:
-            ug_rank = college_lookup[ug_lower]
-        else:
-            for cname, r in college_lookup.items():
-                if cname in ug_lower or ug_lower in cname:
-                    ug_rank = r
-                    break
-    if pg_lower:
-        if pg_lower in college_lookup:
-            pg_rank = college_lookup[pg_lower]
-        else:
-            for cname, r in college_lookup.items():
-                if cname in pg_lower or pg_lower in cname:
-                    pg_rank = r
-                    break
-    ug_nirf = ug_rank is not None and ug_rank <= 100
-    pg_nirf = pg_rank is not None and pg_rank <= 100
-    if ug_nirf and pg_nirf:
-        return pg_val or "-"
-    if pg_nirf:
-        return pg_val or "-"
-    if ug_nirf:
-        return ug_val or "-"
-    # Both non-NIRF: fallback UG then PG
-    return ug_val or pg_val or "-"
+        return {"college_status": f"NIRF - #{ug_match['rank']}", "college": ug_text or "-",
+                "match_confidence": ug_match["confidence"]}
+    # Neither NIRF: prefer UG if exists, else PG
+    return {"college_status": "Non NIRF", "college": ug_text or pg_text or "-",
+            "match_confidence": ug_match.get("confidence") or pg_match.get("confidence")}
 
 UPLOAD_BASE = Path("/app/uploads")
 BULK_TYPES = {
