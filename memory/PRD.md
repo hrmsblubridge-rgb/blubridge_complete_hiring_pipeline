@@ -20,24 +20,37 @@ Build a comprehensive Recruitment Analytics platform that handles bulk file uplo
 - Dashboard with upload buttons and navigation
 
 ### Phase 2: Analytics Views (Completed)
-- **Summary Statistics**: Role-wise funnel breakdown (Naukri → Registered → Shortlisted → Scheduled → Attended) split by NIRF/Non-NIRF
-- **View Applicants (Roles.js)**: Global registered table with Job Role, Date Type, Search, College Status filters + pagination
+- **Summary Statistics**: Role-wise funnel breakdown split by NIRF/Non-NIRF
+- **View Applicants (Roles.js)**: Global registered table with filters + pagination
 - **View Attended (AttendedRoles.js)**: Attended applicants with score columns, round filter, pagination
 
 ### Phase 3: Enhancements (Completed)
-- Bulk upload system with sequential background queue (FIFO processing)
-- College Rank List upload + NIRF classification (NIRF/Non-NIRF based on rank ≤ 100)
-- College field derived from Naukri UG/PG aligned with NIRF logic
+- Bulk upload system with sequential background queue (FIFO)
+- College Rank List upload + NIRF classification
 - Date filter fix on schedule_date
 - Pagination with configurable page size (10-500)
 
 ### Phase 4: Job Role Normalization (Completed - Apr 17, 2026)
-- **job_keyword_mapping collection**: Stores canonical job roles with associated keywords
-- **CRUD API**: GET/POST/PUT/DELETE `/api/job-keyword-mappings`
-- **Normalization logic**: Lowercase, trim, strip punctuation from job_title, then substring match against keywords. First match wins, fallback to raw title.
-- **Applied everywhere**: `/api/job-roles`, `/api/summary`, `/api/applicants`, `/api/attended`, `/api/attended-roles` all use `_resolve_normalized_job_role()`
-- **Jobs & Keywords UI**: New page at `/jobs-keywords` with Add/Edit/Delete modal for managing keyword-to-role mappings with keyword pills
-- **Table headers always visible**: Empty state fix applied to Summary, Roles, and AttendedRoles pages - tables always show headers with "No records found" row when empty
+- `job_keyword_mapping` collection with CRUD endpoints
+- Substring-based normalization logic (case-insensitive, punctuation-stripped)
+- Applied to all query endpoints
+- Jobs & Keywords UI page at `/jobs-keywords`
+- Table headers always visible (empty state fix)
+
+### Phase 5: Dynamic Multi-Criteria College Matching (Completed - Apr 17, 2026)
+- **Replaced** simple string `contains()` matching with structured multi-criteria system
+- **Normalization**: lowercase, trim, remove punctuation, collapse spaces
+- **Base name extraction**: Remove generic words (university, institute, college, of, the) AND location tokens
+- **Structured rank lookup**: Grouped by `base_name` with city/state metadata
+- **Multi-step matching algorithm**:
+  - Step 1 (HIGH confidence): base_name match + city OR state match
+  - Step 2 (MEDIUM confidence): single base_name match
+  - Step 3: Multiple matches → disambiguate via NIRF (single NIRF entry → MEDIUM)
+  - Step 4 (LOW confidence): Ambiguous → Non NIRF fallback
+- **UG/PG priority**: Both NIRF → use PG; else whichever is NIRF; neither → prefer UG display
+- **Derived fields**: `college_status`, `college`, `match_confidence` (HIGH/MEDIUM/LOW)
+- **No hardcoding**: Fully dynamic, works for all universities
+- **Performance**: Precomputed lookup map, cached per request
 
 ## DB Schema
 - `users`: {email, password, role}
