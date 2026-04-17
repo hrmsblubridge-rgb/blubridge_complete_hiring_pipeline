@@ -32,25 +32,24 @@ Build a comprehensive Recruitment Analytics platform that handles bulk file uplo
 
 ### Phase 4: Job Role Normalization (Completed - Apr 17, 2026)
 - `job_keyword_mapping` collection with CRUD endpoints
-- Substring-based normalization logic (case-insensitive, punctuation-stripped)
-- Applied to all query endpoints
+- Applied to all query endpoints (summary, applicants, attended, job-roles)
 - Jobs & Keywords UI page at `/jobs-keywords`
 - Table headers always visible (empty state fix)
 
 ### Phase 5: Dynamic Multi-Criteria College Matching (Completed - Apr 17, 2026)
-- **Replaced** simple string `contains()` matching with structured multi-criteria system
-- **Normalization**: lowercase, trim, remove punctuation, collapse spaces
-- **Base name extraction**: Remove generic words (university, institute, college, of, the) AND location tokens
-- **Structured rank lookup**: Grouped by `base_name` with city/state metadata
-- **Multi-step matching algorithm**:
-  - Step 1 (HIGH confidence): base_name match + city OR state match
-  - Step 2 (MEDIUM confidence): single base_name match
-  - Step 3: Multiple matches → disambiguate via NIRF (single NIRF entry → MEDIUM)
-  - Step 4 (LOW confidence): Ambiguous → Non NIRF fallback
-- **UG/PG priority**: Both NIRF → use PG; else whichever is NIRF; neither → prefer UG display
-- **Derived fields**: `college_status`, `college`, `match_confidence` (HIGH/MEDIUM/LOW)
-- **No hardcoding**: Fully dynamic, works for all universities
-- **Performance**: Precomputed lookup map, cached per request
+- Structured multi-criteria matching: base name + city/state
+- Confidence levels: HIGH (base+location), MEDIUM (single base), LOW (ambiguous)
+- No hardcoded college names
+
+### Phase 6: Data-Driven Keyword Mapping (Completed - Apr 17, 2026)
+- **job_titles_master collection**: Auto-populated from Naukri uploads with distinct job titles
+- **_sync_job_titles_master()**: Extracts and deduplicates titles on each Naukri upload
+- **GET /api/job-titles/unmatched**: Returns unmapped job titles (is_mapped=false)
+- **Checkbox-based UI**: Replaced manual keyword typing with checkbox selection from actual data
+- **is_mapped tracking**: Keywords marked as mapped when assigned to a canonical role
+- **Release on delete**: Keywords return to unmatched pool when mapping is deleted
+- **Exact match normalization**: Changed from substring to exact match on normalized job titles
+- **Duplicate prevention**: A keyword maps to only ONE canonical role
 
 ## DB Schema
 - `users`: {email, password, role}
@@ -60,6 +59,7 @@ Build a comprehensive Recruitment Analytics platform that handles bulk file uplo
 - `score_sheet`: {email, phone, score, round_name}
 - `college_rank_list`: {rank, college_name, short_name, city, state}
 - `job_keyword_mapping`: {job_role, keywords[], created_at}
+- `job_titles_master`: {raw_job_title, normalized_job_title, is_mapped}
 
 ## Key API Endpoints
 - `POST /api/login` / `POST /api/logout` / `GET /api/auth/check`
@@ -67,6 +67,7 @@ Build a comprehensive Recruitment Analytics platform that handles bulk file uplo
 - `POST /api/bulk-upload/{type}` / `GET /api/bulk-upload/status`
 - `GET /api/summary` / `GET /api/job-roles` / `GET /api/applicants` / `GET /api/attended`
 - `GET/POST/PUT/DELETE /api/job-keyword-mappings`
+- `GET /api/job-titles/unmatched`
 
 ## Prioritized Backlog
 ### P1
