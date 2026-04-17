@@ -1156,7 +1156,7 @@ async def get_global_applicants(
             "email": doc.get("email") or "-",
             "phone": doc.get("phone") or "-",
             "college_status": cs,
-            "college": doc.get("college") or "-",
+            "college": _get_college_name(doc, college_lookup),
             "degree": doc.get("degree") or "-",
             "job_role": doc.get("job_role") or doc.get("job_title") or "-",
             "registered_status": reg_status,
@@ -1295,7 +1295,7 @@ async def get_attended_applicants(
             "email": doc.get("email") or "-",
             "phone": doc.get("phone") or "-",
             "college_status": cs,
-            "college": doc.get("college") or "-",
+            "college": _get_college_name(doc, college_lookup),
             "degree": doc.get("degree") or "-",
             "course": doc.get("course") or "-",
             "year_of_graduation": doc.get("year_of_graduation") or "-",
@@ -1499,6 +1499,42 @@ def _get_college_status(doc: dict, college_lookup: dict) -> str:
     if ug_nirf:
         return f"NIRF - #{ug_rank}"
     return "Non NIRF"
+
+
+def _get_college_name(doc: dict, college_lookup: dict) -> str:
+    """Derive the college name from Naukri UG/PG fields aligned with NIRF logic."""
+    ug_val = (doc.get("ug_university") or "").strip()
+    pg_val = (doc.get("pg_university") or "").strip()
+    ug_rank = None
+    pg_rank = None
+    ug_lower = ug_val.lower()
+    pg_lower = pg_val.lower()
+    if ug_lower:
+        if ug_lower in college_lookup:
+            ug_rank = college_lookup[ug_lower]
+        else:
+            for cname, r in college_lookup.items():
+                if cname in ug_lower or ug_lower in cname:
+                    ug_rank = r
+                    break
+    if pg_lower:
+        if pg_lower in college_lookup:
+            pg_rank = college_lookup[pg_lower]
+        else:
+            for cname, r in college_lookup.items():
+                if cname in pg_lower or pg_lower in cname:
+                    pg_rank = r
+                    break
+    ug_nirf = ug_rank is not None and ug_rank <= 100
+    pg_nirf = pg_rank is not None and pg_rank <= 100
+    if ug_nirf and pg_nirf:
+        return pg_val or "-"
+    if pg_nirf:
+        return pg_val or "-"
+    if ug_nirf:
+        return ug_val or "-"
+    # Both non-NIRF: fallback UG then PG
+    return ug_val or pg_val or "-"
 
 UPLOAD_BASE = Path("/app/uploads")
 BULK_TYPES = {
