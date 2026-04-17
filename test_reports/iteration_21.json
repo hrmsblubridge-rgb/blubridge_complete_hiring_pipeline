@@ -1,0 +1,89 @@
+{
+  "summary": "Iteration 21: Complete E2E testing of Data-Driven Mapping UI. All 16 backend tests pass, all frontend tests pass. The new system replaces manual keyword entry with checkbox-based selection from uploaded Naukri job titles.",
+  
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  
+  "passed_tests": {
+    "backend": [
+      "POST /api/upload/naukri - extracts distinct job titles into job_titles_master collection",
+      "GET /api/job-titles/unmatched - returns unmatched titles (is_mapped=false)",
+      "GET /api/job-titles/unmatched - requires authentication (401 without auth)",
+      "POST /api/job-keyword-mappings - creates mapping and sets is_mapped=true for keywords",
+      "After creating mapping, GET /api/job-titles/unmatched does NOT include the mapped keywords",
+      "DELETE /api/job-keyword-mappings - releases keywords back to unmatched (is_mapped=false)",
+      "PUT /api/job-keyword-mappings - handles keyword add/remove correctly (maps new, unmaps removed)",
+      "Job role normalization uses exact match (not substring) on normalized titles",
+      "GET /api/job-roles uses normalized roles from mappings",
+      "GET /api/applicants uses normalized job roles",
+      "GET /api/summary uses normalized job roles",
+      "All existing endpoints return 200",
+      "POST /api/job-keyword-mappings requires at least one keyword (400 for empty)",
+      "DELETE /api/job-keyword-mappings returns 404 for non-existent mapping",
+      "DELETE /api/job-keyword-mappings returns 400 for invalid ID format",
+      "Full CRUD cycle for mappings (create, read, update, delete)"
+    ],
+    "frontend": [
+      "/jobs-keywords page loads with 'Mapped Roles' and 'Unmatched Keywords' sections",
+      "'Unmatched Keywords' section shows amber keyword pills after Naukri data upload",
+      "'Add Mapping' button opens modal with role input and checkbox list",
+      "Modal checkbox list shows unmatched keywords",
+      "Modal has filter/search input for keywords",
+      "Selecting checkboxes updates '(N SELECTED)' counter",
+      "Saving creates mapping and shows 'Mapping created' toast",
+      "After save, keywords move from unmatched to mapped section",
+      "Edit button opens modal with 'Edit Mapping' title",
+      "Edit modal shows pre-filled role name",
+      "Edit modal shows pre-checked keywords (6 SELECTED)",
+      "Edit modal shows 'Update' button instead of 'Save'",
+      "Delete mapping shows 'Mapping deleted' toast",
+      "After delete, keywords return to unmatched section",
+      "No manual keyword typing input (+ button removed) - checkbox-only selection"
+    ]
+  },
+  
+  "test_report_links": [
+    "/app/backend/tests/test_iteration21_data_driven_mapping.py",
+    "/app/test_reports/pytest/pytest_results_iteration21.xml"
+  ],
+  
+  "action_items": [],
+  
+  "critical_code_review_comments": [
+    "is_mapped flag correctly tracks keyword mapping status in job_titles_master collection",
+    "_sync_job_titles_master() properly extracts distinct job titles from naukri_applies",
+    "Exact match normalization prevents substring matching issues",
+    "PUT endpoint correctly handles keyword add/remove with is_mapped flag updates",
+    "DELETE endpoint releases keywords only if not used by another mapping"
+  ],
+  
+  "updated_files": [
+    "/app/backend/tests/test_iteration21_data_driven_mapping.py"
+  ],
+  
+  "success_rate": {
+    "backend": "100% (16/16 tests passed)",
+    "frontend": "100% (15/15 tests passed)"
+  },
+  
+  "test_credentials": {
+    "username": "admin",
+    "password": "admin"
+  },
+  
+  "seed_data_creation": "Test data created via Naukri CSV upload with TEST_ prefixed job titles. Test mappings created and deleted during testing (TEST_ prefixed mappings cleaned up automatically).",
+  
+  "retest_needed": false,
+  
+  "should_main_agent_self_test": false,
+  
+  "context_for_next_testing_agent": "Data-Driven Mapping UI fully tested and working. Key changes from previous iteration: (1) Job titles now come from uploaded Naukri data into job_titles_master collection, (2) GET /api/job-titles/unmatched returns titles with is_mapped=false, (3) Mapping done via checkbox selection in modal (not manual typing), (4) is_mapped flag tracks whether a keyword is mapped, (5) Keywords map to only ONE canonical role, (6) Exact match on normalized values for job role resolution. The frontend /jobs-keywords page has data-testid attributes: jobs-keywords-page, add-mapping-btn, mapping-modal, role-input, keyword-checkbox-list, keyword-option-{i}, keyword-checkbox-{i}, save-mapping-btn, unmatched-keywords-list, unmatched-keyword-{i}, edit-mapping-{id}, delete-mapping-{id}."
+}

@@ -367,6 +367,7 @@ async def upload_naukri(file: UploadFile = File(...), user: str = Depends(get_cu
                 errors.append(f"Row {idx + 2}: {str(e)}")
 
         await reprocess_matching()
+        await _sync_job_titles_master()
 
         return {
             "success": True,
@@ -599,6 +600,29 @@ def _normalize_text_for_matching(text: str) -> str:
     return re.sub(r'[^\w\s]', '', text.lower().strip())
 
 
+async def _sync_job_titles_master():
+    """Extract distinct job titles from naukri_applies and upsert into job_titles_master."""
+    pipeline = [
+        {"$match": {"job_title": {"$nin": [None, ""]}}},
+        {"$group": {"_id": "$job_title"}},
+    ]
+    results = await db.naukri_applies.aggregate(pipeline).to_list(None)
+    for r in results:
+        raw = str(r["_id"]).strip()
+        if not raw:
+            continue
+        normalized = _normalize_text_for_matching(raw)
+        if not normalized:
+            continue
+        existing = await db.job_titles_master.find_one({"normalized_job_title": normalized})
+        if not existing:
+            await db.job_titles_master.insert_one({
+                "raw_job_title": raw,
+                "normalized_job_title": normalized,
+                "is_mapped": False,
+            })
+
+
 async def _get_job_keyword_mappings() -> list:
     """Fetch all job keyword mappings from DB."""
     return await db.job_keyword_mapping.find({}, {"_id": 0}).to_list(None)
@@ -606,7 +630,7 @@ async def _get_job_keyword_mappings() -> list:
 
 def _resolve_normalized_job_role(job_title: str, mappings: list) -> str:
     """Given a raw job_title and keyword mappings, return the canonical job role.
-    Matches by substring (case-insensitive, punctuation-stripped).
+    Matches by exact normalized comparison (keywords are full job titles).
     Returns first match or falls back to raw job_title."""
     if not job_title:
         return job_title or "Unknown"
@@ -614,7 +638,7 @@ def _resolve_normalized_job_role(job_title: str, mappings: list) -> str:
     for mapping in mappings:
         for keyword in mapping.get("keywords", []):
             kw_normalized = _normalize_text_for_matching(keyword)
-            if kw_normalized and kw_normalized in normalized_title:
+            if kw_normalized and kw_normalized == normalized_title:
                 return mapping["job_role"]
     return job_title
 
@@ -629,6 +653,15 @@ class JobKeywordMappingUpdate(BaseModel):
     keywords: Optional[List[str]] = None
 
 
+@api_router.get("/job-titles/unmatched")
+async def get_unmatched_job_titles(user: str = Depends(get_current_user)):
+    """Return all job titles from job_titles_master that are not yet mapped."""
+    titles = await db.job_titles_master.find(
+        {"is_mapped": {"$ne": True}}, {"_id": 0, "raw_job_title": 1, "normalized_job_title": 1}
+    ).to_list(None)
+    return {"titles": [t["raw_job_title"] for t in titles]}
+
+
 @api_router.get("/job-keyword-mappings")
 async def list_job_keyword_mappings(user: str = Depends(get_current_user)):
     """List all job keyword mappings."""
@@ -640,46 +673,110 @@ async def list_job_keyword_mappings(user: str = Depends(get_current_user)):
 
 @api_router.post("/job-keyword-mappings")
 async def create_job_keyword_mapping(data: JobKeywordMappingCreate, user: str = Depends(get_current_user)):
-    """Create a new job keyword mapping."""
+    """Create a new job keyword mapping and mark keywords as mapped."""
+    keywords = [k.strip() for k in data.keywords if k.strip()]
+    if not keywords:
+        raise HTTPException(status_code=400, detail="At least one keyword is required")
     doc = {
         "job_role": data.job_role.strip(),
-        "keywords": [k.strip() for k in data.keywords if k.strip()],
+        "keywords": keywords,
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     result = await db.job_keyword_mapping.insert_one(doc)
+    # Mark keywords as mapped in job_titles_master
+    for kw in keywords:
+        norm = _normalize_text_for_matching(kw)
+        if norm:
+            await db.job_titles_master.update_many(
+                {"normalized_job_title": norm},
+                {"$set": {"is_mapped": True}}
+            )
     return {"success": True, "id": str(result.inserted_id), "job_role": doc["job_role"], "keywords": doc["keywords"]}
 
 
 @api_router.put("/job-keyword-mappings/{mapping_id}")
 async def update_job_keyword_mapping(mapping_id: str, data: JobKeywordMappingUpdate, user: str = Depends(get_current_user)):
-    """Update an existing job keyword mapping."""
+    """Update an existing job keyword mapping. Handles keyword add/remove and is_mapped flags."""
     try:
         oid = ObjectId(mapping_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid mapping ID")
+
+    old_mapping = await db.job_keyword_mapping.find_one({"_id": oid})
+    if not old_mapping:
+        raise HTTPException(status_code=404, detail="Mapping not found")
+
     updates = {}
     if data.job_role is not None:
         updates["job_role"] = data.job_role.strip()
+
+    new_keywords = None
     if data.keywords is not None:
-        updates["keywords"] = [k.strip() for k in data.keywords if k.strip()]
+        new_keywords = [k.strip() for k in data.keywords if k.strip()]
+        updates["keywords"] = new_keywords
+
     if not updates:
         raise HTTPException(status_code=400, detail="No updates provided")
-    result = await db.job_keyword_mapping.update_one({"_id": oid}, {"$set": updates})
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Mapping not found")
+
+    await db.job_keyword_mapping.update_one({"_id": oid}, {"$set": updates})
+
+    # Handle is_mapped flag changes for keywords
+    if new_keywords is not None:
+        old_keywords = set(old_mapping.get("keywords", []))
+        new_keywords_set = set(new_keywords)
+        removed = old_keywords - new_keywords_set
+        added = new_keywords_set - old_keywords
+
+        # Unmap removed keywords (only if not used by another mapping)
+        for kw in removed:
+            norm = _normalize_text_for_matching(kw)
+            if norm:
+                other = await db.job_keyword_mapping.find_one(
+                    {"keywords": kw, "_id": {"$ne": oid}}
+                )
+                if not other:
+                    await db.job_titles_master.update_many(
+                        {"normalized_job_title": norm},
+                        {"$set": {"is_mapped": False}}
+                    )
+
+        # Map newly added keywords
+        for kw in added:
+            norm = _normalize_text_for_matching(kw)
+            if norm:
+                await db.job_titles_master.update_many(
+                    {"normalized_job_title": norm},
+                    {"$set": {"is_mapped": True}}
+                )
+
     return {"success": True}
 
 
 @api_router.delete("/job-keyword-mappings/{mapping_id}")
 async def delete_job_keyword_mapping(mapping_id: str, user: str = Depends(get_current_user)):
-    """Delete a job keyword mapping."""
+    """Delete a job keyword mapping and release its keywords."""
     try:
         oid = ObjectId(mapping_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid mapping ID")
-    result = await db.job_keyword_mapping.delete_one({"_id": oid})
-    if result.deleted_count == 0:
+
+    mapping = await db.job_keyword_mapping.find_one({"_id": oid})
+    if not mapping:
         raise HTTPException(status_code=404, detail="Mapping not found")
+
+    await db.job_keyword_mapping.delete_one({"_id": oid})
+
+    # Unmap keywords (only if not used by another mapping)
+    for kw in mapping.get("keywords", []):
+        norm = _normalize_text_for_matching(kw)
+        if norm:
+            other = await db.job_keyword_mapping.find_one({"keywords": kw})
+            if not other:
+                await db.job_titles_master.update_many(
+                    {"normalized_job_title": norm},
+                    {"$set": {"is_mapped": False}}
+                )
+
     return {"success": True}
 
 
@@ -1842,6 +1939,7 @@ async def _process_naukri_file(content: bytes, filename: str) -> dict:
         except Exception:
             pass
     await reprocess_matching()
+    await _sync_job_titles_master()
     return {"success": True, "inserted": inserted, "updated": updated}
 
 
@@ -2170,6 +2268,8 @@ async def startup_event():
     await db.registered_candidates.create_index("result_status")
     await db.registered_candidates.create_index("schedule_date")
     await db.registered_candidates.create_index("otp_verified")
+    await db.job_titles_master.create_index("normalized_job_title", unique=True)
+    await db.job_titles_master.create_index("is_mapped")
     
     # Write test credentials
     try:
