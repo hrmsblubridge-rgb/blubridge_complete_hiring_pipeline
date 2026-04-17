@@ -183,8 +183,6 @@ export default function AttendedApplicants() {
             <div className="px-8 py-6">
                 {loading ? (
                     <div className="flex justify-center py-20"><SpinnerGap size={32} className="animate-spin text-zinc-500" /></div>
-                ) : data.length === 0 ? (
-                    <div className="text-center py-20 text-zinc-500" data-testid="empty-state">No attended applicants found.</div>
                 ) : (
                     <>
                         <div className="overflow-x-auto border border-zinc-800" data-testid="attended-table">
@@ -197,7 +195,11 @@ export default function AttendedApplicants() {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {data.map((row, i) => (
+                                    {data.length === 0 ? (
+                                        <tr data-testid="empty-state-row">
+                                            <td colSpan={ALL_COLS.length} className="px-4 py-16 text-center text-zinc-500">No records found.</td>
+                                        </tr>
+                                    ) : data.map((row, i) => (
                                         <tr key={i} className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors" data-testid={`attended-row-${i}`}>
                                             {ALL_COLS.map(col => (
                                                 <td key={col.key} className="px-4 py-3 whitespace-nowrap">
@@ -228,6 +230,7 @@ export default function AttendedApplicants() {
                         </div>
 
                         {/* Pagination */}
+                        {data.length > 0 && (
                         <div className="flex items-center justify-between mt-4" data-testid="pagination">
                             <div className="flex items-center gap-3">
                                 <span className="text-sm text-zinc-500">Page {page} of {totalPages} ({total} records)</span>
@@ -257,6 +260,7 @@ export default function AttendedApplicants() {
                                 </>}
                             </div>
                         </div>
+                        )}
                     </>
                 )}
             </div>

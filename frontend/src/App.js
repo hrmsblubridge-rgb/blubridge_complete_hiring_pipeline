@@ -7,6 +7,7 @@ import Dashboard from "./pages/Dashboard";
 import Summary from "./pages/Summary";
 import Applicants from "./pages/Roles";
 import AttendedApplicants from "./pages/AttendedRoles";
+import JobsKeywords from "./pages/JobsKeywords";
 import { Toaster } from "./components/ui/sonner";
 
 function App() {
@@ -20,6 +21,7 @@ function App() {
                         <Route path="/summary" element={<ProtectedRoute><Summary /></ProtectedRoute>} />
                         <Route path="/roles" element={<ProtectedRoute><Applicants /></ProtectedRoute>} />
                         <Route path="/attended-roles" element={<ProtectedRoute><AttendedApplicants /></ProtectedRoute>} />
+                        <Route path="/jobs-keywords" element={<ProtectedRoute><JobsKeywords /></ProtectedRoute>} />
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
                         <Route path="*" element={<Navigate to="/dashboard" replace />} />
                     </Routes>

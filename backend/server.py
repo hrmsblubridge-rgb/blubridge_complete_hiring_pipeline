@@ -19,6 +19,7 @@ import jwt
 import pandas as pd
 import io
 import re
+from bson import ObjectId
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -589,6 +590,99 @@ async def reprocess_matching():
     await db.registered_candidates.create_index("schedule_date")
     await db.registered_candidates.create_index("otp_verified")
 
+# ============ JOB ROLE NORMALIZATION ============
+
+def _normalize_text_for_matching(text: str) -> str:
+    """Normalize text for keyword matching: lowercase, trim, remove punctuation."""
+    if not text:
+        return ""
+    return re.sub(r'[^\w\s]', '', text.lower().strip())
+
+
+async def _get_job_keyword_mappings() -> list:
+    """Fetch all job keyword mappings from DB."""
+    return await db.job_keyword_mapping.find({}, {"_id": 0}).to_list(None)
+
+
+def _resolve_normalized_job_role(job_title: str, mappings: list) -> str:
+    """Given a raw job_title and keyword mappings, return the canonical job role.
+    Matches by substring (case-insensitive, punctuation-stripped).
+    Returns first match or falls back to raw job_title."""
+    if not job_title:
+        return job_title or "Unknown"
+    normalized_title = _normalize_text_for_matching(job_title)
+    for mapping in mappings:
+        for keyword in mapping.get("keywords", []):
+            kw_normalized = _normalize_text_for_matching(keyword)
+            if kw_normalized and kw_normalized in normalized_title:
+                return mapping["job_role"]
+    return job_title
+
+
+class JobKeywordMappingCreate(BaseModel):
+    job_role: str
+    keywords: List[str]
+
+
+class JobKeywordMappingUpdate(BaseModel):
+    job_role: Optional[str] = None
+    keywords: Optional[List[str]] = None
+
+
+@api_router.get("/job-keyword-mappings")
+async def list_job_keyword_mappings(user: str = Depends(get_current_user)):
+    """List all job keyword mappings."""
+    mappings = await db.job_keyword_mapping.find({}).to_list(None)
+    for m in mappings:
+        m["id"] = str(m.pop("_id"))
+    return {"mappings": mappings}
+
+
+@api_router.post("/job-keyword-mappings")
+async def create_job_keyword_mapping(data: JobKeywordMappingCreate, user: str = Depends(get_current_user)):
+    """Create a new job keyword mapping."""
+    doc = {
+        "job_role": data.job_role.strip(),
+        "keywords": [k.strip() for k in data.keywords if k.strip()],
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    result = await db.job_keyword_mapping.insert_one(doc)
+    return {"success": True, "id": str(result.inserted_id), "job_role": doc["job_role"], "keywords": doc["keywords"]}
+
+
+@api_router.put("/job-keyword-mappings/{mapping_id}")
+async def update_job_keyword_mapping(mapping_id: str, data: JobKeywordMappingUpdate, user: str = Depends(get_current_user)):
+    """Update an existing job keyword mapping."""
+    try:
+        oid = ObjectId(mapping_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid mapping ID")
+    updates = {}
+    if data.job_role is not None:
+        updates["job_role"] = data.job_role.strip()
+    if data.keywords is not None:
+        updates["keywords"] = [k.strip() for k in data.keywords if k.strip()]
+    if not updates:
+        raise HTTPException(status_code=400, detail="No updates provided")
+    result = await db.job_keyword_mapping.update_one({"_id": oid}, {"$set": updates})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Mapping not found")
+    return {"success": True}
+
+
+@api_router.delete("/job-keyword-mappings/{mapping_id}")
+async def delete_job_keyword_mapping(mapping_id: str, user: str = Depends(get_current_user)):
+    """Delete a job keyword mapping."""
+    try:
+        oid = ObjectId(mapping_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid mapping ID")
+    result = await db.job_keyword_mapping.delete_one({"_id": oid})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Mapping not found")
+    return {"success": True}
+
+
 # ============ DASHBOARD COUNTS ENDPOINT ============
 
 # Helpers for NULL-safe MongoDB queries
@@ -873,7 +967,7 @@ async def get_summary(
     search: str = Query(None),
     user: str = Depends(get_current_user)
 ):
-    """Job role-wise funnel statistics split by NIRF / Non-NIRF."""
+    """Job role-wise funnel statistics split by NIRF / Non-NIRF (uses normalized job roles)."""
     match = {}
     if startDate or endDate:
         date_filter = {}
@@ -882,15 +976,13 @@ async def get_summary(
         if endDate:
             date_filter["$lte"] = endDate
         match["date_of_application"] = date_filter
-    if search:
-        match["job_title"] = {"$regex": re.escape(search), "$options": "i"}
 
-    # Build college status lookup
+    # Build college status lookup and keyword mappings
     college_lookup = await _get_college_status_map()
+    mappings = await _get_job_keyword_mappings()
 
     # Get all registered candidates matching filters
-    reg_match = dict(match)
-    reg_cursor = db.registered_candidates.find(reg_match, {"_id": 0})
+    reg_cursor = db.registered_candidates.find(match, {"_id": 0})
     reg_docs = await reg_cursor.to_list(None)
 
     # Helper expressions
@@ -905,12 +997,16 @@ async def get_summary(
     def has_otp(doc):
         return bool(str(doc.get("otp_verified") or "").strip())
 
-    # Group by (job_role, nirf_category)
+    # Group by (normalized_job_role, nirf_category)
     from collections import defaultdict
     buckets = defaultdict(lambda: {"total": 0, "shortlisted": 0, "rejected": 0,
                                     "scheduled": 0, "not_scheduled": 0, "attended": 0, "not_attended": 0})
     for doc in reg_docs:
-        role = doc.get("job_title") or "Unknown"
+        raw_role = doc.get("job_title") or "Unknown"
+        role = _resolve_normalized_job_role(raw_role, mappings)
+        # Apply search filter on normalized role
+        if search and not re.search(re.escape(search), role, re.I):
+            continue
         cs = _get_college_status(doc, college_lookup)
         cat = "NIRF" if cs.startswith("NIRF - #") else "Non NIRF"
         key = (role, cat)
@@ -928,18 +1024,19 @@ async def get_summary(
         if is_rejected(doc):
             buckets[key]["rejected"] += 1
 
-    # Get naukri counts per (role, nirf_category)
+    # Get naukri counts per (normalized_role, nirf_category)
     naukri_match = {}
     if startDate or endDate:
         naukri_match["date_of_application"] = match.get("date_of_application", {})
-    if search:
-        naukri_match["job_title"] = match.get("job_title", {})
     naukri_cursor = db.naukri_applies.find(naukri_match if naukri_match else {}, {"_id": 0, "job_title": 1, "email": 1, "phone": 1, "ug_university": 1, "pg_university": 1})
     naukri_docs = await naukri_cursor.to_list(None)
 
     naukri_buckets = defaultdict(set)
     for doc in naukri_docs:
-        role = doc.get("job_title") or "Unknown"
+        raw_role = doc.get("job_title") or "Unknown"
+        role = _resolve_normalized_job_role(raw_role, mappings)
+        if search and not re.search(re.escape(search), role, re.I):
+            continue
         cs = _get_college_status(doc, college_lookup)
         cat = "NIRF" if cs.startswith("NIRF - #") else "Non NIRF"
         key = (role, cat)
@@ -971,14 +1068,19 @@ async def get_summary(
 
 @api_router.get("/job-roles")
 async def get_job_roles(user: str = Depends(get_current_user)):
-    """Unique job roles with registered applicant counts"""
-    pipeline = [
-        {"$match": {"job_title": {"$nin": [None, ""]}}},
-        {"$group": {"_id": "$job_title", "count": {"$sum": 1}}},
-        {"$sort": {"count": -1}},
-        {"$project": {"_id": 0, "job_role": "$_id", "count": 1}}
-    ]
-    results = await db.registered_candidates.aggregate(pipeline).to_list(None)
+    """Unique normalized job roles with registered applicant counts"""
+    mappings = await _get_job_keyword_mappings()
+    cursor = db.registered_candidates.find(
+        {"job_title": {"$nin": [None, ""]}},
+        {"_id": 0, "job_title": 1}
+    )
+    docs = await cursor.to_list(None)
+    from collections import Counter
+    role_counts = Counter()
+    for doc in docs:
+        normalized = _resolve_normalized_job_role(doc.get("job_title"), mappings)
+        role_counts[normalized] += 1
+    results = [{"job_role": role, "count": count} for role, count in role_counts.most_common()]
     return {"job_roles": results}
 
 
@@ -1078,19 +1180,15 @@ async def get_global_applicants(
     limit: int = Query(100, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Global registered applicants table with job role, date type, search, and college status filters."""
+    """Global registered applicants table with normalized job role, date type, search, and college status filters."""
     match = {}
-
-    # Job role filter
-    if jobRole and jobRole.strip() and jobRole.strip().lower() != "all jobs":
-        match["job_title"] = {"$regex": f"^{re.escape(jobRole.strip())}$", "$options": "i"}
 
     # Date filter based on dateType
     if startDate and endDate:
         date_field = "last_update" if dateType == "Registered" else "schedule_date"
         match[date_field] = {"$gte": startDate, "$lte": endDate}
 
-    # Search filter
+    # Search filter (search job_title in DB, normalized check done in-memory)
     if search:
         search_re = {"$regex": re.escape(search), "$options": "i"}
         match["$or"] = [
@@ -1098,13 +1196,14 @@ async def get_global_applicants(
             {"phone": search_re}, {"job_title": search_re}
         ]
 
-    # Build college lookup once
+    # Build college lookup and keyword mappings
     college_lookup = await _get_college_status_map()
+    mappings = await _get_job_keyword_mappings()
 
     total_cursor = db.registered_candidates.find(match, {"_id": 0}).sort("name", 1)
     all_docs = await total_cursor.to_list(None)
 
-    # Compute college_status and apply filter
+    # Compute college_status and apply filters
     applicants = []
     for doc in all_docs:
         cs = _get_college_status(doc, college_lookup)
@@ -1119,6 +1218,15 @@ async def get_global_applicants(
                 if cs != "Non NIRF":
                     continue
             elif cs != fval:
+                continue
+
+        # Normalize job role
+        raw_title = doc.get("job_title") or ""
+        normalized_role = _resolve_normalized_job_role(raw_title, mappings)
+
+        # Job role filter (on normalized role)
+        if jobRole and jobRole.strip() and jobRole.strip().lower() != "all jobs":
+            if normalized_role.lower() != jobRole.strip().lower():
                 continue
 
         email_type = str(doc.get("email_type") or "").strip().lower()
@@ -1158,7 +1266,7 @@ async def get_global_applicants(
             "college_status": cs,
             "college": _get_college_name(doc, college_lookup),
             "degree": doc.get("degree") or "-",
-            "job_role": doc.get("job_role") or doc.get("job_title") or "-",
+            "job_role": normalized_role or "-",
             "registered_status": reg_status,
             "registered_date": doc.get("last_update") or "-",
             "schedule_date": doc.get("schedule_date") or "-",
@@ -1182,19 +1290,22 @@ async def get_global_applicants(
 
 @api_router.get("/attended-roles")
 async def get_attended_roles(user: str = Depends(get_current_user)):
-    """Job role boxes with attended applicant counts."""
-    pipeline = [
-        {"$match": {
-            "email_type": {"$regex": "shortlist", "$options": "i"},
-            "schedule_date": _not_null_filter,
-            "schedule_time": _not_null_filter,
-            "otp_verified": _not_null_filter,
-        }},
-        {"$group": {"_id": "$job_title", "count": {"$sum": 1}}},
-        {"$sort": {"_id": 1}},
-        {"$project": {"_id": 0, "job_role": "$_id", "count": 1}}
-    ]
-    roles = await db.registered_candidates.aggregate(pipeline).to_list(None)
+    """Job role boxes with attended applicant counts (normalized)."""
+    mappings = await _get_job_keyword_mappings()
+    match = {
+        "email_type": {"$regex": "shortlist", "$options": "i"},
+        "schedule_date": _not_null_filter,
+        "schedule_time": _not_null_filter,
+        "otp_verified": _not_null_filter,
+    }
+    cursor = db.registered_candidates.find(match, {"_id": 0, "job_title": 1})
+    docs = await cursor.to_list(None)
+    from collections import Counter
+    role_counts = Counter()
+    for doc in docs:
+        normalized = _resolve_normalized_job_role(doc.get("job_title"), mappings)
+        role_counts[normalized] += 1
+    roles = [{"job_role": role, "count": count} for role, count in sorted(role_counts.items())]
     return {"job_roles": roles}
 
 
@@ -1210,17 +1321,12 @@ async def get_attended_applicants(
     limit: int = Query(100, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Global attended applicants table with scores."""
+    """Global attended applicants table with scores (uses normalized job roles)."""
 
     # Base match: registered candidates who attended (otp_verified NOT NULL)
     match = {
         "otp_verified": _not_null_filter,
     }
-
-    # Optional job role filter
-    if jobRole and jobRole.strip() and jobRole.strip().lower() != "all jobs":
-        role = jobRole.strip()
-        match["job_title"] = {"$regex": f"^{re.escape(role)}$", "$options": "i"}
 
     # Date filter on schedule_date, only when BOTH dates provided
     if startDate and endDate:
@@ -1241,8 +1347,9 @@ async def get_attended_applicants(
         if sp:
             score_by_phone.setdefault(sp, []).append(sr)
 
-    # Build college lookup
+    # Build college lookup and keyword mappings
     college_lookup = await _get_college_status_map()
+    mappings = await _get_job_keyword_mappings()
 
     # Fetch all matching attended candidates (pre-filter, then apply round filter in-memory)
     cursor = db.registered_candidates.find(match, {"_id": 0}).sort("name", 1)
@@ -1262,6 +1369,15 @@ async def get_attended_applicants(
                 if cs != "Non NIRF":
                     continue
             elif cs != fval:
+                continue
+
+        # Normalize job role
+        raw_title = doc.get("job_title") or ""
+        normalized_role = _resolve_normalized_job_role(raw_title, mappings)
+
+        # Job role filter (on normalized role)
+        if jobRole and jobRole.strip() and jobRole.strip().lower() != "all jobs":
+            if normalized_role.lower() != jobRole.strip().lower():
                 continue
 
         doc_email = normalize_email(doc.get("email"))
@@ -1299,7 +1415,7 @@ async def get_attended_applicants(
             "degree": doc.get("degree") or "-",
             "course": doc.get("course") or "-",
             "year_of_graduation": doc.get("year_of_graduation") or "-",
-            "job_role": doc.get("job_role") or doc.get("job_title") or "-",
+            "job_role": normalized_role or "-",
             "schedule_date": doc.get("schedule_date") or "-",
             "result_status": doc.get("result_status") or "-",
         }

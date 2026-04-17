@@ -132,10 +132,6 @@ export default function Summary() {
                     <div className="flex items-center justify-center py-20" data-testid="loading-spinner">
                         <SpinnerGap size={32} className="animate-spin text-zinc-500" />
                     </div>
-                ) : data.length === 0 ? (
-                    <div className="text-center py-20 text-zinc-500" data-testid="empty-state">
-                        No data available. Upload both datasets first.
-                    </div>
                 ) : (
                     <div className="overflow-x-auto border border-zinc-800" data-testid="summary-table">
                         <table className="w-full text-sm">
@@ -149,25 +145,35 @@ export default function Summary() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {data.map((row, i) => (
-                                    <tr key={i} className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors"
-                                        data-testid={`summary-row-${i}`}>
-                                        {COLUMNS.map(col => (
-                                            <td key={col.key} className={`px-4 py-3 whitespace-nowrap ${col.key === 'job_role' ? 'font-medium' : 'text-zinc-400 tabular-nums'}`}>
-                                                {row[col.key] ?? '-'}
-                                            </td>
-                                        ))}
-                                    </tr>
-                                ))}
-                                {/* Totals row */}
-                                <tr className="bg-zinc-900/70 font-medium border-t border-zinc-700" data-testid="summary-totals-row">
-                                    <td className="px-4 py-3">TOTAL</td>
-                                    {COLUMNS.slice(1).map(col => (
-                                        <td key={col.key} className="px-4 py-3 tabular-nums">
-                                            {data.reduce((sum, row) => sum + (row[col.key] || 0), 0)}
+                                {data.length === 0 ? (
+                                    <tr data-testid="empty-state-row">
+                                        <td colSpan={COLUMNS.length} className="px-4 py-16 text-center text-zinc-500">
+                                            No data available. Upload both datasets first.
                                         </td>
-                                    ))}
-                                </tr>
+                                    </tr>
+                                ) : (
+                                    <>
+                                        {data.map((row, i) => (
+                                            <tr key={i} className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors"
+                                                data-testid={`summary-row-${i}`}>
+                                                {COLUMNS.map(col => (
+                                                    <td key={col.key} className={`px-4 py-3 whitespace-nowrap ${col.key === 'job_role' ? 'font-medium' : 'text-zinc-400 tabular-nums'}`}>
+                                                        {row[col.key] ?? '-'}
+                                                    </td>
+                                                ))}
+                                            </tr>
+                                        ))}
+                                        {/* Totals row */}
+                                        <tr className="bg-zinc-900/70 font-medium border-t border-zinc-700" data-testid="summary-totals-row">
+                                            <td className="px-4 py-3">TOTAL</td>
+                                            {COLUMNS.slice(1).map(col => (
+                                                <td key={col.key} className="px-4 py-3 tabular-nums">
+                                                    {data.reduce((sum, row) => sum + (row[col.key] || 0), 0)}
+                                                </td>
+                                            ))}
+                                        </tr>
+                                    </>
+                                )}
                             </tbody>
                         </table>
                     </div>
