@@ -20,54 +20,41 @@ Build a comprehensive Recruitment Analytics platform that handles bulk file uplo
 - Dashboard with upload buttons and navigation
 
 ### Phase 2: Analytics Views (Completed)
-- **Summary Statistics**: Role-wise funnel breakdown split by NIRF/Non-NIRF
-- **View Applicants (Roles.js)**: Global registered table with filters + pagination
-- **View Attended (AttendedRoles.js)**: Attended applicants with score columns, round filter, pagination
+- Summary Statistics, View Applicants, View Attended — with filters + pagination
 
 ### Phase 3: Enhancements (Completed)
-- Bulk upload system with sequential background queue (FIFO)
-- College Rank List upload + NIRF classification
-- Date filter fix on schedule_date
-- Pagination with configurable page size (10-500)
+- Date filter fix, pagination with configurable page size
 
 ### Phase 4: Job Role Normalization (Completed - Apr 17, 2026)
-- `job_keyword_mapping` collection with CRUD endpoints
-- Applied to all query endpoints (summary, applicants, attended, job-roles)
-- Jobs & Keywords UI page at `/jobs-keywords`
-- Table headers always visible (empty state fix)
+- Data-driven keyword mapping from Naukri uploads
+- Checkbox-based UI at /jobs-keywords
+- Exact match normalization on all query endpoints
 
 ### Phase 5: Dynamic Multi-Criteria College Matching (Completed - Apr 17, 2026)
-- Structured multi-criteria matching: base name + city/state
-- Confidence levels: HIGH (base+location), MEDIUM (single base), LOW (ambiguous)
+- Base name + city/state matching with confidence levels (HIGH/MEDIUM/LOW)
 - No hardcoded college names
 
-### Phase 6: Data-Driven Keyword Mapping (Completed - Apr 17, 2026)
-- **job_titles_master collection**: Auto-populated from Naukri uploads with distinct job titles
-- **_sync_job_titles_master()**: Extracts and deduplicates titles on each Naukri upload
-- **GET /api/job-titles/unmatched**: Returns unmapped job titles (is_mapped=false)
-- **Checkbox-based UI**: Replaced manual keyword typing with checkbox selection from actual data
-- **is_mapped tracking**: Keywords marked as mapped when assigned to a canonical role
-- **Release on delete**: Keywords return to unmatched pool when mapping is deleted
-- **Exact match normalization**: Changed from substring to exact match on normalized job titles
-- **Duplicate prevention**: A keyword maps to only ONE canonical role
+### Phase 6: DB-Driven Bulk Upload Queue (Completed - Apr 20, 2026)
+- **Replaced** in-memory queue with persistent `bulk_upload_queue` MongoDB collection
+- **Background worker**: `_bg_queue_worker()` runs as asyncio task, polls every 3s, processes ONE file at a time
+- **Fault-tolerant**: On startup, stuck "processing" records reset to "pending"
+- **Independent of UI**: Processing continues even if browser/app is closed
+- **File storage**: `/app/uploads/{type}/` → `/app/processed_files/{type}/` on success
+- **Status API**: Returns pending, processed (with results), and failed (with errors) per type
+- **Frontend**: Refresh button (no polling), clickable processed_files folder, failed files section
 
 ## DB Schema
-- `users`: {email, password, role}
-- `naukri_applies`: {email, phone, job_title, date_of_application, name, ug_university, pg_university, ...}
-- `pipeline_data`: {email, phone, job_role, email_type, schedule_date, schedule_time, otp_verified, result_status, ...}
-- `registered_candidates`: Merged naukri + pipeline data (rebuilt on each upload)
-- `score_sheet`: {email, phone, score, round_name}
-- `college_rank_list`: {rank, college_name, short_name, city, state}
+- `naukri_applies`, `pipeline_data`, `registered_candidates`, `score_sheet`, `college_rank_list`
 - `job_keyword_mapping`: {job_role, keywords[], created_at}
 - `job_titles_master`: {raw_job_title, normalized_job_title, is_mapped}
+- `bulk_upload_queue`: {file_name, file_path, file_type, status, created_at, updated_at, error_message, result}
 
 ## Key API Endpoints
-- `POST /api/login` / `POST /api/logout` / `GET /api/auth/check`
-- `POST /api/upload/naukri` / `POST /api/upload/pipeline` / `POST /api/upload/scoresheet` / `POST /api/upload/college-rank`
-- `POST /api/bulk-upload/{type}` / `GET /api/bulk-upload/status`
-- `GET /api/summary` / `GET /api/job-roles` / `GET /api/applicants` / `GET /api/attended`
-- `GET/POST/PUT/DELETE /api/job-keyword-mappings`
-- `GET /api/job-titles/unmatched`
+- Auth: POST /api/login, POST /api/logout, GET /api/auth/check
+- Upload: POST /api/upload/{naukri,pipeline,scoresheet,college-rank}
+- Bulk: POST /api/bulk-upload/{type}, GET /api/bulk-upload/status, DELETE /api/bulk-upload/{type}/{id}
+- Analytics: GET /api/summary, /api/job-roles, /api/applicants, /api/attended
+- Keywords: GET/POST/PUT/DELETE /api/job-keyword-mappings, GET /api/job-titles/unmatched
 
 ## Prioritized Backlog
 ### P1
