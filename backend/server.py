@@ -1879,16 +1879,233 @@ def _classify_college(doc: dict, rank_lookup: dict) -> dict:
             "match_confidence": ug_match.get("confidence") or pg_match.get("confidence")}
 
 UPLOAD_BASE = Path("/app/uploads")
-BULK_TYPES = {
-    "naukri": {"pending": UPLOAD_BASE / "naukri" / "pending", "processed": UPLOAD_BASE / "naukri" / "processed"},
-    "pipeline": {"pending": UPLOAD_BASE / "pipeline" / "pending", "processed": UPLOAD_BASE / "pipeline" / "processed"},
-    "score": {"pending": UPLOAD_BASE / "score" / "pending", "processed": UPLOAD_BASE / "score" / "processed"},
-}
+PROCESSED_BASE = Path("/app/processed_files")
+BULK_TYPES_LIST = ["naukri", "pipeline", "score"]
 
 # Create directories on module load
-for t in BULK_TYPES.values():
-    t["pending"].mkdir(parents=True, exist_ok=True)
-    t["processed"].mkdir(parents=True, exist_ok=True)
+for _bt in BULK_TYPES_LIST:
+    (UPLOAD_BASE / _bt).mkdir(parents=True, exist_ok=True)
+    (PROCESSED_BASE / _bt).mkdir(parents=True, exist_ok=True)
+
+
+
+# ============ DB-DRIVEN BACKGROUND QUEUE WORKER ============
+
+_worker_running = False
+
+
+async def _bg_queue_worker():
+    """Persistent background worker: continuously polls bulk_upload_queue for pending jobs.
+    Processes ONE file at a time, sequentially. Runs independent of UI/browser."""
+    global _worker_running
+    if _worker_running:
+        return
+    _worker_running = True
+    logger.info("Background queue worker started")
+    try:
+        while True:
+            # Fetch next pending job (FIFO)
+            job = await db.bulk_upload_queue.find_one(
+                {"status": "pending"},
+                sort=[("created_at", 1)]
+            )
+            if not job:
+                await asyncio.sleep(3)
+                continue
+
+            job_id = job["_id"]
+            file_type = job["file_type"]
+            file_path = job["file_path"]
+            file_name = job["file_name"]
+
+            # Mark as processing
+            await db.bulk_upload_queue.update_one(
+                {"_id": job_id},
+                {"$set": {"status": "processing", "updated_at": datetime.now(timezone.utc).isoformat()}}
+            )
+            logger.info(f"Queue: processing {file_type}/{file_name}")
+
+            try:
+                path = Path(file_path)
+                if not path.exists():
+                    raise FileNotFoundError(f"File not found: {file_path}")
+
+                content = path.read_bytes()
+                process_fn = _PROCESS_FN.get(file_type)
+                if not process_fn:
+                    raise ValueError(f"Unknown file type: {file_type}")
+
+                result = await process_fn(content, file_name)
+
+                if result.get("success"):
+                    # Move file to processed_files directory
+                    dest = PROCESSED_BASE / file_type / path.name
+                    shutil.move(str(path), str(dest))
+                    await db.bulk_upload_queue.update_one(
+                        {"_id": job_id},
+                        {"$set": {
+                            "status": "completed",
+                            "result": result,
+                            "updated_at": datetime.now(timezone.utc).isoformat()
+                        }}
+                    )
+                    logger.info(f"Queue: completed {file_type}/{file_name}")
+                else:
+                    await db.bulk_upload_queue.update_one(
+                        {"_id": job_id},
+                        {"$set": {
+                            "status": "failed",
+                            "error_message": result.get("error", "Processing returned failure"),
+                            "updated_at": datetime.now(timezone.utc).isoformat()
+                        }}
+                    )
+                    logger.warning(f"Queue: failed {file_type}/{file_name} — {result}")
+
+            except Exception as e:
+                logger.error(f"Queue: error {file_type}/{file_name} — {e}")
+                await db.bulk_upload_queue.update_one(
+                    {"_id": job_id},
+                    {"$set": {
+                        "status": "failed",
+                        "error_message": str(e),
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+
+            # Small delay between jobs
+            await asyncio.sleep(0.5)
+
+    except asyncio.CancelledError:
+        logger.info("Background queue worker stopped")
+    finally:
+        _worker_running = False
+
+
+# ============ BULK UPLOAD ENDPOINTS ============
+
+@api_router.get("/bulk-upload/status")
+async def bulk_upload_status(user: str = Depends(get_current_user)):
+    """Return queue status for all types: pending, processing, completed, failed."""
+    result = {}
+    for utype in BULK_TYPES_LIST:
+        # Pending + Processing from DB
+        active = await db.bulk_upload_queue.find(
+            {"file_type": utype, "status": {"$in": ["pending", "processing"]}},
+            {"_id": 1, "file_name": 1, "file_path": 1, "status": 1, "created_at": 1, "error_message": 1}
+        ).sort("created_at", 1).to_list(None)
+        pending = []
+        for j in active:
+            size = 0
+            try:
+                p = Path(j["file_path"])
+                if p.exists():
+                    size = p.stat().st_size
+            except Exception:
+                pass
+            pending.append({
+                "id": str(j["_id"]),
+                "name": j["file_name"],
+                "status": j["status"],
+                "size": size,
+            })
+
+        # Completed from DB
+        completed = await db.bulk_upload_queue.find(
+            {"file_type": utype, "status": "completed"},
+            {"_id": 1, "file_name": 1, "file_path": 1, "result": 1, "updated_at": 1}
+        ).sort("updated_at", -1).to_list(None)
+        processed = []
+        for j in completed:
+            size = 0
+            try:
+                p = PROCESSED_BASE / utype
+                for fp in p.iterdir():
+                    if fp.name.endswith(j["file_name"]) or j["file_name"] in fp.name:
+                        size = fp.stat().st_size
+                        break
+            except Exception:
+                pass
+            processed.append({
+                "id": str(j["_id"]),
+                "name": j["file_name"],
+                "size": size,
+                "result": j.get("result"),
+            })
+
+        # Failed from DB
+        failed_docs = await db.bulk_upload_queue.find(
+            {"file_type": utype, "status": "failed"},
+            {"_id": 1, "file_name": 1, "error_message": 1, "updated_at": 1}
+        ).sort("updated_at", -1).to_list(None)
+        failed = [{"id": str(j["_id"]), "name": j["file_name"],
+                    "error": j.get("error_message", "Unknown error")} for j in failed_docs]
+
+        result[utype] = {"pending": pending, "processed": processed, "failed": failed}
+    return result
+
+
+@api_router.post("/bulk-upload/process-now")
+async def trigger_bulk_process(user: str = Depends(get_current_user)):
+    """Manual trigger — worker is always running, this confirms status."""
+    pending_count = await db.bulk_upload_queue.count_documents({"status": "pending"})
+    processing_count = await db.bulk_upload_queue.count_documents({"status": "processing"})
+    return {"success": True, "message": "Worker is running", "pending": pending_count, "processing": processing_count}
+
+
+@api_router.post("/bulk-upload/{upload_type}")
+async def bulk_upload_files(
+    upload_type: str,
+    files: List[UploadFile] = File(...),
+    user: str = Depends(get_current_user)
+):
+    """Save files to disk and enqueue DB records. Worker processes them in background."""
+    if upload_type not in BULK_TYPES_LIST:
+        raise HTTPException(status_code=400, detail=f"Invalid type: {upload_type}. Must be naukri, pipeline, or score")
+    upload_dir = UPLOAD_BASE / upload_type
+    saved = []
+    for f in files:
+        if not f.filename.lower().endswith(('.csv', '.xlsx')):
+            continue
+        content = await f.read()
+        safe_name = f"{int(datetime.now(timezone.utc).timestamp())}_{f.filename}"
+        dest = upload_dir / safe_name
+        dest.write_bytes(content)
+        # Insert into DB queue
+        await db.bulk_upload_queue.insert_one({
+            "file_name": f.filename,
+            "file_path": str(dest),
+            "file_type": upload_type,
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "error_message": None,
+            "result": None,
+        })
+        saved.append(safe_name)
+    return {"success": True, "saved": saved, "count": len(saved)}
+
+
+@api_router.delete("/bulk-upload/{upload_type}/{queue_id}")
+async def delete_bulk_file(upload_type: str, queue_id: str, user: str = Depends(get_current_user)):
+    """Delete a pending file from queue and disk."""
+    try:
+        oid = ObjectId(queue_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid queue ID")
+    job = await db.bulk_upload_queue.find_one({"_id": oid})
+    if not job:
+        raise HTTPException(status_code=404, detail="Queue entry not found")
+    if job["status"] == "processing":
+        raise HTTPException(status_code=409, detail="Cannot delete file while processing")
+    # Remove file from disk
+    try:
+        path = Path(job["file_path"])
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
+    await db.bulk_upload_queue.delete_one({"_id": oid})
+    return {"success": True, "deleted": job["file_name"]}
 
 
 async def _process_naukri_file(content: bytes, filename: str) -> dict:
@@ -2039,120 +2256,6 @@ _PROCESS_FN = {
     "score": _process_score_file,
 }
 
-# Track processing status per file
-_bulk_file_status = {}  # key: "type/filename" -> {"status": "pending"|"processing"|"processed"|"failed", "result": {...}}
-_is_processing = False  # Global lock — only one file at a time
-
-
-async def _process_queue():
-    """Sequential queue worker: process ONE pending file at a time, then recurse."""
-    global _is_processing
-    if _is_processing:
-        return
-    # Find next pending file across all types (FIFO by filename/timestamp)
-    next_file = None
-    next_type = None
-    for utype, dirs in BULK_TYPES.items():
-        for filepath in sorted(dirs["pending"].iterdir()):
-            if not filepath.is_file():
-                continue
-            key = f"{utype}/{filepath.name}"
-            status = _bulk_file_status.get(key, {}).get("status", "pending")
-            if status == "pending":
-                next_file = filepath
-                next_type = utype
-                break
-        if next_file:
-            break
-    if not next_file:
-        return
-    _is_processing = True
-    key = f"{next_type}/{next_file.name}"
-    _bulk_file_status[key] = {"status": "processing", "result": None}
-    try:
-        content = next_file.read_bytes()
-        process_fn = _PROCESS_FN[next_type]
-        result = await process_fn(content, next_file.name)
-        processed_dir = BULK_TYPES[next_type]["processed"]
-        if result.get("success"):
-            shutil.move(str(next_file), str(processed_dir / next_file.name))
-            _bulk_file_status[key] = {"status": "processed", "result": result}
-            logger.info(f"Queue: processed {key}")
-        else:
-            _bulk_file_status[key] = {"status": "failed", "result": result}
-            logger.warning(f"Queue: failed {key} — {result}")
-    except Exception as e:
-        logger.error(f"Queue: error {key} — {e}")
-        _bulk_file_status[key] = {"status": "failed", "result": {"error": str(e)}}
-    _is_processing = False
-    # Immediately process next file if any
-    asyncio.create_task(_process_queue())
-
-
-@api_router.post("/bulk-upload/process-now")
-async def trigger_bulk_process(user: str = Depends(get_current_user)):
-    """Manually trigger immediate sequential processing of all pending files."""
-    asyncio.create_task(_process_queue())
-    return {"success": True, "message": "Queue processing triggered"}
-
-
-@api_router.post("/bulk-upload/{upload_type}")
-async def bulk_upload_files(
-    upload_type: str,
-    files: List[UploadFile] = File(...),
-    user: str = Depends(get_current_user)
-):
-    """Save multiple files to pending directory and trigger queue."""
-    if upload_type not in BULK_TYPES:
-        raise HTTPException(status_code=400, detail=f"Invalid type: {upload_type}. Must be naukri, pipeline, or score")
-    pending_dir = BULK_TYPES[upload_type]["pending"]
-    saved = []
-    for f in files:
-        if not f.filename.lower().endswith(('.csv', '.xlsx')):
-            continue
-        content = await f.read()
-        safe_name = f"{int(datetime.now(timezone.utc).timestamp())}_{f.filename}"
-        dest = pending_dir / safe_name
-        dest.write_bytes(content)
-        _bulk_file_status[f"{upload_type}/{safe_name}"] = {"status": "pending", "result": None}
-        saved.append(safe_name)
-    # Trigger queue immediately after upload
-    asyncio.create_task(_process_queue())
-    return {"success": True, "saved": saved, "count": len(saved)}
-
-
-@api_router.delete("/bulk-upload/{upload_type}/{filename}")
-async def delete_bulk_file(upload_type: str, filename: str, user: str = Depends(get_current_user)):
-    """Delete a file from the pending directory (blocked if processing)."""
-    if upload_type not in BULK_TYPES:
-        raise HTTPException(status_code=400, detail="Invalid type")
-    key = f"{upload_type}/{filename}"
-    if _bulk_file_status.get(key, {}).get("status") == "processing":
-        raise HTTPException(status_code=409, detail="Cannot delete file while processing")
-    filepath = BULK_TYPES[upload_type]["pending"] / filename
-    if not filepath.exists():
-        raise HTTPException(status_code=404, detail="File not found in pending")
-    filepath.unlink()
-    _bulk_file_status.pop(key, None)
-    return {"success": True, "deleted": filename}
-
-
-@api_router.get("/bulk-upload/status")
-async def bulk_upload_status(user: str = Depends(get_current_user)):
-    """Return pending and processed file lists for all types."""
-    result = {}
-    for utype, dirs in BULK_TYPES.items():
-        pending = []
-        for f in sorted(dirs["pending"].iterdir()):
-            if f.is_file():
-                key = f"{utype}/{f.name}"
-                status_info = _bulk_file_status.get(key, {"status": "pending", "result": None})
-                pending.append({"name": f.name, "size": f.stat().st_size, "status": status_info["status"],
-                                "result": status_info.get("result")})
-        processed = [{"name": f.name, "size": f.stat().st_size} for f in sorted(dirs["processed"].iterdir()) if f.is_file()]
-        result[utype] = {"pending": pending, "processed": processed}
-    return result
-
 
 @api_router.post("/reprocess")
 async def trigger_reprocess(user: str = Depends(get_current_user)):
@@ -2270,7 +2373,16 @@ async def startup_event():
     await db.registered_candidates.create_index("otp_verified")
     await db.job_titles_master.create_index("normalized_job_title", unique=True)
     await db.job_titles_master.create_index("is_mapped")
+    await db.bulk_upload_queue.create_index([("status", 1), ("created_at", 1)])
     
+    # Resume: reset any stuck "processing" records to "pending"
+    stuck = await db.bulk_upload_queue.update_many(
+        {"status": "processing"},
+        {"$set": {"status": "pending", "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    if stuck.modified_count > 0:
+        logger.info(f"Reset {stuck.modified_count} stuck processing jobs to pending")
+
     # Write test credentials
     try:
         os.makedirs("/app/memory", exist_ok=True)
@@ -2282,8 +2394,9 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to write test credentials: {e}")
 
-    # Bulk upload queue is event-driven (no polling). Triggered on file upload and after each completion.
-    logger.info("Sequential bulk upload queue system ready")
+    # Start persistent background queue worker
+    asyncio.create_task(_bg_queue_worker())
+    logger.info("DB-driven background queue worker launched")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

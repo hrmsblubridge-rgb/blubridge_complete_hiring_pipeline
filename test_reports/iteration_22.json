@@ -1,0 +1,91 @@
+{
+  "summary": "Iteration 22: Complete E2E testing of DB-driven Bulk Upload Queue System. All 19 backend tests pass, all frontend tests pass. The new system processes files sequentially via a persistent background worker that runs independent of UI.",
+  
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  
+  "passed_tests": {
+    "backend": [
+      "GET /api/bulk-upload/status - returns pending, processed, failed arrays per type (naukri, pipeline, score)",
+      "GET /api/bulk-upload/status - requires authentication (401 without auth)",
+      "POST /api/bulk-upload/process-now - returns worker status with pending/processing counts",
+      "POST /api/bulk-upload/naukri - uploads file and creates queue record in bulk_upload_queue collection",
+      "POST /api/bulk-upload/invalid_type - returns 400 for invalid upload type",
+      "POST /api/bulk-upload/pipeline - uploads file successfully",
+      "POST /api/bulk-upload/score - uploads file successfully",
+      "DELETE /api/bulk-upload/{type}/{queue_id} - removes pending file from queue and disk",
+      "DELETE with invalid queue ID returns 400",
+      "DELETE with non-existent queue ID returns 404",
+      "Background worker processes pending files within ~5 seconds",
+      "Processed files include result with inserted/updated counts",
+      "GET /api/summary - existing endpoint still works",
+      "GET /api/applicants - existing endpoint still works",
+      "GET /api/attended - existing endpoint still works",
+      "GET /api/job-roles - existing endpoint still works",
+      "POST /api/upload/naukri (direct upload) - still works",
+      "Invalid file shows error message in failed list",
+      "Queue status shows correct counts for all types"
+    ],
+    "frontend": [
+      "Bulk upload modal opens from Dashboard via 'Bulk' button",
+      "Modal has 'Upload File(s)' button (data-testid='bulk-file-input-label')",
+      "Modal has 'Refresh' button (data-testid='refresh-btn')",
+      "Modal shows 'Processing is automatic & sequential' message",
+      "PENDING / PROCESSING section shows count and file list",
+      "No pending files message shown when queue is empty",
+      "FAILED section shows when failures exist with error messages",
+      "processed_files folder is clickable to expand/collapse (data-testid='toggle-processed-btn')",
+      "Processed files list shows file names, sizes, and insert/update counts",
+      "Modal close button works (data-testid='bulk-modal-close')",
+      "Refresh button fetches latest status",
+      "All three bulk upload types work (Naukri, Pipeline, Score)"
+    ]
+  },
+  
+  "test_report_links": [
+    "/app/backend/tests/test_iteration22_bulk_upload_queue.py",
+    "/app/test_reports/pytest/pytest_results_iteration22.xml"
+  ],
+  
+  "action_items": [],
+  
+  "critical_code_review_comments": [
+    "Background worker (_bg_queue_worker) runs as asyncio task started at app startup",
+    "Worker polls every 3 seconds for pending jobs (FIFO order)",
+    "Files stored in /app/uploads/{type}/ and moved to /app/processed_files/{type}/ on success",
+    "Route ordering: /bulk-upload/status and /bulk-upload/process-now registered BEFORE /bulk-upload/{upload_type} to avoid FastAPI path conflicts",
+    "On startup, stuck 'processing' records are reset to 'pending' (startup_event)",
+    "DELETE returns 409 if file status is 'processing' (cannot delete while processing)",
+    "Frontend uses manual refresh button instead of polling (no automatic polling)"
+  ],
+  
+  "updated_files": [
+    "/app/backend/tests/test_iteration22_bulk_upload_queue.py"
+  ],
+  
+  "success_rate": {
+    "backend": "100% (19/19 tests passed)",
+    "frontend": "100% (12/12 tests passed)"
+  },
+  
+  "test_credentials": {
+    "username": "admin",
+    "password": "admin"
+  },
+  
+  "seed_data_creation": "Test data created via bulk upload API with TEST_ prefixed files. Test files uploaded: test_bulk_upload.csv, test_pipeline_bulk.csv, test_score_bulk.csv, test_worker_processing.csv, test_invalid_file.csv (failed). Processed files moved to /app/processed_files/{type}/.",
+  
+  "retest_needed": false,
+  
+  "should_main_agent_self_test": false,
+  
+  "context_for_next_testing_agent": "Bulk Upload Queue System fully tested and working. Key features: (1) POST /api/bulk-upload/{type} uploads files and creates queue records, (2) GET /api/bulk-upload/status returns pending/processed/failed arrays per type, (3) Background worker processes files sequentially every 3 seconds, (4) Files move from /app/uploads/{type}/ to /app/processed_files/{type}/ on success, (5) Failed files show error_message in status, (6) DELETE returns 409 if file is processing, (7) On startup, stuck processing records reset to pending. Frontend data-testid attributes: bulk-modal, bulk-file-input, bulk-file-input-label, refresh-btn, pending-list, pending-file-{id}, delete-{id}, toggle-processed-btn, processed-list, failed-list, failed-file-{id}, no-pending, no-processed, bulk-modal-close."
+}

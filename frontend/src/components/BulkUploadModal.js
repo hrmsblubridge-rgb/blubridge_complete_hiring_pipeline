@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { X, Upload, Trash, FolderOpen, SpinnerGap, ArrowClockwise, CheckCircle, WarningCircle, Clock } from '@phosphor-icons/react';
+import { X, Upload, Trash, FolderOpen, SpinnerGap, ArrowClockwise, CheckCircle, WarningCircle, Clock, Folder } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -10,8 +10,9 @@ const TYPE_LABELS = { naukri: 'Naukri Applies', pipeline: 'HR Internal Pipeline'
 export default function BulkUploadModal({ type, onClose }) {
     const [pending, setPending] = useState([]);
     const [processed, setProcessed] = useState([]);
+    const [failed, setFailed] = useState([]);
     const [uploading, setUploading] = useState(false);
-    const [processing, setProcessing] = useState(false);
+    const [showProcessed, setShowProcessed] = useState(false);
     const fileRef = useRef(null);
 
     const fetchStatus = useCallback(async () => {
@@ -20,13 +21,12 @@ export default function BulkUploadModal({ type, onClose }) {
             const data = res.data[type] || {};
             setPending(data.pending || []);
             setProcessed(data.processed || []);
+            setFailed(data.failed || []);
         } catch {}
     }, [type]);
 
     useEffect(() => {
         fetchStatus();
-        const interval = setInterval(fetchStatus, 5000);
-        return () => clearInterval(interval);
     }, [fetchStatus]);
 
     const handleUpload = async (e) => {
@@ -37,7 +37,7 @@ export default function BulkUploadModal({ type, onClose }) {
             const formData = new FormData();
             for (let i = 0; i < files.length; i++) formData.append('files', files[i]);
             await axios.post(`${API}/api/bulk-upload/${type}`, formData, { withCredentials: true });
-            toast.success(`${files.length} file(s) added to pending queue`);
+            toast.success(`${files.length} file(s) added to queue`);
             fetchStatus();
         } catch (err) {
             toast.error('Upload failed');
@@ -47,42 +47,42 @@ export default function BulkUploadModal({ type, onClose }) {
         }
     };
 
-    const handleDelete = async (filename) => {
+    const handleDelete = async (queueId) => {
         try {
-            await axios.delete(`${API}/api/bulk-upload/${type}/${filename}`, { withCredentials: true });
-            toast.success('File removed from pending');
+            await axios.delete(`${API}/api/bulk-upload/${type}/${queueId}`, { withCredentials: true });
+            toast.success('File removed from queue');
             fetchStatus();
-        } catch {
-            toast.error('Failed to delete file');
+        } catch (err) {
+            toast.error(err.response?.data?.detail || 'Failed to delete');
         }
     };
 
-    const handleProcessNow = async () => {
-        setProcessing(true);
-        try {
-            const res = await axios.post(`${API}/api/bulk-upload/process-now`, {}, { withCredentials: true });
-            const typeResults = res.data.results[type] || [];
-            const successCount = typeResults.filter(r => r.success).length;
-            toast.success(`Processed ${successCount}/${typeResults.length} file(s)`);
-            fetchStatus();
-        } catch {
-            toast.error('Processing failed');
-        } finally {
-            setProcessing(false);
-        }
+    const handleRefresh = () => {
+        fetchStatus();
     };
 
     const formatSize = (bytes) => {
+        if (!bytes) return '-';
         if (bytes < 1024) return `${bytes} B`;
         if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
         return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     };
 
     const statusIcon = (status) => {
-        if (status === 'processed') return <CheckCircle size={16} className="text-emerald-400" />;
+        if (status === 'completed') return <CheckCircle size={16} className="text-emerald-400" />;
         if (status === 'failed') return <WarningCircle size={16} className="text-red-400" />;
         if (status === 'processing') return <SpinnerGap size={16} className="animate-spin text-cyan-400" />;
         return <Clock size={16} className="text-zinc-500" />;
+    };
+
+    const statusBadge = (status) => {
+        const styles = {
+            pending: 'bg-zinc-800 text-zinc-400',
+            processing: 'bg-cyan-900/40 text-cyan-400',
+            completed: 'bg-emerald-900/40 text-emerald-400',
+            failed: 'bg-red-900/40 text-red-400',
+        };
+        return <span className={`text-xs px-2 py-0.5 rounded ${styles[status] || styles.pending}`}>{status}</span>;
     };
 
     return (
@@ -94,44 +94,39 @@ export default function BulkUploadModal({ type, onClose }) {
                     <button onClick={onClose} data-testid="bulk-modal-close" className="p-1.5 hover:bg-zinc-800 transition-colors"><X size={20} /></button>
                 </div>
 
-                {/* Upload + Process Now */}
+                {/* Upload + Refresh */}
                 <div className="flex items-center gap-3 px-6 py-4 border-b border-zinc-800">
                     <label className="flex items-center gap-2 px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm font-medium cursor-pointer transition-colors" data-testid="bulk-file-input-label">
                         {uploading ? <SpinnerGap size={16} className="animate-spin" /> : <Upload size={16} />}
                         Upload File(s)
                         <input ref={fileRef} type="file" multiple accept=".csv,.xlsx" onChange={handleUpload} className="hidden" data-testid="bulk-file-input" />
                     </label>
-                    {pending.length > 0 && (
-                        <button onClick={handleProcessNow} disabled={processing} data-testid="process-now-btn"
-                            className="flex items-center gap-2 px-4 py-2 bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 text-sm font-medium transition-colors">
-                            {processing ? <SpinnerGap size={16} className="animate-spin" /> : <ArrowClockwise size={16} />}
-                            Process Now
-                        </button>
-                    )}
-                    <span className="ml-auto text-xs text-zinc-500">Files process sequentially</span>
+                    <button onClick={handleRefresh} data-testid="refresh-btn"
+                        className="flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium transition-colors">
+                        <ArrowClockwise size={16} /> Refresh
+                    </button>
+                    <span className="ml-auto text-xs text-zinc-500">Processing is automatic & sequential</span>
                 </div>
 
                 {/* Content */}
                 <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
-                    {/* Pending Files */}
+                    {/* Pending / Processing Files */}
                     <div>
-                        <h3 className="text-sm font-medium text-zinc-400 uppercase tracking-wider mb-3">Pending Files ({pending.length})</h3>
+                        <h3 className="text-sm font-medium text-zinc-400 uppercase tracking-wider mb-3">
+                            Pending / Processing ({pending.length})
+                        </h3>
                         {pending.length === 0 ? (
-                            <p className="text-sm text-zinc-600">No pending files. Upload files above.</p>
+                            <p className="text-sm text-zinc-600" data-testid="no-pending">No pending files. Upload files above to start processing.</p>
                         ) : (
                             <div className="space-y-2" data-testid="pending-list">
                                 {pending.map(f => (
-                                    <div key={f.name} className="flex items-center gap-3 px-4 py-2.5 bg-zinc-800/50 border border-zinc-800" data-testid={`pending-file-${f.name}`}>
+                                    <div key={f.id} className="flex items-center gap-3 px-4 py-2.5 bg-zinc-800/50 border border-zinc-800" data-testid={`pending-file-${f.id}`}>
                                         {statusIcon(f.status)}
-                                        <span className="text-sm truncate flex-1" title={f.name}>{f.name.replace(/^\d+_/, '')}</span>
+                                        <span className="text-sm truncate flex-1" title={f.name}>{f.name}</span>
                                         <span className="text-xs text-zinc-500">{formatSize(f.size)}</span>
-                                        <span className={`text-xs px-2 py-0.5 rounded ${
-                                            f.status === 'failed' ? 'bg-red-900/40 text-red-400' :
-                                            f.status === 'processing' ? 'bg-cyan-900/40 text-cyan-400' :
-                                            'bg-zinc-800 text-zinc-400'
-                                        }`}>{f.status}</span>
-                                        {f.status !== 'processing' && (
-                                            <button onClick={() => handleDelete(f.name)} data-testid={`delete-${f.name}`}
+                                        {statusBadge(f.status)}
+                                        {f.status === 'pending' && (
+                                            <button onClick={() => handleDelete(f.id)} data-testid={`delete-${f.id}`}
                                                 className="p-1 hover:bg-zinc-700 transition-colors text-zinc-500 hover:text-red-400">
                                                 <Trash size={16} />
                                             </button>
@@ -142,23 +137,53 @@ export default function BulkUploadModal({ type, onClose }) {
                         )}
                     </div>
 
-                    {/* Processed Files */}
-                    <div>
-                        <h3 className="text-sm font-medium text-zinc-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                            <FolderOpen size={16} /> Processed Files ({processed.length})
-                        </h3>
-                        {processed.length === 0 ? (
-                            <p className="text-sm text-zinc-600">No files processed yet.</p>
-                        ) : (
-                            <div className="space-y-1" data-testid="processed-list">
-                                {processed.map(f => (
-                                    <div key={f.name} className="flex items-center gap-3 px-4 py-2 text-sm" data-testid={`processed-file-${f.name}`}>
-                                        <CheckCircle size={14} className="text-emerald-500 shrink-0" />
-                                        <span className="truncate text-zinc-400" title={f.name}>{f.name.replace(/^\d+_/, '')}</span>
-                                        <span className="text-xs text-zinc-600 ml-auto">{formatSize(f.size)}</span>
+                    {/* Failed Files */}
+                    {failed.length > 0 && (
+                        <div>
+                            <h3 className="text-sm font-medium text-red-400/80 uppercase tracking-wider mb-3">
+                                Failed ({failed.length})
+                            </h3>
+                            <div className="space-y-2" data-testid="failed-list">
+                                {failed.map(f => (
+                                    <div key={f.id} className="px-4 py-2.5 bg-red-950/20 border border-red-900/30" data-testid={`failed-file-${f.id}`}>
+                                        <div className="flex items-center gap-3">
+                                            <WarningCircle size={16} className="text-red-400 shrink-0" />
+                                            <span className="text-sm truncate flex-1 text-red-300">{f.name}</span>
+                                        </div>
+                                        {f.error && <p className="text-xs text-red-400/70 mt-1 pl-7">{f.error}</p>}
                                     </div>
                                 ))}
                             </div>
+                        </div>
+                    )}
+
+                    {/* Processed Files Directory */}
+                    <div>
+                        <button onClick={() => setShowProcessed(prev => !prev)} data-testid="toggle-processed-btn"
+                            className="flex items-center gap-2 text-sm font-medium text-zinc-400 uppercase tracking-wider hover:text-zinc-200 transition-colors w-full text-left mb-3">
+                            {showProcessed ? <FolderOpen size={18} /> : <Folder size={18} />}
+                            processed_files ({processed.length})
+                        </button>
+                        {showProcessed && (
+                            processed.length === 0 ? (
+                                <p className="text-sm text-zinc-600 pl-6" data-testid="no-processed">No files processed yet.</p>
+                            ) : (
+                                <div className="space-y-1 pl-2" data-testid="processed-list">
+                                    {processed.map(f => (
+                                        <div key={f.id} className="flex items-center gap-3 px-4 py-2 text-sm" data-testid={`processed-file-${f.id}`}>
+                                            <CheckCircle size={14} className="text-emerald-500 shrink-0" />
+                                            <span className="truncate text-zinc-400" title={f.name}>{f.name}</span>
+                                            <span className="text-xs text-zinc-600 ml-auto">{formatSize(f.size)}</span>
+                                            {f.result && (
+                                                <span className="text-xs text-zinc-500">
+                                                    {f.result.inserted !== undefined ? `${f.result.inserted} ins` : ''}
+                                                    {f.result.updated !== undefined ? `, ${f.result.updated} upd` : ''}
+                                                </span>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )
                         )}
                     </div>
                 </div>
