@@ -22,7 +22,7 @@ export default function Login() {
         const result = await login(username, password);
         
         if (result.success) {
-            navigate('/dashboard', { replace: true });
+            navigate('/home', { replace: true });
         } else {
             setError(result.error);
         }

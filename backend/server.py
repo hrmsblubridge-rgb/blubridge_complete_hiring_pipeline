@@ -2347,6 +2347,11 @@ async def root():
 # Include the router in the main app
 app.include_router(api_router)
 
+# Include BluBridge modules router
+from bb_modules import bb_router, init_bb
+init_bb(db, get_current_user, _build_college_rank_lookup, _classify_college)
+app.include_router(bb_router)
+
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
