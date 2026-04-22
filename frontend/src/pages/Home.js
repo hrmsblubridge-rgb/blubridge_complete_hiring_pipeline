@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { ChartBar, FileText, CalendarCheck, PencilLine, Briefcase, FolderOpen, SignOut } from '@phosphor-icons/react';
+import { ChartBar, FileText, CalendarCheck, PencilLine, Briefcase, FolderOpen, SignOut, CalendarBlank, ShieldCheck } from '@phosphor-icons/react';
 
 const NAV_ITEMS = [
     { label: 'Analytics Dashboard', desc: 'Upload datasets, view summaries and applicants', icon: ChartBar, path: '/dashboard', color: 'amber' },
@@ -9,6 +9,8 @@ const NAV_ITEMS = [
     { label: 'Update Applicants Scores', desc: 'Manage rounds and update candidate scores', icon: PencilLine, path: '/update-scores', color: 'emerald' },
     { label: 'Create Job Roles', desc: 'Define and manage job titles', icon: Briefcase, path: '/manage-job-roles', color: 'blue' },
     { label: 'Create Job Openings', desc: 'Publish job openings for recruitment', icon: FolderOpen, path: '/job-openings', color: 'rose' },
+    { label: 'Set Holidays', desc: 'Configure holidays to block interview scheduling', icon: CalendarBlank, path: '/set-holidays', color: 'orange' },
+    { label: 'Verify Applicant OTP', desc: 'Verify applicant attendance via phone and OTP', icon: ShieldCheck, path: '/verify-otp', color: 'teal' },
 ];
 
 const COLOR_MAP = {
@@ -18,6 +20,8 @@ const COLOR_MAP = {
     emerald: { border: 'hover:border-emerald-600', icon: 'group-hover:text-emerald-500' },
     blue: { border: 'hover:border-blue-600', icon: 'group-hover:text-blue-500' },
     rose: { border: 'hover:border-rose-600', icon: 'group-hover:text-rose-500' },
+    orange: { border: 'hover:border-orange-600', icon: 'group-hover:text-orange-500' },
+    teal: { border: 'hover:border-teal-600', icon: 'group-hover:text-teal-500' },
 };
 
 export default function Home() {

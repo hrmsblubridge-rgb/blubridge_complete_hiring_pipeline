@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { ArrowLeft, Plus, PencilSimple, Trash, X } from '@phosphor-icons/react';
+import { ArrowLeft, Plus, PencilSimple, Trash, X, Link as LinkIcon } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -22,18 +22,23 @@ export default function HiringForms() {
     const [cond, setCond] = useState({ age_min: '', age_max: '', grad_year_min: '', grad_year_max: '', locations: [], location_change: 'NA', attend_in_person: 'NA', college_limit: 'Both' });
     const [locInput, setLocInput] = useState('');
     const [jobRoles, setJobRoles] = useState([]);
+    const [jdAttached, setJdAttached] = useState(false);
+    const [jdOpeningId, setJdOpeningId] = useState('');
+    const [jobOpenings, setJobOpenings] = useState([]);
 
     const fetchAll = useCallback(async () => {
         setLoading(true);
         try {
-            const [tRes, fRes, rRes] = await Promise.all([
+            const [tRes, fRes, rRes, oRes] = await Promise.all([
                 axios.get(`${API}/api/bb/form-types`, { withCredentials: true }),
                 axios.get(`${API}/api/bb/hiring-forms`, { withCredentials: true }),
                 axios.get(`${API}/api/bb/job-roles`, { withCredentials: true }),
+                axios.get(`${API}/api/bb/job-openings`, { withCredentials: true }),
             ]);
             setFormTypes(tRes.data.form_types || []);
             setForms(fRes.data.forms || []);
             setJobRoles(rRes.data.roles || []);
+            setJobOpenings(oRes.data.openings || []);
         } catch {} finally { setLoading(false); }
     }, []);
     useEffect(() => { fetchAll(); }, [fetchAll]);
@@ -57,7 +62,7 @@ export default function HiringForms() {
     const resetFormModal = () => {
         setEditFormId(null); setFormName(''); setFormTypeId(''); setFormJobRole('');
         setCond({ age_min: '', age_max: '', grad_year_min: '', grad_year_max: '', locations: [], location_change: 'NA', attend_in_person: 'NA', college_limit: 'Both' });
-        setLocInput('');
+        setLocInput(''); setJdAttached(false); setJdOpeningId('');
     };
     const openAddForm = () => { resetFormModal(); setShowFormModal(true); };
     const openEditForm = (f) => {
@@ -65,7 +70,8 @@ export default function HiringForms() {
         const c = f.conditions || {};
         setCond({ age_min: c.age_min ?? '', age_max: c.age_max ?? '', grad_year_min: c.grad_year_min ?? '', grad_year_max: c.grad_year_max ?? '',
             locations: c.locations || [], location_change: c.location_change || 'NA', attend_in_person: c.attend_in_person || 'NA', college_limit: c.college_limit || 'Both' });
-        setLocInput(''); setShowFormModal(true);
+        setLocInput(''); setJdAttached(f.job_description_attached || false); setJdOpeningId(f.job_opening_id || '');
+        setShowFormModal(true);
     };
     const addLocation = () => { const v = locInput.trim(); if (v && !cond.locations.includes(v)) setCond(p => ({ ...p, locations: [...p.locations, v] })); setLocInput(''); };
     const removeLocation = (i) => setCond(p => ({ ...p, locations: p.locations.filter((_, idx) => idx !== i) }));
@@ -78,7 +84,7 @@ export default function HiringForms() {
             locations: cond.locations, location_change: cond.location_change, attend_in_person: cond.attend_in_person, college_limit: cond.college_limit,
         };
         try {
-            const body = { name: formName.trim(), form_type_id: formTypeId, job_role: formJobRole.trim(), conditions };
+            const body = { name: formName.trim(), form_type_id: formTypeId, job_role: formJobRole.trim(), conditions, job_description_attached: jdAttached, job_opening_id: jdAttached ? jdOpeningId : null };
             if (editFormId) await axios.put(`${API}/api/bb/hiring-forms/${editFormId}`, body, { withCredentials: true });
             else await axios.post(`${API}/api/bb/hiring-forms`, body, { withCredentials: true });
             toast.success(editFormId ? 'Updated' : 'Created'); setShowFormModal(false); fetchAll();
@@ -137,6 +143,7 @@ export default function HiringForms() {
                                         )}
                                     </div>
                                     <div className="flex gap-2 shrink-0">
+                                        <a href={`/register/${f.id}`} target="_blank" rel="noreferrer" data-testid={`link-${f.id}`} className="p-2 text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800" title="Registration Link"><LinkIcon size={16} /></a>
                                         <button onClick={() => openEditForm(f)} className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800"><PencilSimple size={16} /></button>
                                         <button onClick={() => deleteForm(f.id)} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800"><Trash size={16} /></button>
                                     </div>
@@ -222,6 +229,21 @@ export default function HiringForms() {
                                 <div className="space-y-1"><label className="text-xs text-zinc-500">College Limit</label>
                                     <select value={cond.college_limit} onChange={e => setCond(p => ({ ...p, college_limit: e.target.value }))} className="w-full bg-zinc-800 border border-zinc-700 px-3 py-1.5 text-sm focus:outline-none focus:border-zinc-500"><option>Both</option><option>NIRF</option><option>Non NIRF</option></select></div>
                             </div>
+                        </div>
+                        {/* Job Description Attached */}
+                        <div className="border-t border-zinc-800 pt-4 space-y-3">
+                            <h3 className="text-sm font-medium text-zinc-400">Job description attached?</h3>
+                            <div className="flex gap-4">
+                                {[true, false].map(v => <label key={String(v)} className="flex items-center gap-1.5 text-sm cursor-pointer"><input type="radio" checked={jdAttached === v} onChange={() => setJdAttached(v)} className="accent-emerald-500" />{v ? 'Yes' : 'No'}</label>)}
+                            </div>
+                            {jdAttached && (
+                                <div className="space-y-1"><label className="text-xs text-zinc-500">Job Description Type</label>
+                                    <select value={jdOpeningId} onChange={e => setJdOpeningId(e.target.value)} data-testid="jd-opening-select" className="w-full bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500">
+                                        <option value="">Select job opening</option>
+                                        {jobOpenings.map(o => <option key={o.id} value={o.id}>{o.title}</option>)}
+                                    </select>
+                                </div>
+                            )}
                         </div>
                         <div className="flex justify-end gap-3 pt-2">
                             <button onClick={() => setShowFormModal(false)} className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm">Cancel</button>

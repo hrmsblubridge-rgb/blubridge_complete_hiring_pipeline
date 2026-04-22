@@ -263,7 +263,7 @@ class LoginRequest(BaseModel):
 @api_router.post("/login")
 async def login(response: Response, data: LoginRequest):
     # Hardcoded credentials as per requirements
-    if data.username == "admin" and data.password == "admin":
+    if data.username == "Admin User" and data.password == "Admin User":
         token = create_token(data.username)
         response.set_cookie(
             key="access_token", 
@@ -2348,9 +2348,10 @@ async def root():
 app.include_router(api_router)
 
 # Include BluBridge modules router
-from bb_modules import bb_router, init_bb
+from bb_modules import bb_router, pub_router, init_bb
 init_bb(db, get_current_user, _build_college_rank_lookup, _classify_college)
 app.include_router(bb_router)
+app.include_router(pub_router)
 
 # CORS Configuration
 app.add_middleware(

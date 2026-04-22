@@ -110,7 +110,7 @@ export default function Login() {
                     </form>
 
                     <div className="mt-6 text-center text-sm text-gray-500">
-                        <p>Default credentials: <code className="bg-gray-100 px-2 py-1">admin / admin</code></p>
+                        <p>Default credentials: <code className="bg-gray-100 px-2 py-1">Admin User / Admin User</code></p>
                     </div>
                 </div>
             </motion.div>
