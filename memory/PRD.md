@@ -1,78 +1,69 @@
 # Recruitment Analytics - Product Requirements Document
 
 ## Original Problem Statement
-Build a comprehensive Recruitment Analytics platform (BluBridge Hiring Pipeline) that handles bulk file uploads, normalizes data, computes derived statuses, classifies colleges, and provides analytics dashboards.
+Build BluBridge Hiring Pipeline — a comprehensive recruitment platform with analytics, form-based hiring, interview scheduling, and candidate management.
 
 ## Core Architecture
 - **Frontend**: React + Tailwind CSS + Shadcn UI + Phosphor Icons
-- **Backend**: FastAPI + Motor (async MongoDB driver)
+- **Backend**: FastAPI + Motor (async MongoDB) + bb_modules.py (separate router)
 - **Database**: MongoDB
-- **Auth**: Hardcoded admin/admin with JWT cookie-based auth
+- **Auth**: Admin User / Admin User (JWT cookie)
 
 ## Implemented Features
 
-### Phase 1-3: Core Platform, Analytics, Enhancements (Completed)
-- Login/logout, Upload endpoints (Naukri, Pipeline, Score Sheet, College Rank)
-- Email/phone normalization, Data matching, Derived status hierarchy
-- Summary Statistics, View Applicants, View Attended
-- Pagination, Date filters, Bulk upload with DB-driven queue
+### Phase 1-3: Core Platform + Analytics + Enhancements (Completed)
+- Upload (Naukri, Pipeline, Score Sheet, College Rank), matching, derived statuses
+- Summary, Applicants, Attended pages with filters + pagination
+- DB-driven bulk upload queue, Job keyword mapping, College matching
 
-### Phase 4: Job Role Normalization (Completed - Apr 17)
-- Data-driven keyword mapping from Naukri uploads, checkbox UI at /jobs-keywords
-
-### Phase 5: Dynamic Multi-Criteria College Matching (Completed - Apr 17)
-- Base name + city/state matching with confidence levels (HIGH/MEDIUM/LOW)
-
-### Phase 6: DB-Driven Bulk Upload Queue (Completed - Apr 20)
-- Persistent background worker, fault-tolerant, independent of UI
+### Phase 4-6: Previous Extensions (Completed)
+- Job Role Normalization, Multi-criteria College Matching, Bulk Upload Queue
 
 ### Phase 7: BluBridge Extension Modules (Completed - Apr 21)
-Based on the BluBridge Hiring Pipeline PDF design plan:
+- Home Page (8 buttons), Job Roles CRUD, Form Types + Hiring Forms, Interview Reports, Update Scores, Job Openings, Rounds
 
-- **Home Page** (`/home`): New landing hub with 6 navigation buttons to all modules. Login now redirects here.
-- **Create Job Roles** (`/manage-job-roles`): CRUD for canonical job roles displayed as cards with Edit/Delete
-- **Hiring Forms** (`/hiring-forms`):
-  - Form Types: CRUD (card UI with Edit/Delete)
-  - Hiring Forms: CRUD with Name, Type dropdown, Job Role, Conditions section
-  - Conditions: Age limit, Graduation Year limit, Location limit (multi-add), Location Change (Yes/No/NA), Attend in Person (Yes/No/NA), College limit (NIRF/Non NIRF/Both)
-- **Interview Schedule Reports** (`/interview-reports`): Date range, Job Role, Attendance, College filters. Job role tabs with counts. Attendance/Premium summaries. Table with NAME/EMAIL/DATE/TIME/JOB ROLE/COLLEGE TYPE/ATTENDANCE. CSV Export.
-- **Update Applicants Scores** (`/update-scores`): Date range filter, attended applicants table with per-row Update button. Floating form with Status (On hold/Rejected/Selected) + Round scores (dynamic add). Rounds management CRUD.
-- **Create Job Openings** (`/job-openings`): CRUD with title, job role, description
+### Phase 8: Full PDF Implementation (Completed - Apr 22)
+**Login**: Credentials updated to `Admin User` / `Admin User`
 
-**Architecture**: All new code in separate `bb_modules.py` backend + separate frontend pages. Zero changes to existing server.py logic. Dependency injection via `init_bb()`.
+**Home Page**: 8 navigation buttons — Analytics Dashboard, Hiring Forms, Interview Schedule Reports, Update Applicants Scores, Create Job Roles, Create Job Openings, Set Holidays, Verify Applicant OTP
+
+**Set Holidays** (`/set-holidays`): CRUD for holidays (name + date). Holidays block interview scheduling dates.
+
+**Verify Applicant OTP** (`/verify-otp`): Phone + OTP verification. Updates otp_verified in both bb_registrations and registered_candidates.
+
+**Public Registration Form** (`/register/:formId`): No-auth public page. Fields: Full Name, Email, Phone, Age, State, City, Grad Year, Degree, Course, College. Conditional: Location Change + Attend In Person questions (shown when city doesn't match location limit). AI&ML roles show Deep Learning Research Team info page. Auto-shortlisting engine checks all conditions.
+
+**Interview Schedule** (`/schedule-interview/:token`): No-auth public page via unique token. Pre-filled Name/Email/Phone. Date picker (blocks Sundays + holidays). Time slots (30-min, 10AM-5PM). Reschedule support. OTP auto-generated.
+
+**Enhanced Job Openings**: New fields — vacancies, years_of_graduation (multi), education (multi), salary_range, key_responsibilities, added_advantages, what_we_offer
+
+**Enhanced Hiring Forms**: Link button on cards (opens public registration), "Job description attached?" (Yes/No) with job opening selector. When JD attached, public link shows job description before registration form.
+
+**Auto-Shortlisting**: Checks age, graduation year, location limits, location_change, attend_in_person, college NIRF status. Single failed condition = Rejected.
+
+**Analytics Integration**: Registrations write to both `bb_registrations` AND `registered_candidates` for Dashboard visibility.
+
+**STUBBED**: Email/WhatsApp messaging (status updates happen, no messages sent)
 
 ## DB Collections
 ### Existing (UNTOUCHED)
-- `naukri_applies`, `pipeline_data`, `registered_candidates`, `score_sheet`, `college_rank_list`
-- `job_keyword_mapping`, `job_titles_master`, `bulk_upload_queue`
+- naukri_applies, pipeline_data, registered_candidates, score_sheet, college_rank_list
+- job_keyword_mapping, job_titles_master, bulk_upload_queue
 
 ### New (bb_ prefix)
-- `bb_job_roles`: {name, created_at}
-- `bb_form_types`: {name, created_at}
-- `bb_hiring_forms`: {name, form_type_id, form_type_name, job_role, conditions{...}, created_at}
-- `bb_rounds`: {name, created_at}
-- `bb_job_openings`: {title, job_role, description, created_at}
-- `bb_applicant_updates`: {email, status, scores[{round_name, score}], updated_at}
+- bb_job_roles, bb_form_types, bb_hiring_forms, bb_rounds, bb_job_openings
+- bb_holidays: {name, date, created_at}
+- bb_registrations: {form_id, full_name, email, phone, age, status, schedule_token, otp, schedule_date, schedule_time, ...}
+- bb_applicant_updates: {email, status, scores[]}
 
 ## API Endpoints
-### Existing (UNTOUCHED)
-- /api/login, /api/logout, /api/auth/check
-- /api/upload/*, /api/bulk-upload/*
-- /api/summary, /api/job-roles, /api/applicants, /api/attended
-- /api/job-keyword-mappings, /api/job-titles/unmatched
-
-### New (bb prefix)
-- CRUD: /api/bb/job-roles, /api/bb/form-types, /api/bb/hiring-forms, /api/bb/rounds, /api/bb/job-openings
-- Reports: /api/bb/interview-reports (GET with filters)
-- Scores: /api/bb/attended-for-scores (GET), /api/bb/applicant-score/{email} (PUT)
+### Existing (UNTOUCHED): /api/login, /api/upload/*, /api/bulk-upload/*, /api/summary, /api/applicants, /api/attended, /api/job-roles, /api/job-keyword-mappings
+### BB Admin: /api/bb/job-roles, /api/bb/form-types, /api/bb/hiring-forms, /api/bb/rounds, /api/bb/job-openings, /api/bb/holidays, /api/bb/verify-otp, /api/bb/interview-reports, /api/bb/attended-for-scores, /api/bb/applicant-score/{email}
+### Public (no auth): /api/pub/form/{formId}, /api/pub/register, /api/pub/schedule/{token}
 
 ## Prioritized Backlog
-### P1
-- CSV export from existing summary/applicant tables
-- Registration Form public submission (applicant-facing)
-- Shortlisting engine (apply form conditions to applicants)
-
-### P2
-- Upload History view
-- Advanced chart visualizations
-- Role-based access control (Admin vs Recruiter)
+- P1: Email/WhatsApp integration (currently stubbed)
+- P1: OTP auto-generation 3 hours before interview
+- P1: OTP expiry after 8 hours
+- P2: Reminder emails 2 hours after missed interview
+- P2: Advanced chart visualizations, Role-based access control
