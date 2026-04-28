@@ -29,71 +29,73 @@ async def start_all_workers():
     asyncio.create_task(_worker_24h_reminder())
 
 
-# ============ WORKER A: OTP Generator (every 60s) ============
+# ============ WORKER A: OTP Generator (every 30s) ============
 
 async def _worker_otp_generator():
-    """Check for interviews scheduled today where OTP not sent. Send OTP 3h before interview."""
+    """Send OTP within [schedule_time - 3h, schedule_time - 1min] window only."""
     _logger.info("OTP Generator worker started")
     while True:
         try:
             now = datetime.now(timezone.utc)
             today_str = now.strftime("%Y-%m-%d")
 
-            # Find registrations with interview today, OTP not sent
+            # Query ONLY today's interviews where OTP not yet sent
             cursor = _db.bb_registrations.find({
                 "schedule_date": today_str,
-                "status": "Interview Scheduled",
+                "is_shortlisted": True,
                 "otp_sent": {"$ne": True},
+                "schedule_time": {"$nin": [None, ""], "$exists": True},
             })
             docs = await cursor.to_list(None)
 
             for doc in docs:
-                schedule_time_str = doc.get("schedule_time", "")
+                schedule_time_str = (doc.get("schedule_time") or "").strip()
                 if not schedule_time_str:
                     continue
 
-                # Parse schedule time (format: HH:MM:SS)
                 try:
-                    hour, minute = int(schedule_time_str.split(":")[0]), int(schedule_time_str.split(":")[1])
-                    interview_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                    trigger_time = interview_dt - timedelta(hours=3)
-
-                    if now >= trigger_time:
-                        # Generate OTP if not already set for today
-                        otp = doc.get("otp")
-                        if not otp:
-                            otp = str(random.randint(100000, 999999))
-
-                        await _db.bb_registrations.update_one(
-                            {"_id": doc["_id"]},
-                            {"$set": {"otp": otp, "otp_sent": True, "otp_sent_at": now.isoformat()}}
-                        )
-
-                        # Update registered_candidates too
-                        await _db.registered_candidates.update_many(
-                            {"$or": [{"email": doc.get("email", "")}, {"phone": doc.get("phone", "")}]},
-                            {"$set": {"otp": otp, "otp_send": "1"}}
-                        )
-
-                        # Send notifications
-                        from messaging import notify_otp
-                        await notify_otp(
-                            doc.get("full_name", ""),
-                            doc.get("phone", ""),
-                            doc.get("email", ""),
-                            doc.get("job_role", ""),
-                            otp,
-                            today_str,
-                            schedule_time_str,
-                        )
-                        _logger.info(f"[OTP] Sent to {doc.get('email')}, otp={otp}")
+                    parts = schedule_time_str.split(":")
+                    hour, minute = int(parts[0]), int(parts[1])
                 except (ValueError, IndexError):
-                    _logger.warning(f"[OTP] Could not parse schedule_time: {schedule_time_str}")
+                    continue
+
+                # Build full interview datetime (UTC, same tz as now)
+                interview_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                window_start = interview_dt - timedelta(hours=3)
+                window_end = interview_dt - timedelta(minutes=1)
+
+                if now < window_start or now > window_end:
+                    continue  # Outside valid window — skip
+
+                # Inside window — generate and send OTP
+                otp = doc.get("otp") or str(random.randint(100000, 999999))
+
+                await _db.bb_registrations.update_one(
+                    {"_id": doc["_id"]},
+                    {"$set": {"otp": otp, "otp_sent": True, "otp_sent_at": now.isoformat()}}
+                )
+
+                await _db.registered_candidates.update_many(
+                    {"$or": [{"email": doc.get("email", "")}, {"phone": doc.get("phone", "")}]},
+                    {"$set": {"otp": otp, "otp_send": "1"}}
+                )
+
+                from messaging import notify_otp
+                await notify_otp(
+                    doc.get("full_name", ""),
+                    doc.get("phone", ""),
+                    doc.get("email", ""),
+                    doc.get("job_role", ""),
+                    otp,
+                    today_str,
+                    schedule_time_str,
+                )
+                _logger.info(f"[OTP] Sent to {doc.get('email')}, otp={otp}, window={window_start.strftime('%H:%M')}-{window_end.strftime('%H:%M')}")
 
         except Exception as e:
             _logger.error(f"[OTP Worker] Error: {e}")
 
-        await asyncio.sleep(60)
+        await asyncio.sleep(30)
 
 
 # ============ WORKER B: Schedule Link Sender (every 60s) ============
