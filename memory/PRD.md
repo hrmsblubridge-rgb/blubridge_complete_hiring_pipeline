@@ -1,41 +1,50 @@
 # Recruitment Analytics - Product Requirements Document
 
 ## Original Problem Statement
-Build BluBridge Hiring Pipeline — a comprehensive recruitment platform with analytics, form-based hiring, interview scheduling, and candidate management.
+Build BluBridge Hiring Pipeline — a comprehensive recruitment platform with analytics, form-based hiring, interview scheduling, candidate management, and automated messaging.
 
 ## Core Architecture
 - **Frontend**: React + Tailwind CSS + Shadcn UI + Phosphor Icons
-- **Backend**: FastAPI + Motor (async MongoDB) + bb_modules.py (separate router)
+- **Backend**: FastAPI + Motor (async MongoDB) + bb_modules.py + messaging.py + bg_workers.py
 - **Database**: MongoDB
 - **Auth**: Admin User / Admin User (JWT cookie)
+- **Messaging**: AiSensy WhatsApp API + SMTP Email (Gmail)
 
-## Implemented Features (All Phases Complete)
+## All Features (Complete)
 
 ### Core Platform
 - Upload (Naukri, Pipeline, Score Sheet, College Rank), matching, derived statuses
 - Summary, Applicants, Attended pages with filters + pagination
-- DB-driven bulk upload queue, Job keyword mapping, College matching
+- DB-driven bulk upload queue, Job keyword mapping, Multi-criteria College matching
 
 ### BluBridge Extension Modules
 - Home Page (8 buttons), Job Roles CRUD, Form Types + Hiring Forms with conditions
-- Interview Schedule Reports with filters + CSV export
-- Update Applicants Scores with Rounds CRUD, Export report, Import report
-- Job Openings (enhanced: vacancies, education, salary, responsibilities, advantages, what_we_offer)
+- Interview Schedule Reports (filters + export), Update Scores (export + import)
+- Job Openings (vacancies, education, salary, responsibilities)
 - Set Holidays, Verify Applicant OTP
 - Public Registration Form with auto-shortlisting
 - Interview Schedule/Reschedule with holiday blocking
 
-### Messaging (STUBBED - not triggered)
-- AiSensy WhatsApp API functions coded
-- SMTP Email functions coded
-- All messaging is logged but NOT executed
+### Live Messaging System (Completed - Apr 28, 2026)
+- **messaging.py**: Centralized service with `_resolve_recipient()` for TEST_MODE guard
+- **AiSensy WhatsApp**: 5 campaign templates (ShortList, Reject, Schedule Detail, OTP With Job, Candidate FollowUp)
+- **SMTP Email**: Real sending via smtp.gmail.com:465 (hr@blubridge.com)
+- **Feature Flags**: ENABLE_WHATSAPP, ENABLE_EMAIL, TEST_MODE in .env
+- **TEST_MODE**: All recipients overridden to phone=9443109903, email=rishi.nayak@blubridge.com
 
-## DB Collections
-- Existing: naukri_applies, pipeline_data, registered_candidates, score_sheet, college_rank_list, job_keyword_mapping, job_titles_master, bulk_upload_queue
-- New: bb_job_roles, bb_form_types, bb_hiring_forms, bb_rounds, bb_job_openings, bb_holidays, bb_registrations, bb_applicant_updates
+### Background Workers (Completed - Apr 28, 2026)
+- **OTP Generator** (every 60s): Generates + sends OTP 3h before interview, idempotent via `otp_sent` flag
+- **Schedule Link Sender** (every 60s): Sends shortlist/reject notifications 5-30 min after registration, idempotent via `schedule_link_sent` flag
+- **24h Reminder** (every 5 min): Re-sends schedule link if not scheduled after 24h, idempotent via `reminder_24h_sent` flag
+
+## Feature Flags (.env)
+- ENABLE_WHATSAPP=true — toggle WhatsApp sending
+- ENABLE_EMAIL=true — toggle Email sending
+- TEST_MODE=true — override all recipients to test phone/email
+- TEST_PHONE=9443109903
+- TEST_EMAIL=rishi.nayak@blubridge.com
 
 ## Prioritized Backlog
-- P1: Enable Email/WhatsApp messaging (currently stubbed)
-- P1: Background OTP generation 3h before interview
-- P1: OTP expiry after 8h, missed interview reminders
-- P2: Advanced charts, Role-based access control
+- P1: Fix AiSensy API key (currently returns 401 — user may need to regenerate)
+- P2: OTP expiry after 8 hours (set otp_expired field)
+- P2: Advanced chart visualizations, Role-based access control
