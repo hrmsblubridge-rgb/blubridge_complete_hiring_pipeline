@@ -32,18 +32,9 @@ export default function UpdateScores() {
             if (endDate) params.endDate = endDate;
             const r = await axios.get(`${API}/api/bb/attended-for-scores`, { params, withCredentials: true });
             setApplicants(r.data.data || []);
-            // Auto-populate rounds from score_sheet data
-            if (r.data.available_rounds?.length > 0) {
-                const existing = new Set(rounds.map(rd => rd.name));
-                for (const rn of r.data.available_rounds) {
-                    if (!existing.has(rn)) {
-                        existing.add(rn);
-                    }
-                }
-            }
         } catch { toast.error('Failed to load'); }
         finally { setLoading(false); }
-    }, [startDate, endDate, rounds]);
+    }, [startDate, endDate]);
 
     useEffect(() => { fetchRounds(); fetchApplicants(); }, [fetchRounds, fetchApplicants]);
 
