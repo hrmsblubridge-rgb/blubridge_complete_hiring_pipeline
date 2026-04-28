@@ -19,7 +19,7 @@ AISENSY_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5NDI0MTYwNzA4
 SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
 SMTP_USER = os.environ.get("SMTP_USER", "hiring@blubridge.com")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "dfna xkah pvpe djay")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "zfdb buxc ehyq gctr")
 FROM_EMAIL = os.environ.get("FROM_EMAIL", "hiring@blubridge.com")
 
 OFFICE_LOCATION = "30, Norton Road, Mandavelipakkam, Raja Annamalai Puram, Chennai, Tamil Nadu - 600028."
