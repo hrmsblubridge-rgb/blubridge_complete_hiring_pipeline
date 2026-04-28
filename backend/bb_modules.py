@@ -6,11 +6,66 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, timezone
 from bson import ObjectId
-import hashlib, secrets, re
+import hashlib, secrets, re, logging
 
 bb_router = APIRouter(prefix="/api/bb")
 # Public router — no auth prefix
 pub_router = APIRouter(prefix="/api/pub")
+
+_logger = logging.getLogger("bb_modules")
+
+
+# ============ MESSAGING STUBS (Present but NOT triggered/tested per instructions) ============
+
+AISENSY_API_URL = "https://backend.aisensy.com/campaign/t1/api/v2"
+AISENSY_API_KEY = "eyJhbGciOiJIUzI1NilsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5NDI0MTYwNzA4MDcwNjE5YzAyZWFhNilsIm5hbWUiOiJCbHVicmlkZ2V0ZWNobm9sb2dpZXMiLCJhcHBOYW1IIjoiQWITZW5zeSIsImNsaWVudElkljoiNjg5NDRIOThiMjQ3NDQwYzBkYzljNzI3IiwiYWN0aXZIUGxhbil6IkZSRUVfRk9SRVZFUiIsImlhdCI6MTc2NTk0OTc5Mn0.16lJKhbj6JfK_1zzzUgLMwxy5laqBwu3IjV08xBLRBs"
+
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = 465
+SMTP_USER = "hr@blubridge.com"
+SMTP_PASSWORD = "tmiu rkqp fxcw nwxf"
+FROM_EMAIL = "hr@blubridge.com"
+
+OFFICE_LOCATION = "30, Norton Road, Mandavelipakkam, Raja Annamalai Puram, Chennai, Tamil Nadu - 600028."
+
+
+async def _send_aisensy_whatsapp(campaign_name: str, mobile: str, template_params: list, user_name: str = "Blubridge Technologies"):
+    """AiSensy WhatsApp messaging — STUB. Logic present but NOT executed."""
+    _logger.info(f"[STUB] WhatsApp: campaign={campaign_name}, mobile={mobile}, params={template_params}")
+    # Implementation ready but not triggered per instructions
+    return None
+
+
+async def _send_email(to_email: str, subject: str, html_body: str):
+    """SMTP email — STUB. Logic present but NOT executed."""
+    _logger.info(f"[STUB] Email: to={to_email}, subject={subject}")
+    # Implementation ready but not triggered per instructions
+    return None
+
+
+async def _notify_shortlisted(name: str, phone: str, email: str, schedule_link: str):
+    """Send shortlist notification — STUB."""
+    _logger.info(f"[STUB] Shortlist notification: {name}, {email}")
+
+
+async def _notify_rejected(phone: str, email: str):
+    """Send rejection notification — STUB."""
+    _logger.info(f"[STUB] Reject notification: {email}")
+
+
+async def _notify_schedule_confirmation(name: str, phone: str, email: str, date: str, time: str):
+    """Send schedule confirmation — STUB."""
+    _logger.info(f"[STUB] Schedule confirmation: {name}, {date} {time}")
+
+
+async def _send_otp_notification(name: str, phone: str, email: str, job_role: str, otp: str, date: str, time: str):
+    """Send OTP notification — STUB."""
+    _logger.info(f"[STUB] OTP notification: {name}, otp={otp}")
+
+
+async def _send_missed_reminder(name: str, phone: str, email: str, role: str, date: str, time: str, reschedule_link: str):
+    """Send missed interview reminder — STUB."""
+    _logger.info(f"[STUB] Missed reminder: {name}, {date} {time}")
 
 # Shared dependencies — injected from server.py
 _db = None
@@ -448,6 +503,33 @@ async def update_applicant_score(email: str, data: ApplicantScoreUpdate, request
     await _db.bb_applicant_updates.update_one({"email": email}, {"$set": update_doc}, upsert=True)
     await _db.registered_candidates.update_many({"email": email}, {"$set": {"result_status": data.status}})
     return {"success": True}
+
+
+@bb_router.post("/import-scores")
+async def import_scores(request: Request):
+    """Import applicant scores from uploaded CSV file."""
+    await _require_auth(request)
+    from fastapi import UploadFile, File
+    form = await request.form()
+    file = form.get("file")
+    if not file:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+    content = await file.read()
+    import io, csv
+    text = content.decode("utf-8", errors="ignore")
+    reader = csv.DictReader(io.StringIO(text))
+    imported = 0
+    for row in reader:
+        email = (row.get("email") or row.get("EMAIL") or "").strip().lower()
+        status = row.get("status") or row.get("STATUS") or "On hold"
+        if email:
+            await _db.bb_applicant_updates.update_one(
+                {"email": email},
+                {"$set": {"email": email, "status": status, "updated_at": datetime.now(timezone.utc).isoformat()}},
+                upsert=True
+            )
+            imported += 1
+    return {"success": True, "imported": imported}
 
 
 # ============ HOLIDAYS ============

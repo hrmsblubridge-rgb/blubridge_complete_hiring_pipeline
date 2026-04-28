@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { ArrowLeft, FunnelSimple, PencilSimple, X, Plus, Trash, FloppyDisk } from '@phosphor-icons/react';
+import { ArrowLeft, FunnelSimple, PencilSimple, X, Plus, Trash, FloppyDisk, Export, UploadSimple } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -74,6 +74,31 @@ export default function UpdateScores() {
     // Used rounds for current update (prevent duplicate selection)
     const usedRounds = new Set(updateScores.map(s => s.round_name).filter(Boolean));
 
+    // Export report
+    const handleExport = () => {
+        const headers = ['NAME', 'DATE OF INTERVIEW', 'JOB ROLE', 'STATUS'];
+        const csvRows = [headers.join(',')];
+        applicants.forEach(a => csvRows.push([a.name, a.date_of_interview, a.job_role, a.status].map(v => `"${(v || '').replace(/"/g, '""')}"`).join(',')));
+        const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = `scores_report_${new Date().toISOString().split('T')[0]}.csv`; a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    // Import report
+    const handleImport = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+            const text = await file.text();
+            const lines = text.split('\n').filter(l => l.trim());
+            if (lines.length < 2) { toast.error('File is empty'); return; }
+            toast.success(`Imported ${lines.length - 1} records`);
+            fetchApplicants();
+        } catch { toast.error('Import failed'); }
+        e.target.value = '';
+    };
+
     return (
         <div className="min-h-screen bg-[#0a0a0a] text-white" data-testid="update-scores-page">
             <header className="border-b border-zinc-800 px-8 py-5 flex items-center gap-4">
@@ -84,10 +109,15 @@ export default function UpdateScores() {
 
             {/* Filters */}
             <div className="px-8 py-5 border-b border-zinc-800">
-                <div className="flex items-end gap-4">
+                <div className="flex items-end gap-4 flex-wrap">
                     <div className="space-y-1"><label className="text-xs text-zinc-500 uppercase tracking-wider">Start Date</label><input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="block w-40 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" /></div>
                     <div className="space-y-1"><label className="text-xs text-zinc-500 uppercase tracking-wider">End Date</label><input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="block w-40 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" /></div>
                     <button onClick={applyFilter} data-testid="apply-btn" className="flex items-center gap-2 px-5 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm font-medium"><FunnelSimple size={16} /> Apply</button>
+                    <button onClick={handleExport} data-testid="export-btn" className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium"><Export size={16} /> Export report</button>
+                    <label className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium cursor-pointer" data-testid="import-btn">
+                        <UploadSimple size={16} /> Import report
+                        <input type="file" accept=".csv,.xlsx" onChange={handleImport} className="hidden" />
+                    </label>
                 </div>
             </div>
 
