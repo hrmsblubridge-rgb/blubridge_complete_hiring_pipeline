@@ -32,9 +32,18 @@ export default function UpdateScores() {
             if (endDate) params.endDate = endDate;
             const r = await axios.get(`${API}/api/bb/attended-for-scores`, { params, withCredentials: true });
             setApplicants(r.data.data || []);
+            // Auto-populate rounds from score_sheet data
+            if (r.data.available_rounds?.length > 0) {
+                const existing = new Set(rounds.map(rd => rd.name));
+                for (const rn of r.data.available_rounds) {
+                    if (!existing.has(rn)) {
+                        existing.add(rn);
+                    }
+                }
+            }
         } catch { toast.error('Failed to load'); }
         finally { setLoading(false); }
-    }, [startDate, endDate]);
+    }, [startDate, endDate, rounds]);
 
     useEffect(() => { fetchRounds(); fetchApplicants(); }, [fetchRounds, fetchApplicants]);
 
@@ -43,7 +52,12 @@ export default function UpdateScores() {
     const openUpdate = (app) => {
         setShowUpdate(app);
         setUpdateStatus(app.status || 'On hold');
-        setUpdateScores(app.scores?.length > 0 ? app.scores.map(s => ({ round_name: s.round_name, score: String(s.score) })) : [{ round_name: '', score: '' }]);
+        // Pre-populate scores from score_sheet data (auto-populated by backend)
+        if (app.scores?.length > 0) {
+            setUpdateScores(app.scores.map(s => ({ round_name: s.round_name, score: String(s.score) })));
+        } else {
+            setUpdateScores([{ round_name: '', score: '' }]);
+        }
     };
 
     const addScoreRow = () => setUpdateScores(p => [...p, { round_name: '', score: '' }]);
@@ -102,7 +116,7 @@ export default function UpdateScores() {
     return (
         <div className="min-h-screen bg-[#0a0a0a] text-white" data-testid="update-scores-page">
             <header className="border-b border-zinc-800 px-8 py-5 flex items-center gap-4">
-                <button onClick={() => navigate('/home')} data-testid="back-btn" className="p-2 hover:bg-zinc-800"><ArrowLeft size={20} /></button>
+                <button onClick={() => window.history.length > 1 ? navigate(-1) : navigate('/home')} data-testid="back-btn" className="p-2 hover:bg-zinc-800"><ArrowLeft size={20} /></button>
                 <h1 className="text-xl font-semibold tracking-tight">Update Applicants Scores</h1>
                 <button onClick={() => { setShowRounds(true); setRoundName(''); setEditRoundId(null); }} data-testid="rounds-btn" className="ml-auto px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium">Rounds</button>
             </header>

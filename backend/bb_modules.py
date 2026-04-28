@@ -433,16 +433,60 @@ async def get_attended_for_scores(request: Request, startDate: str = Query(None)
     updates = await _db.bb_applicant_updates.find({}, {"_id": 0}).to_list(None)
     update_map = {u["email"]: u for u in updates if u.get("email")}
 
+    # Fetch scores from score_sheet collection (uploaded via Analytics Dashboard)
+    score_records = await _db.score_sheet.find({}, {"_id": 0}).to_list(None)
+    score_by_email = {}
+    score_by_phone = {}
+    for sr in score_records:
+        se = (sr.get("email") or "").strip().lower()
+        sp = re.sub(r'[^\d]', '', sr.get("phone") or "")
+        if len(sp) > 10:
+            sp = sp[-10:]
+        if se:
+            score_by_email.setdefault(se, []).append(sr)
+        if sp:
+            score_by_phone.setdefault(sp, []).append(sr)
+
+    # Collect all unique round names for auto-population
+    all_rounds_set = set()
+    for sr in score_records:
+        rn = (sr.get("round_name") or "").strip()
+        if rn:
+            all_rounds_set.add(rn)
+
     result = []
     for doc in docs:
-        email = doc.get("email") or ""
+        email = (doc.get("email") or "").strip().lower()
+        phone = re.sub(r'[^\d]', '', doc.get("phone") or "")
+        if len(phone) > 10:
+            phone = phone[-10:]
         upd = update_map.get(email, {})
+
+        # Merge scores: bb_applicant_updates takes priority, then score_sheet
+        merged_scores = []
+        if upd.get("scores"):
+            merged_scores = upd["scores"]
+        else:
+            # Auto-populate from score_sheet
+            matched = []
+            if email and email in score_by_email:
+                matched.extend(score_by_email[email])
+            if phone and phone in score_by_phone:
+                for s in score_by_phone[phone]:
+                    if s not in matched:
+                        matched.append(s)
+            for sr in matched:
+                rn = (sr.get("round_name") or "").strip()
+                sc = sr.get("score", 0)
+                if rn:
+                    merged_scores.append({"round_name": rn, "score": sc})
+
         result.append({"name": doc.get("name") or "-", "email": email, "phone": doc.get("phone") or "-",
                         "date_of_interview": doc.get("schedule_date") or "-",
                         "job_role": doc.get("job_role") or doc.get("job_title") or "-",
                         "status": upd.get("status") or doc.get("result_status") or "On hold",
-                        "scores": upd.get("scores", [])})
-    return {"data": result}
+                        "scores": merged_scores})
+    return {"data": result, "available_rounds": sorted(list(all_rounds_set))}
 
 @bb_router.put("/applicant-score/{email:path}")
 async def update_applicant_score(email: str, data: ApplicantScoreUpdate, request: Request):

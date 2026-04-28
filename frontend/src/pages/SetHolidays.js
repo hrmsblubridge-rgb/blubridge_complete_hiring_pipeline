@@ -42,7 +42,7 @@ export default function SetHolidays() {
     return (
         <div className="min-h-screen bg-[#0a0a0a] text-white" data-testid="set-holidays-page">
             <header className="border-b border-zinc-800 px-8 py-5 flex items-center gap-4">
-                <button onClick={() => navigate('/home')} data-testid="back-btn" className="p-2 hover:bg-zinc-800"><ArrowLeft size={20} /></button>
+                <button onClick={() => window.history.length > 1 ? navigate(-1) : navigate('/home')} data-testid="back-btn" className="p-2 hover:bg-zinc-800"><ArrowLeft size={20} /></button>
                 <h1 className="text-xl font-semibold tracking-tight">Set Holidays</h1>
                 <button onClick={openAdd} data-testid="add-holiday-btn" className="ml-auto flex items-center gap-2 px-4 py-2 bg-orange-700 hover:bg-orange-600 text-sm font-medium"><Plus size={16} /> Add Holiday</button>
             </header>

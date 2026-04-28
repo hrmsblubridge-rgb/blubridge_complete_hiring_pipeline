@@ -4,9 +4,9 @@ import axios from 'axios';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
-const STATES = ["Andhra Pradesh","Arunachal Pradesh","Assam","Bihar","Chhattisgarh","Delhi","Goa","Gujarat","Haryana","Himachal Pradesh","Jharkhand","Karnataka","Kerala","Madhya Pradesh","Maharashtra","Manipur","Meghalaya","Mizoram","Nagaland","Odisha","Punjab","Rajasthan","Sikkim","Tamil Nadu","Telangana","Tripura","Uttar Pradesh","Uttarakhand","West Bengal"];
-const DEGREES = ["B.Tech","B.E","B.Sc","BCA","M.Tech","M.E","M.Sc","MCA","MBA","Ph.D","Other"];
-const COURSES = ["Computer Science","Information Technology","Electronics","Mechanical","Civil","Electrical","AI & ML","Data Science","Other"];
+const STATES = ["Andhra Pradesh","Arunachal Pradesh","Assam","Bihar","Chhattisgarh","New Delhi","Goa","Gujarat","Haryana","Himachal Pradesh","Jharkhand","Jammu And Kashmir","Karnataka","Kerala","Madhya Pradesh","Maharashtra","Manipur","Meghalaya","Mizoram","Nagaland","Odisha","Punjab","Rajasthan","Sikkim","Tamil Nadu","Telangana","Tripura","Uttar Pradesh","Uttarakhand","West Bengal"];
+const UG_DEGREES = ["BBA","BSc","BA","BBM","B.E","B.Tech","BMC","BJ / BJMC","Other"];
+const PG_DEGREES = ["MBA","MSc","MA","M.E","M.Tech","MMC","MJ / MJMC","Other"];
 const GRAD_YEARS = ["2020","2021","2022","2023","2024","2025","2026","2027"];
 
 export default function PublicRegistration() {
@@ -17,7 +17,7 @@ export default function PublicRegistration() {
     const [step, setStep] = useState('jd');
     const [submitting, setSubmitting] = useState(false);
     const [result, setResult] = useState(null);
-    const [f, setF] = useState({ full_name:'', email:'', phone:'', age:'', current_location_state:'', preferred_location_city:'', year_of_graduation:'', degree:'', course:'', college:'', location_change:null, attend_in_person:null });
+    const [f, setF] = useState({ full_name:'', email:'', phone:'', age:'', current_location_state:'', preferred_location_city:'', year_of_graduation:'', degree:'', course:'', college:'', location_change:null, attend_in_person:null, q1:'', q2:'', q3:'', q4:'' });
 
     useEffect(() => {
         axios.get(`${API}/api/pub/form/${formId}`).then(r => {
@@ -85,7 +85,7 @@ export default function PublicRegistration() {
         );
     }
 
-    // AI & ML Info Page
+    // AI & ML Info Page (Joining Our Deep Learning Research Team)
     if (step === 'aiml') {
         return (
             <div className="min-h-screen bg-[#f0ebe3]" data-testid="aiml-page">
@@ -109,7 +109,7 @@ export default function PublicRegistration() {
                             </div>
                             <div className="bg-[#eef4ff] border border-[#c8deff] rounded-lg p-4 mt-4">
                                 <label className="flex items-start gap-2 cursor-pointer">
-                                    <input type="checkbox" id="aiml-confirm" className="mt-1 accent-blue-600 w-4 h-4" />
+                                    <input type="checkbox" className="mt-1 accent-blue-600 w-4 h-4" />
                                     <span className="text-sm text-gray-700">I have read and understood the information above, and I am willing to join Blubridge's Deep Learning Research Unit under these expectations.</span>
                                 </label>
                             </div>
@@ -156,135 +156,159 @@ export default function PublicRegistration() {
         );
     }
 
-    // Registration Form — matches design images exactly
+    // Main Registration Form — exact clone of blubridge.ai reference
+    const isAIML = form?.job_role?.toLowerCase().includes('ai') && form?.job_role?.toLowerCase().includes('ml');
+
     return (
         <div className="min-h-screen bg-[#f0ebe3] flex flex-col" data-testid="registration-form-page">
-            {/* Header with logo */}
             <header className="bg-[#f0ebe3] border-b border-gray-300 py-4 px-6 flex justify-center">
                 <img src="/blubridge-logo.png" alt="Blubridge" className="h-10" />
             </header>
 
-            {/* Form Card */}
             <div className="flex-1 flex items-start justify-center px-4 py-10">
-                <div className="w-full max-w-[580px]">
+                <div className="w-full max-w-[640px]">
                     <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-                        {/* Dark top bar */}
                         <div className="bg-[#1a2332] h-3 rounded-t-xl"></div>
+                        <div className="px-8 py-8">
+                            <h2 className="text-2xl font-bold text-gray-900 text-center mb-8" style={{fontFamily:'serif'}}>Registration Form</h2>
 
-                        <div className="px-8 py-8 space-y-6">
-                            <h2 className="text-2xl font-bold text-gray-900 text-center" style={{fontFamily:'serif'}}>Registration Form</h2>
-
-                            {/* Row: Full Name + Email */}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+                            {/* Full Name + Email */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5 mb-5">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Full Name:</label>
-                                    <input type="text" value={f.full_name} onChange={e => setF(p => ({...p, full_name:e.target.value}))} data-testid="reg-name"
-                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-300 focus:bg-white transition-colors" />
+                                    <input type="text" value={f.full_name} onChange={e => setF(p => ({...p, full_name:e.target.value}))} data-testid="reg-name" required
+                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-400 focus:bg-white" />
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Email Address:</label>
-                                    <input type="email" value={f.email} onChange={e => setF(p => ({...p, email:e.target.value}))} data-testid="reg-email"
-                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-300 focus:bg-white transition-colors" />
+                                    <input type="email" value={f.email} onChange={e => setF(p => ({...p, email:e.target.value}))} data-testid="reg-email" required
+                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-400 focus:bg-white" />
                                 </div>
                             </div>
 
-                            {/* Row: Phone + Age */}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+                            {/* Phone + Age */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5 mb-5">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Phone Number:</label>
-                                    <input type="text" value={f.phone} onChange={e => setF(p => ({...p, phone:e.target.value}))} data-testid="reg-phone"
-                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-300 focus:bg-white transition-colors" />
+                                    <input type="text" value={f.phone} onChange={e => setF(p => ({...p, phone:e.target.value}))} data-testid="reg-phone" required maxLength="10"
+                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-400 focus:bg-white" />
                                     <p className="text-xs text-gray-500 mt-1 italic">Note: Active WhatsApp number (Required)</p>
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Age:</label>
-                                    <input type="number" value={f.age} onChange={e => setF(p => ({...p, age:e.target.value}))} data-testid="reg-age"
-                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-300 focus:bg-white transition-colors" />
+                                    <input type="number" value={f.age} onChange={e => setF(p => ({...p, age:e.target.value}))} data-testid="reg-age" required min="18" max="80"
+                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-400 focus:bg-white" />
                                 </div>
                             </div>
 
-                            {/* Row: State + City */}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+                            {/* State + City */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5 mb-5">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Current Location (State):</label>
-                                    <select value={f.current_location_state} onChange={e => setF(p => ({...p, current_location_state:e.target.value}))} data-testid="reg-state"
-                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm text-gray-600 focus:outline-none focus:border-blue-300 focus:bg-white transition-colors appearance-none">
+                                    <select value={f.current_location_state} onChange={e => setF(p => ({...p, current_location_state:e.target.value}))} data-testid="reg-state" required
+                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-400 focus:bg-white appearance-none">
                                         <option value="">Select State</option>
                                         {STATES.map(s => <option key={s}>{s}</option>)}
                                     </select>
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Preferred Location (City)<span className="text-red-500">*</span>:</label>
-                                    <input type="text" value={f.preferred_location_city} onChange={e => setF(p => ({...p, preferred_location_city:e.target.value}))} data-testid="reg-city"
+                                    <input type="text" value={f.preferred_location_city} onChange={e => setF(p => ({...p, preferred_location_city:e.target.value}))} data-testid="reg-city" required
                                         placeholder="Start typing city name..."
-                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-300 focus:bg-white transition-colors placeholder:text-gray-400" />
+                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-400 focus:bg-white placeholder:text-gray-400" />
                                 </div>
                             </div>
 
-                            {/* Row: Year of Graduation + College */}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+                            {/* Conditional: Location change + Attend in person */}
+                            {showLocationQuestions() && (
+                                <div className="mb-5 space-y-4 bg-[#fafafa] border border-gray-200 rounded-lg p-5" data-testid="location-questions">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">Are you willing to relocate to Chennai for a full-time, on-site role? <span className="text-red-500">*</span></label>
+                                        <div className="flex gap-6">{['Yes','No'].map(v => <label key={v} className="flex items-center gap-2 text-sm cursor-pointer"><input type="radio" name="loca_change" checked={f.location_change===v} onChange={() => setF(p => ({...p, location_change:v}))} className="accent-blue-600 w-4 h-4" />{v}</label>)}</div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">Can you attend an in-person interview at our Chennai office? <span className="text-red-500">*</span></label>
+                                        <div className="flex gap-6">{['Yes','No'].map(v => <label key={v} className="flex items-center gap-2 text-sm cursor-pointer"><input type="radio" name="attend_inperson" checked={f.attend_in_person===v} onChange={() => setF(p => ({...p, attend_in_person:v}))} className="accent-blue-600 w-4 h-4" />{v}</label>)}</div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Year of Graduation + College */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5 mb-5">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Year of Graduation:</label>
-                                    <select value={f.year_of_graduation} onChange={e => setF(p => ({...p, year_of_graduation:e.target.value}))} data-testid="reg-year"
-                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm text-gray-600 focus:outline-none focus:border-blue-300 focus:bg-white transition-colors appearance-none">
+                                    <select value={f.year_of_graduation} onChange={e => setF(p => ({...p, year_of_graduation:e.target.value}))} data-testid="reg-year" required
+                                        className="w-full bg-white border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-400 appearance-none">
                                         <option value="">Select</option>
                                         {GRAD_YEARS.map(y => <option key={y}>{y}</option>)}
                                     </select>
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">College:</label>
-                                    <input type="text" value={f.college} onChange={e => setF(p => ({...p, college:e.target.value}))} data-testid="reg-college"
-                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-300 focus:bg-white transition-colors" />
+                                    <input type="text" value={f.college} onChange={e => setF(p => ({...p, college:e.target.value}))} data-testid="reg-college" required
+                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-400 focus:bg-white" />
                                 </div>
                             </div>
 
-                            {/* Row: Degree + Course */}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+                            {/* Degree + Course */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5 mb-5">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Degree:</label>
-                                    <select value={f.degree} onChange={e => setF(p => ({...p, degree:e.target.value}))} data-testid="reg-degree"
-                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm text-gray-600 focus:outline-none focus:border-blue-300 focus:bg-white transition-colors appearance-none">
+                                    <select value={f.degree} onChange={e => setF(p => ({...p, degree:e.target.value}))} data-testid="reg-degree" required
+                                        className="w-full bg-white border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-400 appearance-none">
                                         <option value="">Select a degree</option>
-                                        {DEGREES.map(d => <option key={d}>{d}</option>)}
+                                        <optgroup label="UG">{UG_DEGREES.map(d => <option key={d} value={d}>{d}</option>)}</optgroup>
+                                        <optgroup label="PG">{PG_DEGREES.map(d => <option key={d} value={d}>{d}</option>)}</optgroup>
                                     </select>
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Course:</label>
-                                    <select value={f.course} onChange={e => setF(p => ({...p, course:e.target.value}))} data-testid="reg-course"
-                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm text-gray-600 focus:outline-none focus:border-blue-300 focus:bg-white transition-colors appearance-none">
+                                    <select value={f.course} onChange={e => setF(p => ({...p, course:e.target.value}))} data-testid="reg-course" required
+                                        className="w-full bg-white border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-400 appearance-none">
                                         <option value="">Select a course</option>
-                                        {COURSES.map(c => <option key={c}>{c}</option>)}
                                     </select>
                                 </div>
                             </div>
 
-                            {/* Conditional location questions */}
-                            {showLocationQuestions() && (
-                                <div className="space-y-4 pt-2" data-testid="location-questions">
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-2">Are you willing to relocate? *</label>
-                                        <div className="flex gap-6">{['Yes','No'].map(v => <label key={v} className="flex items-center gap-2 text-sm cursor-pointer"><input type="radio" name="location_change" checked={f.location_change===v} onChange={() => setF(p => ({...p, location_change:v}))} className="accent-blue-600 w-4 h-4" />{v}</label>)}</div>
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-gray-700 mb-2">Can you attend an in-person interview? *</label>
-                                        <div className="flex gap-6">{['Yes','No'].map(v => <label key={v} className="flex items-center gap-2 text-sm cursor-pointer"><input type="radio" name="attend_in_person" checked={f.attend_in_person===v} onChange={() => setF(p => ({...p, attend_in_person:v}))} className="accent-blue-600 w-4 h-4" />{v}</label>)}</div>
+                            {/* Questionnaire section (for AI&ML role - matches reference exactly) */}
+                            {isAIML && (
+                                <div className="border-t border-gray-200 pt-6 mt-6 space-y-5">
+                                    <h3 className="text-lg font-bold text-gray-900">We'd like to know you better</h3>
+                                    <p className="text-sm text-gray-700 bg-yellow-50 border border-yellow-200 rounded p-3"><b>Note:</b> This role is strictly for candidates with strong C/C++ OR Java programming skills. Python-only ML profiles will not be considered.</p>
+                                    <div className="space-y-5">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">1. What is your proficiency level in C/C++?</label>
+                                            <div className="flex flex-col gap-2 pl-1">{['Beginner','Intermediate','Advanced'].map(v => <label key={v} className="flex items-center gap-2 text-sm cursor-pointer"><input type="radio" name="q1" checked={f.q1===v} onChange={() => setF(p => ({...p, q1:v}))} className="accent-blue-600 w-4 h-4" />{v}</label>)}</div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">2. Have you worked with core concepts such as pointers/memory management in C/C++ and OOP/collections/error handling in Java?</label>
+                                            <div className="flex gap-6 pl-1">{['Yes','No'].map(v => <label key={v} className="flex items-center gap-2 text-sm cursor-pointer"><input type="radio" name="q2" checked={f.q2===v} onChange={() => setF(p => ({...p, q2:v}))} className="accent-blue-600 w-4 h-4" />{v}</label>)}</div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">3. Have you built any projects in Java or C/C++ (college, personal, or internship)?</label>
+                                            <div className="flex gap-6 pl-1">{['Yes','No'].map(v => <label key={v} className="flex items-center gap-2 text-sm cursor-pointer"><input type="radio" name="q3" checked={f.q3===v} onChange={() => setF(p => ({...p, q3:v}))} className="accent-blue-600 w-4 h-4" />{v}</label>)}</div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">4. Are you comfortable taking an implementation-based technical test in Java or C/C++?</label>
+                                            <div className="flex gap-6 pl-1">{['Yes','No'].map(v => <label key={v} className="flex items-center gap-2 text-sm cursor-pointer"><input type="radio" name="q4" checked={f.q4===v} onChange={() => setF(p => ({...p, q4:v}))} className="accent-blue-600 w-4 h-4" />{v}</label>)}</div>
+                                        </div>
                                     </div>
                                 </div>
                             )}
 
-                            {/* Confirmation checkbox */}
-                            <div className="bg-[#eef4ff] border border-[#c8deff] rounded-lg p-4 mt-2">
+                            {/* Declaration */}
+                            <div className="mt-6 mb-6">
                                 <label className="flex items-start gap-3 cursor-pointer">
-                                    <input type="checkbox" className="mt-0.5 accent-blue-600 w-4 h-4" />
+                                    <input type="checkbox" className="mt-0.5 accent-blue-600 w-4 h-4" required />
                                     <span className="text-sm text-gray-700">I hereby confirm that all the information provided above is accurate to the best of my knowledge.</span>
                                 </label>
                             </div>
 
-                            {/* Submit button */}
-                            <div className="flex justify-center pt-2">
+                            {/* Submit */}
+                            <div className="flex justify-center">
                                 <button onClick={handleSubmit} disabled={submitting} data-testid="proceed-btn"
-                                    className="px-12 py-3 bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-bold rounded-lg disabled:opacity-50 tracking-wide">
-                                    {submitting ? 'Processing...' : 'PROCEED'}
+                                    className="px-14 py-3 bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-bold rounded-lg disabled:opacity-50 tracking-wide text-base">
+                                    {submitting ? 'Processing...' : 'Proceed'}
                                 </button>
                             </div>
                         </div>
@@ -292,7 +316,6 @@ export default function PublicRegistration() {
                 </div>
             </div>
 
-            {/* Footer */}
             <footer className="py-4 text-center text-sm text-gray-500">Copyright 2026 &copy; <b>Blubridge.com</b></footer>
         </div>
     );

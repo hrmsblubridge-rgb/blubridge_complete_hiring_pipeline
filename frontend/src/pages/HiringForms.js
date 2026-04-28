@@ -97,7 +97,7 @@ export default function HiringForms() {
     return (
         <div className="min-h-screen bg-[#0a0a0a] text-white" data-testid="hiring-forms-page">
             <header className="border-b border-zinc-800 px-8 py-5 flex items-center gap-4">
-                <button onClick={() => navigate('/home')} data-testid="back-btn" className="p-2 hover:bg-zinc-800"><ArrowLeft size={20} /></button>
+                <button onClick={() => window.history.length > 1 ? navigate(-1) : navigate('/home')} data-testid="back-btn" className="p-2 hover:bg-zinc-800"><ArrowLeft size={20} /></button>
                 <h1 className="text-xl font-semibold tracking-tight">Hiring Forms</h1>
                 <div className="ml-auto flex gap-2">
                     <button onClick={openAddType} data-testid="add-form-type-btn" className="flex items-center gap-2 px-4 py-2 bg-violet-700 hover:bg-violet-600 text-sm font-medium"><Plus size={16} /> Add Form Type</button>

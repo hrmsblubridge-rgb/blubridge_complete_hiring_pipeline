@@ -49,7 +49,7 @@ export default function ManageJobRoles() {
     return (
         <div className="min-h-screen bg-[#0a0a0a] text-white" data-testid="manage-job-roles-page">
             <header className="border-b border-zinc-800 px-8 py-5 flex items-center gap-4">
-                <button onClick={() => navigate('/home')} data-testid="back-btn" className="p-2 hover:bg-zinc-800 transition-colors"><ArrowLeft size={20} /></button>
+                <button onClick={() => window.history.length > 1 ? navigate(-1) : navigate('/home')} data-testid="back-btn" className="p-2 hover:bg-zinc-800 transition-colors"><ArrowLeft size={20} /></button>
                 <h1 className="text-xl font-semibold tracking-tight">Create Job Roles</h1>
                 <button onClick={openAdd} data-testid="add-role-btn" className="ml-auto flex items-center gap-2 px-4 py-2 bg-blue-700 hover:bg-blue-600 text-sm font-medium transition-colors"><Plus size={16} /> Add Job Role</button>
             </header>

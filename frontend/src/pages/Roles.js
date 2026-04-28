@@ -113,7 +113,7 @@ export default function Applicants() {
     return (
         <div className="min-h-screen bg-[#0a0a0a] text-white" data-testid="applicants-page">
             <header className="border-b border-zinc-800 px-8 py-5 flex items-center gap-4">
-                <button onClick={() => navigate('/dashboard')} data-testid="back-btn" className="p-2 hover:bg-zinc-800 transition-colors">
+                <button onClick={() => window.history.length > 1 ? navigate(-1) : navigate('/home')} data-testid="back-btn" className="p-2 hover:bg-zinc-800 transition-colors">
                     <ArrowLeft size={20} />
                 </button>
                 <h1 className="text-xl font-semibold tracking-tight">View Applicants</h1>
