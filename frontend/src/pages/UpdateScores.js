@@ -90,10 +90,10 @@ export default function UpdateScores() {
         const file = e.target.files?.[0];
         if (!file) return;
         try {
-            const text = await file.text();
-            const lines = text.split('\n').filter(l => l.trim());
-            if (lines.length < 2) { toast.error('File is empty'); return; }
-            toast.success(`Imported ${lines.length - 1} records`);
+            const formData = new FormData();
+            formData.append('file', file);
+            const res = await axios.post(`${API}/api/bb/import-scores`, formData, { withCredentials: true, headers: { 'Content-Type': 'multipart/form-data' } });
+            toast.success(`Imported ${res.data.imported} records`);
             fetchApplicants();
         } catch { toast.error('Import failed'); }
         e.target.value = '';
