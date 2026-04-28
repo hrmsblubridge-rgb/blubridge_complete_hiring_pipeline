@@ -15,57 +15,9 @@ pub_router = APIRouter(prefix="/api/pub")
 _logger = logging.getLogger("bb_modules")
 
 
-# ============ MESSAGING STUBS (Present but NOT triggered/tested per instructions) ============
-
-AISENSY_API_URL = "https://backend.aisensy.com/campaign/t1/api/v2"
-AISENSY_API_KEY = "eyJhbGciOiJIUzI1NilsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5NDI0MTYwNzA4MDcwNjE5YzAyZWFhNilsIm5hbWUiOiJCbHVicmlkZ2V0ZWNobm9sb2dpZXMiLCJhcHBOYW1IIjoiQWITZW5zeSIsImNsaWVudElkljoiNjg5NDRIOThiMjQ3NDQwYzBkYzljNzI3IiwiYWN0aXZIUGxhbil6IkZSRUVfRk9SRVZFUiIsImlhdCI6MTc2NTk0OTc5Mn0.16lJKhbj6JfK_1zzzUgLMwxy5laqBwu3IjV08xBLRBs"
-
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 465
-SMTP_USER = "hr@blubridge.com"
-SMTP_PASSWORD = "tmiu rkqp fxcw nwxf"
-FROM_EMAIL = "hr@blubridge.com"
-
-OFFICE_LOCATION = "30, Norton Road, Mandavelipakkam, Raja Annamalai Puram, Chennai, Tamil Nadu - 600028."
-
-
-async def _send_aisensy_whatsapp(campaign_name: str, mobile: str, template_params: list, user_name: str = "Blubridge Technologies"):
-    """AiSensy WhatsApp messaging — STUB. Logic present but NOT executed."""
-    _logger.info(f"[STUB] WhatsApp: campaign={campaign_name}, mobile={mobile}, params={template_params}")
-    # Implementation ready but not triggered per instructions
-    return None
-
-
-async def _send_email(to_email: str, subject: str, html_body: str):
-    """SMTP email — STUB. Logic present but NOT executed."""
-    _logger.info(f"[STUB] Email: to={to_email}, subject={subject}")
-    # Implementation ready but not triggered per instructions
-    return None
-
-
-async def _notify_shortlisted(name: str, phone: str, email: str, schedule_link: str):
-    """Send shortlist notification — STUB."""
-    _logger.info(f"[STUB] Shortlist notification: {name}, {email}")
-
-
-async def _notify_rejected(phone: str, email: str):
-    """Send rejection notification — STUB."""
-    _logger.info(f"[STUB] Reject notification: {email}")
-
-
-async def _notify_schedule_confirmation(name: str, phone: str, email: str, date: str, time: str):
-    """Send schedule confirmation — STUB."""
-    _logger.info(f"[STUB] Schedule confirmation: {name}, {date} {time}")
-
-
-async def _send_otp_notification(name: str, phone: str, email: str, job_role: str, otp: str, date: str, time: str):
-    """Send OTP notification — STUB."""
-    _logger.info(f"[STUB] OTP notification: {name}, otp={otp}")
-
-
-async def _send_missed_reminder(name: str, phone: str, email: str, role: str, date: str, time: str, reschedule_link: str):
-    """Send missed interview reminder — STUB."""
-    _logger.info(f"[STUB] Missed reminder: {name}, {date} {time}")
+# ============ MESSAGING — Delegated to messaging.py ============
+# All recipient overrides (TEST_MODE) happen in messaging.py centrally.
+# No direct messaging logic in this file.
 
 # Shared dependencies — injected from server.py
 _db = None
@@ -782,7 +734,7 @@ async def register_applicant(data: RegistrationBody):
     }
     await _db.registered_candidates.insert_one(rc_doc)
 
-    # Email/WhatsApp STUBBED — status updates happen, no messages sent
+    # Messaging handled by background workers (schedule_link_sender)
     return {
         "success": True,
         "status": status,
@@ -858,5 +810,14 @@ async def schedule_interview(token: str, data: ScheduleBody):
         }}
     )
 
-    # Email/WhatsApp STUBBED — no messages sent
+    # Send schedule confirmation via messaging service
+    try:
+        from messaging import notify_schedule_confirmation
+        await notify_schedule_confirmation(
+            reg.get("full_name", ""), reg.get("phone", ""), reg.get("email", ""),
+            data.date.strip(), time_24,
+        )
+    except Exception as e:
+        _logger.error(f"Schedule confirmation send failed: {e}")
+
     return {"success": True, "is_reschedule": is_reschedule, "otp": otp}

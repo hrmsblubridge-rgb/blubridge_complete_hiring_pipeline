@@ -2404,6 +2404,12 @@ async def startup_event():
     asyncio.create_task(_bg_queue_worker())
     logger.info("DB-driven background queue worker launched")
 
+    # Start messaging background workers
+    from bg_workers import init_workers, start_all_workers
+    init_workers(db)
+    await start_all_workers()
+    logger.info("Messaging background workers launched")
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
