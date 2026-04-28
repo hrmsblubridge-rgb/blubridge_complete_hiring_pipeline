@@ -538,9 +538,12 @@ async def verify_applicant_otp(data: OTPVerifyBody, request: Request):
     if not phone or not otp_val:
         raise HTTPException(status_code=400, detail="Phone and OTP required")
     # Find applicant in bb_registrations by phone + otp
-    applicant = await _db.bb_registrations.find_one({"phone": phone, "otp": otp_val, "otp_expired": {"$in": [None, ""]}})
+    applicant = await _db.bb_registrations.find_one({"phone": phone, "otp": otp_val})
     if not applicant:
         return {"success": False, "message": "Invalid OTP !"}
+    # Check if OTP is expired
+    if applicant.get("otp_expired"):
+        return {"success": False, "message": "OTP has expired. Please contact support."}
     # Mark as verified
     await _db.bb_registrations.update_one({"_id": applicant["_id"]}, {"$set": {"otp_verified": True, "status": "Attended"}})
     # Also update registered_candidates if matched

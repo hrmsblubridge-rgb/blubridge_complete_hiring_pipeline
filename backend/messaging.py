@@ -14,7 +14,7 @@ _logger = logging.getLogger("messaging")
 # ============ CONFIG (from environment) ============
 
 AISENSY_API_URL = "https://backend.aisensy.com/campaign/t1/api/v2"
-AISENSY_API_KEY = "eyJhbGciOiJIUzI1NilsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5NDI0MTYwNzA4MDcwNjE5YzAyZWFhNilsIm5hbWUiOiJCbHVicmlkZ2V0ZWNobm9sb2dpZXMiLCJhcHBOYW1IIjoiQWITZW5zeSIsImNsaWVudElkljoiNjg5NDRIOThiMjQ3NDQwYzBkYzljNzI3IiwiYWN0aXZIUGxhbil6IkZSRUVfRk9SRVZFUiIsImlhdCI6MTc2NTk0OTc5Mn0.16lJKhbj6JfK_1zzzUgLMwxy5laqBwu3IjV08xBLRBs"
+AISENSY_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5NDI0MTYwNzA4MDcwNjE5YzAyZWFhNiIsIm5hbWUiOiJCbHVicmlkZ2V0ZWNobm9sb2dpZXMiLCJhcHBOYW1lIjoiQWlTZW5zeSIsImNsaWVudElkIjoiNjg5NDRlOThiMjQ3NDQwYzBkYzljNzI3IiwiYWN0aXZlUGxhbiI6IkZSRUVfRk9SRVZFUiIsImlhdCI6MTc2NTk0OTc5Mn0.16lJKhbj6JfK_1zzzUgLMwxy5IaqBwu3ljV08xBLRBs"
 
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 465

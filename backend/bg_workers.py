@@ -27,6 +27,8 @@ async def start_all_workers():
     asyncio.create_task(_worker_otp_generator())
     asyncio.create_task(_worker_schedule_link_sender())
     asyncio.create_task(_worker_24h_reminder())
+    asyncio.create_task(_worker_otp_expiry())
+    asyncio.create_task(_worker_missed_interview())
 
 
 # ============ WORKER A: OTP Generator (every 30s) ============
@@ -206,3 +208,113 @@ async def _worker_24h_reminder():
             _logger.error(f"[24hReminder Worker] Error: {e}")
 
         await asyncio.sleep(300)  # 5 minutes
+
+
+# ============ WORKER D: OTP Expiry (every 60s) ============
+
+async def _worker_otp_expiry():
+    """Expire OTPs that were sent more than 8 hours ago."""
+    _logger.info("OTP Expiry worker started")
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            eight_hours_ago = (now - timedelta(hours=8)).isoformat()
+
+            # Find registrations with OTP sent > 8h ago and not yet expired
+            cursor = _db.bb_registrations.find({
+                "otp_sent": True,
+                "otp_expired": {"$ne": True},
+                "otp_verified": {"$ne": True},
+                "otp_sent_at": {"$lte": eight_hours_ago},
+            })
+            docs = await cursor.to_list(None)
+
+            for doc in docs:
+                await _db.bb_registrations.update_one(
+                    {"_id": doc["_id"]},
+                    {"$set": {"otp_expired": True, "otp_expired_at": now.isoformat()}}
+                )
+                _logger.info(f"[OTP Expiry] Expired OTP for {doc.get('email')}")
+
+        except Exception as e:
+            _logger.error(f"[OTP Expiry Worker] Error: {e}")
+
+        await asyncio.sleep(60)
+
+
+# ============ WORKER E: Missed Interview Auto-Status (every 2 min) ============
+
+async def _worker_missed_interview():
+    """Mark applicants as 'Missed' if interview time passed and OTP not verified. Send reminder."""
+    _logger.info("Missed Interview worker started")
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            today_str = now.strftime("%Y-%m-%d")
+
+            # Find scheduled interviews for today (or past) that weren't attended
+            cursor = _db.bb_registrations.find({
+                "status": "Interview Scheduled",
+                "otp_verified": {"$ne": True},
+                "missed_marked": {"$ne": True},
+                "schedule_date": {"$lte": today_str},
+                "schedule_time": {"$nin": [None, ""], "$exists": True},
+            })
+            docs = await cursor.to_list(None)
+
+            for doc in docs:
+                schedule_date = doc.get("schedule_date", "")
+                schedule_time_str = (doc.get("schedule_time") or "").strip()
+                if not schedule_time_str:
+                    continue
+
+                try:
+                    parts = schedule_time_str.split(":")
+                    hour, minute = int(parts[0]), int(parts[1])
+                except (ValueError, IndexError):
+                    continue
+
+                # Build interview datetime
+                try:
+                    from datetime import date as date_type
+                    y, m, d = map(int, schedule_date.split("-"))
+                    interview_dt = datetime(y, m, d, hour, minute, 0, tzinfo=timezone.utc)
+                except (ValueError, IndexError):
+                    continue
+
+                # Only mark missed if interview time + 2 hours has passed (grace period)
+                if now < interview_dt + timedelta(hours=2):
+                    continue
+
+                # Mark as missed
+                await _db.bb_registrations.update_one(
+                    {"_id": doc["_id"]},
+                    {"$set": {"status": "Missed", "missed_marked": True, "missed_at": now.isoformat()}}
+                )
+
+                # Update registered_candidates
+                await _db.registered_candidates.update_many(
+                    {"$or": [{"email": doc.get("email", "")}, {"phone": doc.get("phone", "")}]},
+                    {"$set": {"result_status": "Missed"}}
+                )
+
+                # Send missed reminder with reschedule link
+                token = doc.get("schedule_token")
+                if token:
+                    from messaging import notify_missed_reminder
+                    await notify_missed_reminder(
+                        doc.get("full_name", ""),
+                        doc.get("phone", ""),
+                        doc.get("email", ""),
+                        doc.get("job_role", ""),
+                        schedule_date,
+                        schedule_time_str,
+                        token,
+                    )
+
+                _logger.info(f"[Missed] Marked {doc.get('email')} as Missed")
+
+        except Exception as e:
+            _logger.error(f"[Missed Interview Worker] Error: {e}")
+
+        await asyncio.sleep(120)  # 2 minutes
