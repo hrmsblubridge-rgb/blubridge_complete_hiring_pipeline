@@ -813,13 +813,21 @@ async def schedule_interview(token: str, data: ScheduleBody):
         }}
     )
 
-    # Send schedule confirmation via messaging service
+    # Send schedule confirmation ONLY if shortlist mail was already sent (sequencing rule)
     try:
-        from messaging import notify_schedule_confirmation
-        await notify_schedule_confirmation(
-            reg.get("full_name", ""), reg.get("phone", ""), reg.get("email", ""),
-            data.date.strip(), time_24,
-        )
+        if reg.get("shortlist_mail_sent"):
+            from messaging import notify_schedule_confirmation
+            await notify_schedule_confirmation(
+                reg.get("full_name", ""), reg.get("phone", ""), reg.get("email", ""),
+                data.date.strip(), time_24,
+            )
+            await _db.bb_registrations.update_one(
+                {"_id": reg["_id"]},
+                {"$set": {"interview_mail_sent": True, "interview_mail_sent_at": datetime.now(timezone.utc).isoformat()}}
+            )
+        else:
+            # Shortlist mail not yet sent — interview mail will be sent by worker after shortlist mail
+            _logger.info(f"[Sequencing] Interview mail deferred for {reg.get('email')} — awaiting shortlist mail first")
     except Exception as e:
         _logger.error(f"Schedule confirmation send failed: {e}")
 

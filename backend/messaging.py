@@ -16,11 +16,11 @@ _logger = logging.getLogger("messaging")
 AISENSY_API_URL = "https://backend.aisensy.com/campaign/t1/api/v2"
 AISENSY_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5NDI0MTYwNzA4MDcwNjE5YzAyZWFhNiIsIm5hbWUiOiJCbHVicmlkZ2V0ZWNobm9sb2dpZXMiLCJhcHBOYW1lIjoiQWlTZW5zeSIsImNsaWVudElkIjoiNjg5NDRlOThiMjQ3NDQwYzBkYzljNzI3IiwiYWN0aXZlUGxhbiI6IkZSRUVfRk9SRVZFUiIsImlhdCI6MTc2NTk0OTc5Mn0.16lJKhbj6JfK_1zzzUgLMwxy5IaqBwu3ljV08xBLRBs"
 
-SMTP_HOST = "smtp.gmail.com"
-SMTP_PORT = 465
-SMTP_USER = "hr@blubridge.com"
-SMTP_PASSWORD = "tmiu rkqp fxcw nwxf"
-FROM_EMAIL = "hr@blubridge.com"
+SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
+SMTP_USER = os.environ.get("SMTP_USER", "hiring@blubridge.com")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "dfna xkah pvpe djay")
+FROM_EMAIL = os.environ.get("FROM_EMAIL", "hiring@blubridge.com")
 
 OFFICE_LOCATION = "30, Norton Road, Mandavelipakkam, Raja Annamalai Puram, Chennai, Tamil Nadu - 600028."
 

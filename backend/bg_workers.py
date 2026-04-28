@@ -134,7 +134,12 @@ async def _worker_schedule_link_sender():
 
                 await _db.bb_registrations.update_one(
                     {"_id": doc["_id"]},
-                    {"$set": {"schedule_link_sent": True, "schedule_link_sent_at": now.isoformat()}}
+                    {"$set": {
+                        "schedule_link_sent": True,
+                        "schedule_link_sent_at": now.isoformat(),
+                        "shortlist_mail_sent": True,
+                        "shortlist_mail_sent_time": now.isoformat(),
+                    }}
                 )
                 _logger.info(f"[ScheduleLink] Sent to {doc.get('email')}")
 
@@ -158,6 +163,30 @@ async def _worker_schedule_link_sender():
                     {"$set": {"reject_notified": True, "reject_notified_at": now.isoformat()}}
                 )
                 _logger.info(f"[Reject] Notified {doc.get('email')}")
+
+            # Send deferred interview mails: shortlist sent but interview mail not yet sent
+            deferred_cursor = _db.bb_registrations.find({
+                "shortlist_mail_sent": True,
+                "interview_mail_sent": {"$ne": True},
+                "schedule_date": {"$nin": [None, ""], "$exists": True},
+                "schedule_time": {"$nin": [None, ""], "$exists": True},
+            })
+            deferred_docs = await deferred_cursor.to_list(None)
+
+            for doc in deferred_docs:
+                from messaging import notify_schedule_confirmation
+                await notify_schedule_confirmation(
+                    doc.get("full_name", ""),
+                    doc.get("phone", ""),
+                    doc.get("email", ""),
+                    doc.get("schedule_date", ""),
+                    doc.get("schedule_time", ""),
+                )
+                await _db.bb_registrations.update_one(
+                    {"_id": doc["_id"]},
+                    {"$set": {"interview_mail_sent": True, "interview_mail_sent_at": now.isoformat()}}
+                )
+                _logger.info(f"[InterviewMail] Deferred send to {doc.get('email')}")
 
         except Exception as e:
             _logger.error(f"[ScheduleLink Worker] Error: {e}")
