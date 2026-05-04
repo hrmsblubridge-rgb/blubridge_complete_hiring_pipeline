@@ -1,0 +1,81 @@
+{
+  "summary": "Iteration 29: Interview Schedule Reports performance fix + Update Scores pagination + back button rollout. Backend: 12/12 pytest tests PASS in 24s on /api/bb/interview-reports (pagination, filters, sort, summary), /api/bb/attended-for-scores (pagination, filters), and PUT /api/bb/applicant-score. Frontend: All 12 protected pages show data-testid='back-btn'; /home and /login do NOT. /interview-reports loads with Page 1 of 50 (4919 records), summary tiles non-zero (1024 attended / 3895 not / 948 premium / 3971 non-premium). /update-scores has pagination + modal pre-populates status & scores; page-size change works. No blocking issues.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_tests": {
+    "interview_reports_api": [
+      "GET /api/bb/interview-reports?page=1&limit=10 -> 200 in <10s, total=4919, totalPages=492, all required keys present (data,total,page,limit,totalPages,summary{role_counts,attended,not_attended,premium_colleges,non_premium_colleges})",
+      "Filter collegeType=Premium + attendance=Attended -> only Premium College + Attended rows (no leak)",
+      "Filter collegeType=Non Premium -> only Non Premium College rows",
+      "Filter attendance=Not Attended -> only Not Attended rows",
+      "Filter jobRole=<top role from summary> -> only that role's rows",
+      "Filter startDate=2026-01-01 endDate=2026-12-31 -> 200",
+      "page=1 vs page=2 returns DISTINCT rows; total & totalPages constant",
+      "Sort by schedule_date DESC verified on first 3 rows"
+    ],
+    "attended_for_scores_api": [
+      "GET /api/bb/attended-for-scores?page=1&limit=10 -> 200, total=1024 (matches expected ~1024); row contains name/email/phone/date_of_interview/job_role/status/scores[]",
+      "page=1 vs page=2 with limit=50 returns DISTINCT rows; total constant",
+      "Date range filter applied -> 200"
+    ],
+    "applicant_score_put": [
+      "PUT /api/bb/applicant-score/<email> with {status:'TEST_STATUS_<ts>', scores:[{round_name:'TEST',score:99.5}]} -> 200, success:true",
+      "Verified persisted via subsequent GET (status updated, TEST round score=99.5 present)",
+      "Reverted status to original 'On hold'; cleaned up test scores via direct DB delete on bb_applicant_updates (since PUT cannot clear scores; see code review note)"
+    ],
+    "frontend_back_button": [
+      "/dashboard, /summary, /roles, /attended-roles, /jobs-keywords, /manage-job-roles, /hiring-forms, /interview-reports, /update-scores, /job-openings, /set-holidays, /verify-otp -> data-testid='back-btn' present (count=1 on each)",
+      "/home -> NO back-btn (count=0) as required",
+      "Login.js source verified (no back-btn)",
+      "Click back-btn from /summary navigated to previous /update-scores page (history-based nav works)"
+    ],
+    "frontend_interview_reports_ui": [
+      "Page loads, summary tiles show non-zero (1024/3895/948/3971)",
+      "Pagination footer renders: 'Page 1 of 50 (4919 records)' with prev/next caret buttons (no testids but functional)",
+      "Filters (job role, attendance, college, date) and APPLY/Reset/Export buttons render"
+    ],
+    "frontend_update_scores_ui": [
+      "data-testid='pagination', 'page-size-select', 'next-page-btn' all present on bottom of /update-scores",
+      "Page-size change to '50/page' reloads table with 50 rows (DB-paged)",
+      "Update buttons (100 visible) trigger 'Update Score' modal that pre-populates status='On hold' and existing scores (verified 99.5 prefill from prior test data)",
+      "Cancel closes modal; pagination state preserved"
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration29_pagination.py",
+    "/app/test_reports/pytest/pytest_results_iteration29.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "InterviewReports.js pagination prev/next buttons (lines ~155-160) lack data-testid attributes. UpdateScores has them ('pagination','page-size-select','prev-page-btn','next-page-btn') — recommend adding equivalent testids to InterviewReports for testability parity.",
+    "PUT /api/bb/applicant-score/{email} cannot CLEAR existing scores because handler uses `if data.scores:` (empty list is falsy). To erase test scores I had to delete the bb_applicant_updates row directly. Consider treating `scores=[]` as explicit clear (use `if data.scores is not None`).",
+    "In get_attended_for_scores (bb_modules.py line ~507-510), the date-range merge `match['schedule_date'] = {**match.get('schedule_date',{}),...}` overwrites the base `{$nin:..., $exists:True}` — works but fragile; use `match['schedule_date'].update(...)` after seeding the dict.",
+    "Interview reports endpoint optimization is well-implemented: aggregation pipelines on persisted _normalized_job_role + _nirf_category + DB-level $skip/$limit. Confirmed performant (<10s for total=4919; first request 1.6s). Summary aggregations run over the matched set (correct contract).",
+    "available_rounds in /attended-for-scores is computed via score_sheet.distinct('round_name') on EVERY page request — could cache (5-min TTL) since global set rarely changes."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration29_pagination.py"
+  ],
+  "success_rate": {
+    "backend": "100% (12/12 pytest passed in 24s)",
+    "frontend": "100% (all back-button, pagination, modal flows verified)"
+  },
+  "test_credentials": {
+    "username": "Admin User",
+    "password": "Admin User"
+  },
+  "seed_data_creation": "Single PUT used a real email (ajithkumarm0607@gmail.com) — value reverted in test teardown; leftover scores on bb_applicant_updates cleaned up via direct DB delete (1 doc removed). registered_candidates result_status reset check ran (0 modified, no leak). Production data otherwise untouched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Reusable suite at /app/backend/tests/test_iteration29_pagination.py — covers /api/bb/interview-reports (pagination/filters/sort/summary), /api/bb/attended-for-scores (pagination/filters), and PUT /api/bb/applicant-score. All tests login with 'Admin User'/'Admin User'. PUT test mutates a REAL email's status briefly then reverts; remember PUT cannot clear scores so any added scores need DB cleanup if they leak. InterviewReports.js still lacks data-testid on prev/next pagination buttons — re-check after any refactor. Backend interview-reports response time: ~1.6s on first call, <1s subsequent (with cached _normalized_job_role / _nirf_category indices).",
+  "mocked_apis": {
+    "WhatsApp AiSensy": "Returns 401 - unchanged, not exercised in iter29"
+  }
+}

@@ -2,13 +2,17 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { ArrowLeft, FunnelSimple, PencilSimple, X, Plus, Trash, FloppyDisk, Export, UploadSimple } from '@phosphor-icons/react';
+import { ArrowLeft, FunnelSimple, PencilSimple, X, Plus, Trash, FloppyDisk, Export, UploadSimple, CaretLeft, CaretRight } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
+const PAGE_SIZES = [10, 50, 100, 150, 200, 250, 300, 500];
 
 export default function UpdateScores() {
     const navigate = useNavigate();
     const [applicants, setApplicants] = useState([]);
+    const [total, setTotal] = useState(0);
+    const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(100);
     const [loading, setLoading] = useState(true);
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
@@ -24,21 +28,25 @@ export default function UpdateScores() {
         try { const r = await axios.get(`${API}/api/bb/rounds`, { withCredentials: true }); setRounds(r.data.rounds || []); } catch {}
     }, []);
 
-    const fetchApplicants = useCallback(async () => {
+    const fetchApplicants = useCallback(async (pg = 1, sz = 100) => {
         setLoading(true);
         try {
-            const params = {};
+            const params = { page: pg, limit: sz };
             if (startDate) params.startDate = startDate;
             if (endDate) params.endDate = endDate;
             const r = await axios.get(`${API}/api/bb/attended-for-scores`, { params, withCredentials: true });
             setApplicants(r.data.data || []);
+            setTotal(r.data.total || 0);
         } catch { toast.error('Failed to load'); }
         finally { setLoading(false); }
     }, [startDate, endDate]);
 
-    useEffect(() => { fetchRounds(); fetchApplicants(); }, [fetchRounds, fetchApplicants]);
+    useEffect(() => { fetchRounds(); }, [fetchRounds]);
+    useEffect(() => { fetchApplicants(1, pageSize); setPage(1); }, [fetchApplicants, pageSize]);
 
-    const applyFilter = () => fetchApplicants();
+    const applyFilter = () => { setPage(1); fetchApplicants(1, pageSize); };
+    const totalPages = Math.ceil(total / pageSize) || 1;
+    const navPage = (pg) => { if (pg >= 1 && pg <= totalPages) { setPage(pg); fetchApplicants(pg, pageSize); } };
 
     const openUpdate = (app) => {
         setShowUpdate(app);
@@ -59,7 +67,7 @@ export default function UpdateScores() {
         const scores = updateScores.filter(s => s.round_name && s.score !== '').map(s => ({ round_name: s.round_name, score: parseFloat(s.score) || 0 }));
         try {
             await axios.put(`${API}/api/bb/applicant-score/${encodeURIComponent(showUpdate.email)}`, { status: updateStatus, scores }, { withCredentials: true });
-            toast.success('Updated'); setShowUpdate(null); fetchApplicants();
+            toast.success('Updated'); setShowUpdate(null); fetchApplicants(page, pageSize);
         } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
     };
 
@@ -99,7 +107,7 @@ export default function UpdateScores() {
             formData.append('file', file);
             const res = await axios.post(`${API}/api/bb/import-scores`, formData, { withCredentials: true, headers: { 'Content-Type': 'multipart/form-data' } });
             toast.success(`Imported ${res.data.imported} records`);
-            fetchApplicants();
+            fetchApplicants(page, pageSize);
         } catch { toast.error('Import failed'); }
         e.target.value = '';
     };
@@ -147,6 +155,19 @@ export default function UpdateScores() {
                             ))}
                         </tbody>
                     </table>
+                </div>}
+                {/* Pagination */}
+                {total > 0 && <div className="flex items-center justify-between mt-4" data-testid="pagination">
+                    <div className="flex items-center gap-3">
+                        <span className="text-sm text-zinc-500">Page {page} of {totalPages} ({total} records)</span>
+                        <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }} data-testid="page-size-select" className="bg-zinc-900 border border-zinc-700 px-2 py-1.5 text-sm">
+                            {PAGE_SIZES.map(s => <option key={s} value={s}>{s} / page</option>)}
+                        </select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        {page > 1 && <button onClick={() => navPage(page - 1)} data-testid="prev-page-btn" className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm"><CaretLeft size={14} /></button>}
+                        {page < totalPages && <button onClick={() => navPage(page + 1)} data-testid="next-page-btn" className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm"><CaretRight size={14} /></button>}
+                    </div>
                 </div>}
             </div>
 

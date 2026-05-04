@@ -345,66 +345,137 @@ async def get_interview_reports(
     collegeType: str = Query(None),
     page: int = Query(1, ge=1), limit: int = Query(100, ge=1, le=500),
 ):
+    """Interview Schedule Reports — OPTIMIZED (May 2026).
+    Filters and summary counts are computed at the DB level using the persisted
+    derived fields `_nirf_category` and `_normalized_job_role`. Returns
+    {data, total, page, limit, totalPages, summary}.
+    """
     await _require_auth(request)
-    match = {"schedule_date": {"$nin": [None, ""], "$exists": True},
-             "schedule_time": {"$nin": [None, ""], "$exists": True}}
-    if startDate:
-        match["schedule_date"] = {**match["schedule_date"], "$gte": startDate}
-    if endDate:
-        match["schedule_date"] = {**match["schedule_date"], "$lte": endDate}
 
-    all_docs = await _db.registered_candidates.find(match, {"_id": 0}).to_list(None)
-    all_docs.sort(key=lambda x: x.get("schedule_date") or "", reverse=True)
-    rank_lookup = await _build_college_rank_lookup_fn()
+    # Base match: only candidates with a schedule
+    match = {
+        "schedule_date": {"$nin": [None, ""], "$exists": True},
+        "schedule_time": {"$nin": [None, ""], "$exists": True},
+    }
+    if startDate or endDate:
+        sd = {"$nin": [None, ""], "$exists": True}
+        if startDate:
+            sd["$gte"] = startDate
+        if endDate:
+            sd["$lte"] = endDate
+        match["schedule_date"] = sd
+
+    # Job role filter → persisted _normalized_job_role (case-insensitive exact)
+    if jobRole and jobRole.strip().lower() not in ("", "all"):
+        match["_normalized_job_role"] = {
+            "$regex": f"^{re.escape(jobRole.strip())}$", "$options": "i"
+        }
+
+    # College type filter → persisted _nirf_category
+    if collegeType and collegeType.strip().lower() not in ("", "all"):
+        ct = collegeType.strip().lower()
+        if "non" in ct:
+            match["_nirf_category"] = "Non NIRF"
+        elif "premium" in ct:
+            match["_nirf_category"] = "NIRF"
+
+    # Attendance filter → otp_verified presence
+    if attendance and attendance.strip().lower() not in ("", "all"):
+        att = attendance.strip().lower().replace(" ", "")
+        if att == "attended":
+            match["otp_verified"] = {"$nin": [None, ""], "$exists": True}
+        elif att == "notattended":
+            match["$or"] = [
+                {"otp_verified": {"$in": [None, ""]}},
+                {"otp_verified": {"$exists": False}},
+            ]
+
+    # Total + paginated page (DB-level)
+    total = await _db.registered_candidates.count_documents(match)
+    skip = (page - 1) * limit
+    pipeline = [
+        {"$match": match},
+        {"$sort": {"schedule_date": -1, "schedule_time": -1}},
+        {"$skip": skip},
+        {"$limit": limit},
+        {"$project": {
+            "_id": 0, "name": 1, "email": 1,
+            "schedule_date": 1, "schedule_time": 1,
+            "job_title": 1, "job_role": 1, "_normalized_job_role": 1,
+            "_nirf_category": 1, "otp_verified": 1,
+        }},
+    ]
+    docs = await _db.registered_candidates.aggregate(pipeline, allowDiskUse=False).to_list(None)
 
     rows = []
-    role_counts = {}
-    attended_count = 0
-    not_attended_count = 0
-    premium_count = 0
-    non_premium_count = 0
+    for d in docs:
+        is_nirf = (d.get("_nirf_category") or "Non NIRF") == "NIRF"
+        otp = str(d.get("otp_verified") or "").strip()
+        rows.append({
+            "name": d.get("name") or "-",
+            "email": d.get("email") or "-",
+            "date": d.get("schedule_date") or "-",
+            "time": d.get("schedule_time") or "-",
+            "job_role": d.get("_normalized_job_role") or d.get("job_role") or d.get("job_title") or "-",
+            "college_type": "Premium College" if is_nirf else "Non Premium College",
+            "attendance": "Attended" if otp else "Not Attended",
+        })
 
-    for doc in all_docs:
-        cc = _classify_college_fn(doc, rank_lookup)
-        is_nirf = cc["college_status"].startswith("NIRF")
-        college_type = "Premium College" if is_nirf else "Non Premium College"
-        otp = str(doc.get("otp_verified") or "").strip()
-        att_status = "Attended" if otp else "Not Attended"
-        role = doc.get("job_role") or doc.get("job_title") or "-"
+    # Summary (aggregated over the filtered set — ALL rows, not just this page)
+    summary_pipeline = [
+        {"$match": match},
+        {"$group": {
+            "_id": None,
+            "attended": {"$sum": {"$cond": [
+                {"$and": [
+                    {"$ne": [{"$ifNull": ["$otp_verified", ""]}, ""]},
+                    {"$ne": [{"$ifNull": ["$otp_verified", None]}, None]},
+                ]}, 1, 0
+            ]}},
+            "not_attended": {"$sum": {"$cond": [
+                {"$or": [
+                    {"$eq": [{"$ifNull": ["$otp_verified", ""]}, ""]},
+                    {"$eq": [{"$ifNull": ["$otp_verified", None]}, None]},
+                ]}, 1, 0
+            ]}},
+            "premium_colleges": {"$sum": {"$cond": [
+                {"$eq": [{"$ifNull": ["$_nirf_category", "Non NIRF"]}, "NIRF"]}, 1, 0
+            ]}},
+            "non_premium_colleges": {"$sum": {"$cond": [
+                {"$ne": [{"$ifNull": ["$_nirf_category", "Non NIRF"]}, "NIRF"]}, 1, 0
+            ]}},
+        }},
+    ]
+    sres = await _db.registered_candidates.aggregate(summary_pipeline, allowDiskUse=False).to_list(None)
+    base = sres[0] if sres else {"attended": 0, "not_attended": 0, "premium_colleges": 0, "non_premium_colleges": 0}
 
-        if jobRole and jobRole.strip().lower() not in ("", "all"):
-            if role.lower() != jobRole.strip().lower():
-                continue
-        if attendance and attendance.strip().lower() not in ("", "all"):
-            target = attendance.strip().lower().replace(" ", "")
-            if att_status.lower().replace(" ", "") != target:
-                continue
-        if collegeType and collegeType.strip().lower() not in ("", "all"):
-            if "premium" in collegeType.strip().lower() and "non" not in collegeType.strip().lower() and not is_nirf:
-                continue
-            if "non" in collegeType.strip().lower() and is_nirf:
-                continue
+    # Role counts per filter set
+    role_pipeline = [
+        {"$match": match},
+        {"$group": {
+            "_id": {"$ifNull": ["$_normalized_job_role", "Unknown"]},
+            "count": {"$sum": 1},
+        }},
+        {"$sort": {"count": -1}},
+        {"$limit": 100},
+    ]
+    role_results = await _db.registered_candidates.aggregate(role_pipeline, allowDiskUse=False).to_list(None)
+    role_counts = {r["_id"]: r["count"] for r in role_results}
 
-        role_counts[role] = role_counts.get(role, 0) + 1
-        if att_status == "Attended":
-            attended_count += 1
-        else:
-            not_attended_count += 1
-        if is_nirf:
-            premium_count += 1
-        else:
-            non_premium_count += 1
-
-        rows.append({"name": doc.get("name") or "-", "email": doc.get("email") or "-",
-                      "date": doc.get("schedule_date") or "-", "time": doc.get("schedule_time") or "-",
-                      "job_role": role, "college_type": college_type, "attendance": att_status})
-
-    total = len(rows)
-    start_idx = (page - 1) * limit
+    total_pages = (total + limit - 1) // limit if total else 1
     return {
-        "data": rows[start_idx:start_idx + limit], "total": total, "page": page, "limit": limit,
-        "summary": {"role_counts": role_counts, "attended": attended_count, "not_attended": not_attended_count,
-                     "premium_colleges": premium_count, "non_premium_colleges": non_premium_count}
+        "data": rows,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "totalPages": total_pages,
+        "summary": {
+            "role_counts": role_counts,
+            "attended": base.get("attended", 0),
+            "not_attended": base.get("not_attended", 0),
+            "premium_colleges": base.get("premium_colleges", 0),
+            "non_premium_colleges": base.get("non_premium_colleges", 0),
+        },
     }
 
 
@@ -419,7 +490,17 @@ class ApplicantScoreUpdate(BaseModel):
     scores: Optional[List[ScoreEntry]] = None
 
 @bb_router.get("/attended-for-scores")
-async def get_attended_for_scores(request: Request, startDate: str = Query(None), endDate: str = Query(None)):
+async def get_attended_for_scores(
+    request: Request,
+    startDate: str = Query(None),
+    endDate: str = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Update Applicants Scores — with pagination (May 2026).
+    Returns {data, total, page, limit, totalPages, available_rounds}.
+    `available_rounds` always reflects the full score_sheet set (global filter).
+    """
     await _require_auth(request)
     match = {"otp_verified": {"$nin": [None, ""], "$exists": True},
              "schedule_date": {"$nin": [None, ""], "$exists": True}}
@@ -428,15 +509,48 @@ async def get_attended_for_scores(request: Request, startDate: str = Query(None)
     if endDate:
         match["schedule_date"] = {**match.get("schedule_date", {}), "$lte": endDate}
 
-    docs = await _db.registered_candidates.find(match, {"_id": 0, "email": 1, "phone": 1, "name": 1,
-        "schedule_date": 1, "job_role": 1, "job_title": 1, "result_status": 1}).to_list(None)
-    docs.sort(key=lambda x: x.get("schedule_date") or "", reverse=True)
+    # Total + DB-level pagination
+    total = await _db.registered_candidates.count_documents(match)
+    skip = (page - 1) * limit
+    pipeline = [
+        {"$match": match},
+        {"$sort": {"schedule_date": -1}},
+        {"$skip": skip},
+        {"$limit": limit},
+        {"$project": {
+            "_id": 0, "email": 1, "phone": 1, "name": 1,
+            "schedule_date": 1, "job_role": 1, "job_title": 1,
+            "result_status": 1,
+        }},
+    ]
+    docs = await _db.registered_candidates.aggregate(pipeline, allowDiskUse=False).to_list(None)
 
-    updates = await _db.bb_applicant_updates.find({}, {"_id": 0}).to_list(None)
+    # Page-scoped status overrides
+    page_emails = [(d.get("email") or "").strip().lower() for d in docs if d.get("email")]
+    updates = await _db.bb_applicant_updates.find(
+        {"email": {"$in": page_emails}} if page_emails else {"_id": None}, {"_id": 0}
+    ).to_list(None) if page_emails else []
     update_map = {u["email"]: u for u in updates if u.get("email")}
 
-    # Fetch scores from score_sheet collection (uploaded via Analytics Dashboard)
-    score_records = await _db.score_sheet.find({}, {"_id": 0}).to_list(None)
+    # Scores for the current page only
+    page_phones = []
+    for d in docs:
+        p = re.sub(r'[^\d]', '', d.get("phone") or "")
+        if len(p) > 10:
+            p = p[-10:]
+        if p:
+            page_phones.append(p)
+    score_q = []
+    if page_emails:
+        score_q.append({"email": {"$in": page_emails}})
+    if page_phones:
+        score_q.append({"phone": {"$in": page_phones}})
+    score_records = []
+    if score_q:
+        score_records = await _db.score_sheet.find(
+            {"$or": score_q} if len(score_q) > 1 else score_q[0], {"_id": 0}
+        ).to_list(None)
+
     score_by_email = {}
     score_by_phone = {}
     for sr in score_records:
@@ -449,12 +563,9 @@ async def get_attended_for_scores(request: Request, startDate: str = Query(None)
         if sp:
             score_by_phone.setdefault(sp, []).append(sr)
 
-    # Collect all unique round names for auto-population
-    all_rounds_set = set()
-    for sr in score_records:
-        rn = (sr.get("round_name") or "").strip()
-        if rn:
-            all_rounds_set.add(rn)
+    # Available rounds (GLOBAL — unchanged contract): distinct names from score_sheet
+    available_rounds = await _db.score_sheet.distinct("round_name")
+    available_rounds = sorted([r for r in available_rounds if r])
 
     result = []
     for doc in docs:
@@ -464,12 +575,10 @@ async def get_attended_for_scores(request: Request, startDate: str = Query(None)
             phone = phone[-10:]
         upd = update_map.get(email, {})
 
-        # Merge scores: bb_applicant_updates takes priority, then score_sheet
         merged_scores = []
         if upd.get("scores"):
             merged_scores = upd["scores"]
         else:
-            # Auto-populate from score_sheet
             matched = []
             if email and email in score_by_email:
                 matched.extend(score_by_email[email])
@@ -488,7 +597,16 @@ async def get_attended_for_scores(request: Request, startDate: str = Query(None)
                         "job_role": doc.get("job_role") or doc.get("job_title") or "-",
                         "status": upd.get("status") or doc.get("result_status") or "On hold",
                         "scores": merged_scores})
-    return {"data": result, "available_rounds": sorted(list(all_rounds_set))}
+
+    total_pages = (total + limit - 1) // limit if total else 1
+    return {
+        "data": result,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "totalPages": total_pages,
+        "available_rounds": available_rounds,
+    }
 
 @bb_router.put("/applicant-score/{email:path}")
 async def update_applicant_score(email: str, data: ApplicantScoreUpdate, request: Request):

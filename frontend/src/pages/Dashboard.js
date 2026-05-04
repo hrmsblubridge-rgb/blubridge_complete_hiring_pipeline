@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, FileText, UserCheck, FolderPlus, GraduationCap, Tag } from '@phosphor-icons/react';
+import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, FileText, UserCheck, FolderPlus, GraduationCap, Tag, ArrowLeft } from '@phosphor-icons/react';
 import BulkUploadModal from '../components/BulkUploadModal';
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -54,7 +54,10 @@ export default function Dashboard() {
     return (
         <div className="min-h-screen bg-[#0a0a0a] text-white" data-testid="dashboard-page">
             <header className="border-b border-zinc-800 px-8 py-5 flex items-center justify-between">
-                <h1 className="text-xl font-semibold tracking-tight">Recruitment Analytics</h1>
+                <div className="flex items-center gap-4">
+                    <button onClick={() => window.history.length > 1 ? navigate(-1) : navigate('/home')} data-testid="back-btn" className="p-2 hover:bg-zinc-800"><ArrowLeft size={20} /></button>
+                    <h1 className="text-xl font-semibold tracking-tight">Recruitment Analytics</h1>
+                </div>
                 <button onClick={handleLogout} data-testid="logout-btn"
                     className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors">
                     <SignOut size={18} /> Logout
