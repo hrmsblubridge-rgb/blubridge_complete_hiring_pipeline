@@ -148,16 +148,16 @@ export default function InterviewReports() {
                     </table>
                 </div>}
                 {/* Pagination */}
-                {total > 0 && <div className="flex items-center justify-between mt-4">
+                {total > 0 && <div className="flex items-center justify-between mt-4" data-testid="pagination">
                     <div className="flex items-center gap-3">
                         <span className="text-sm text-zinc-500">Page {page} of {totalPages} ({total} records)</span>
-                        <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }} className="bg-zinc-900 border border-zinc-700 px-2 py-1.5 text-sm">
+                        <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }} data-testid="page-size-select" className="bg-zinc-900 border border-zinc-700 px-2 py-1.5 text-sm">
                             {PAGE_SIZES.map(s => <option key={s} value={s}>{s} / page</option>)}
                         </select>
                     </div>
                     <div className="flex items-center gap-2">
-                        {page > 1 && <button onClick={() => navPage(page - 1)} className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm"><CaretLeft size={14} /></button>}
-                        {page < totalPages && <button onClick={() => navPage(page + 1)} className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm"><CaretRight size={14} /></button>}
+                        {page > 1 && <button onClick={() => navPage(page - 1)} data-testid="prev-page-btn" className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm"><CaretLeft size={14} /></button>}
+                        {page < totalPages && <button onClick={() => navPage(page + 1)} data-testid="next-page-btn" className="px-2 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm"><CaretRight size={14} /></button>}
                     </div>
                 </div>}
             </div>
