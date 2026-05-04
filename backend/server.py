@@ -659,7 +659,7 @@ async def get_unmatched_job_titles(user: str = Depends(get_current_user)):
     titles = await db.job_titles_master.find(
         {"is_mapped": {"$ne": True}}, {"_id": 0, "raw_job_title": 1, "normalized_job_title": 1}
     ).to_list(None)
-    return {"titles": [t["raw_job_title"] for t in titles]}
+    return {"titles": [t.get("raw_job_title", t.get("normalized_job_title", "")) for t in titles if t.get("raw_job_title") or t.get("normalized_job_title")]}
 
 
 @api_router.get("/job-keyword-mappings")
@@ -1299,8 +1299,21 @@ async def get_global_applicants(
     rank_lookup = await _build_college_rank_lookup()
     mappings = await _get_job_keyword_mappings()
 
-    total_cursor = db.registered_candidates.find(match, {"_id": 0}).sort("name", 1)
-    all_docs = await total_cursor.to_list(None)
+    # For large datasets: if no college/jobRole filters, use DB-level pagination
+    needs_memory_filter = bool(collegeStatus and collegeStatus.strip().lower() != "all") or \
+                          bool(jobRole and jobRole.strip().lower() != "all jobs")
+
+    if needs_memory_filter:
+        # Full in-memory processing (needed for filters that require computation)
+        total_cursor = db.registered_candidates.find(match, {"_id": 0})
+        all_docs = await total_cursor.to_list(None)
+        all_docs.sort(key=lambda x: (x.get("name") or "").lower())
+    else:
+        # Optimized: count + paginate at DB level
+        total_count = await db.registered_candidates.count_documents(match)
+        skip = (page - 1) * limit
+        all_docs = await db.registered_candidates.find(match, {"_id": 0}).skip(skip).limit(limit).to_list(None)
+        all_docs.sort(key=lambda x: (x.get("name") or "").lower())
 
     # Compute college_status and apply filters
     applicants = []
@@ -1376,15 +1389,13 @@ async def get_global_applicants(
             "result_status": res_status,
         })
 
-    total = len(applicants)
-    start = (page - 1) * limit
-    end = start + limit
-    return {
-        "data": applicants[start:end],
-        "total": total,
-        "page": page,
-        "limit": limit,
-    }
+    if needs_memory_filter:
+        total = len(applicants)
+        start = (page - 1) * limit
+        end = start + limit
+        return {"data": applicants[start:end], "total": total, "page": page, "limit": limit}
+    else:
+        return {"data": applicants, "total": total_count, "page": page, "limit": limit}
 
 
 # ============ ATTENDED APPLICANTS MODULE ============
@@ -1453,8 +1464,9 @@ async def get_attended_applicants(
     mappings = await _get_job_keyword_mappings()
 
     # Fetch all matching attended candidates (pre-filter, then apply round filter in-memory)
-    cursor = db.registered_candidates.find(match, {"_id": 0}).sort("name", 1)
+    cursor = db.registered_candidates.find(match, {"_id": 0})
     all_docs = await cursor.to_list(None)
+    all_docs.sort(key=lambda x: (x.get("name") or "").lower())
 
     # Build applicant rows with scores
     applicants = []

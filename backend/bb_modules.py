@@ -353,7 +353,8 @@ async def get_interview_reports(
     if endDate:
         match["schedule_date"] = {**match["schedule_date"], "$lte": endDate}
 
-    all_docs = await _db.registered_candidates.find(match, {"_id": 0}).sort("schedule_date", -1).to_list(None)
+    all_docs = await _db.registered_candidates.find(match, {"_id": 0}).to_list(None)
+    all_docs.sort(key=lambda x: x.get("schedule_date") or "", reverse=True)
     rank_lookup = await _build_college_rank_lookup_fn()
 
     rows = []
@@ -428,7 +429,8 @@ async def get_attended_for_scores(request: Request, startDate: str = Query(None)
         match["schedule_date"] = {**match.get("schedule_date", {}), "$lte": endDate}
 
     docs = await _db.registered_candidates.find(match, {"_id": 0, "email": 1, "phone": 1, "name": 1,
-        "schedule_date": 1, "job_role": 1, "job_title": 1, "result_status": 1}).sort("schedule_date", -1).to_list(None)
+        "schedule_date": 1, "job_role": 1, "job_title": 1, "result_status": 1}).to_list(None)
+    docs.sort(key=lambda x: x.get("schedule_date") or "", reverse=True)
 
     updates = await _db.bb_applicant_updates.find({}, {"_id": 0}).to_list(None)
     update_map = {u["email"]: u for u in updates if u.get("email")}
