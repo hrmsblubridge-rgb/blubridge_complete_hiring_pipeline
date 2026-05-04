@@ -1,55 +1,62 @@
 # Recruitment Analytics — Product Requirements
 
 ## Original Problem Statement
-Build BluBridge Hiring Pipeline — a recruitment platform with analytics, hiring forms, interview scheduling, candidate management, and automated WhatsApp + Email messaging.
+BluBridge Hiring Pipeline — recruitment platform with analytics, hiring forms, interview scheduling, candidate management, automated WhatsApp + Email.
 
 ## Core Architecture
-- **Frontend**: React + Tailwind + Shadcn UI + Phosphor Icons
+- **Frontend**: React + Tailwind + Shadcn UI
 - **Backend**: FastAPI + Motor (async MongoDB) + bb_modules.py + messaging.py + bg_workers.py
-- **Database**: MongoDB Atlas (free tier — has `allowDiskUse` + 32MB sort restrictions)
-- **Auth**: Hardcoded `Admin User` / `Admin User` (JWT cookie)
-- **Messaging**: AiSensy WhatsApp + SMTP Email (Gmail SSL 465)
+- **Database**: MongoDB Atlas free tier (512 MB hard quota — design constraint)
+- **Auth**: Admin User / Admin User (hardcoded JWT cookie)
+- **Messaging**: AiSensy WhatsApp (API key 401 — pending) + SMTP Email (Gmail SSL 465)
 
-## Persisted Derived Fields (added May 2026 — perf optimization)
-On `registered_candidates` and `naukri_applies` we now persist:
-- `_college_status` — `"NIRF - #<rank>"` or `"Non NIRF"`
-- `_nirf_category` — `"NIRF"` or `"Non NIRF"`
-- `_college_resolved` — best-matched college string
-- `_match_confidence` — HIGH | MEDIUM | LOW | None
-- `_normalized_job_role` — canonical role from `job_keyword_mapping`
+## Classification Rule (May 2026 — VIEW-based)
+Atlas free-tier quota prevents physical duplication of 100K pipeline into `registered_candidates`. We keep:
+- `registered_candidates` = INNER JOIN of pipeline + naukri (19,913 enriched docs) — used by scoring/scheduling
+- `pipeline_data` (100,798) = HR internal dataset → counts as "Registered"
+- `naukri_applies` (35,469) with `_is_registered` flag → unmatched rows (15,555) counts as "Unregistered"
 
-This eliminates 20K-doc in-memory scans on every API request. Endpoints filter and aggregate at the DB level.
+### Endpoints exposing the rule:
+- `GET /api/data/classification` — live counts `{total_registered, total_unregistered, total_naukri, matched}`
+- `GET /api/data/registered` — page through `pipeline_data`
+- `GET /api/data/unregistered` — page through `naukri_applies WHERE _is_registered != True`
+- `GET /api/summary` — adds `total_registered_hr` + `total_unregistered_naukri` on top-level response (legacy `total_registered` kept for backward compat)
+- `GET /api/applicants`, `/attended`, `/job-roles` continue to read the enriched JOIN view
 
-## Endpoints (now Atlas-free-tier safe)
-- `GET /api/summary` — aggregation pipeline grouping by `_normalized_job_role` + `_nirf_category`
-- `GET /api/applicants` — `.find({...}).skip().limit()` with persisted-field filters; aggregation `$sort` on indexed `name`
-- `GET /api/job-roles` — `$group` aggregation
-- `GET /api/attended` — DB-level pagination + per-page score lookup (no full score_sheet scan)
-- `GET /api/attended-roles` — aggregation pipeline
+### Safety rule: all endpoints exclude `isTest: true` rows. All test seeds MUST tag `isTest: true` and delete after.
 
-## Backfill / Reprocess
-- One-time backfill: `python3 /app/backend/backfill_derived.py`
-- Auto-runs after `reprocess_matching` (which is invoked from `/api/reprocess` and bulk uploads)
-- Indexes auto-created on `_normalized_job_role`, `_nirf_category`, `_college_status`, `name`, `schedule_date`
+## OTP (Interview Scheduling)
+- Window: `schedule_time - 3h` → `schedule_time - 1min` (`_worker_otp_generator`, 30s interval)
+- Expiry: 8h post-send (`_worker_otp_expiry`)
+- Fields (idempotent):
+  - snake_case: `otp`, `otp_sent`, `otp_sent_at`, `otp_expired`, `otp_expired_at`, `otp_verified`
+  - camelCase aliases (May 2026): `otpGeneratedAt`, `otpExpiry` (for external integrations)
+- Written to: `bb_registrations` (primary) AND mirrored onto `registered_candidates` matched by email/phone
+
+## Persisted Derived Fields
+On `registered_candidates` and `naukri_applies`:
+- `_college_status`, `_nirf_category`, `_college_resolved`, `_match_confidence`, `_normalized_job_role`, `_is_registered`
+
+Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matching()`.
 
 ## Live Messaging System
 - AiSensy WhatsApp (5 campaigns), SMTP Email (Gmail SSL 465)
 - TEST_MODE overrides recipients to `TEST_PHONE` / `TEST_EMAIL`
-- Background workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
-
-## Feature Flags (.env)
-- `ENABLE_WHATSAPP`, `ENABLE_EMAIL`, `TEST_MODE`, `TEST_PHONE`, `TEST_EMAIL`
-- `MONGO_URL`, `DB_NAME`, `JWT_SECRET`, `SMTP_*`
+- Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
-- **May 2026** — Performance fix: persisted derived fields, all hot endpoints DB-level optimized; pass 18/18 backend regression (`iteration_27.json`).
-- **Apr 2026** — Atlas DB swap, registered_candidates rebuilt (19,913 docs).
-- **Apr 2026** — Live messaging + background workers, registration UI clone, global Back Button.
+- **May 2026** — Classification rule update (view-based), `/api/data/classification`, camelCase OTP aliases, isTest safety tagging. 14/14 backend tests (iter28).
+- **May 2026** — Perf fix: persisted derived fields, DB-level aggregation. 18/18 tests (iter27).
+- **Apr 2026** — Atlas DB swap, live messaging + background workers, registration UI clone, global Back Button.
 
 ## Prioritized Backlog
-- **P1** — Fix AiSensy API key (currently 401, gracefully handled)
+- **P1** — Fix AiSensy API key (401)
 - **P2** — Upload History view
-- **P2** — Advanced chart visualizations on dashboard
+- **P2** — Advanced chart visualizations
 - **P2** — Role-based access control (Admin vs Recruiter)
-- **P2** — Refactor `/api/role` to use persisted fields (currently legacy path)
-- **P3** — Move routes into `/app/backend/routes/`, models into `/app/backend/models/`
+- **P2** — Refactor `/api/role` to use persisted fields
+- **P3** — Upgrade Atlas tier if further data duplication is needed
+- **P3** — Move routes → `/app/backend/routes/`, models → `/app/backend/models/`
+
+## Feature Flags (.env)
+`ENABLE_WHATSAPP`, `ENABLE_EMAIL`, `TEST_MODE`, `TEST_PHONE`, `TEST_EMAIL`, `MONGO_URL`, `DB_NAME`, `JWT_SECRET`, `SMTP_*`
