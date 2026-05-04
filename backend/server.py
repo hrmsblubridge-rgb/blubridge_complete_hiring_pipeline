@@ -556,96 +556,84 @@ async def _persist_derived_fields(collection_name: str):
 
 
 async def reprocess_matching():
-    """Rebuild `registered_candidates` using PIPELINE-FIRST classification (May 2026):
-      - Registered   = every record in `pipeline_data` (HR internal dataset),
-                       enriched with matched `naukri_applies` fields where available.
-      - Unregistered = naukri docs without a pipeline match
-                       (flagged via `_is_registered=False`).
-    Test records (`isTest: true`) in raw collections are skipped."""
+    """Rebuild `registered_candidates` as the INNER-JOIN enriched view.
+
+    CLASSIFICATION RULE (May 2026, view-based):
+      - Registered   = every record in `pipeline_data` (HR internal).
+      - Unregistered = naukri_applies records with no pipeline match.
+    For disk-efficiency on Atlas free tier we do NOT duplicate all pipeline
+    records into `registered_candidates`. Endpoints read counts directly from
+    raw collections (`/api/data/registered`, `/api/data/unregistered`,
+    `/api/data/classification`). `registered_candidates` stays as the
+    enriched (naukri+pipeline) join view used by scoring/scheduling pages.
+
+    Test records (`isTest: true`) in raw collections are skipped.
+    """
 
     # Step 1: Re-normalize identifiers in raw collections so matching works
     await renormalize_collection("naukri_applies")
     await renormalize_collection("pipeline_data")
 
-    # Step 2: Build naukri lookup (real records only, skip test-tagged rows)
     naukri_list = await db.naukri_applies.find({"isTest": {"$ne": True}}).to_list(None)
     pipeline_list = await db.pipeline_data.find({"isTest": {"$ne": True}}).to_list(None)
 
-    naukri_by_email = {}
-    naukri_by_phone = {}
-    for n in naukri_list:
-        em = normalize_email(n.get('email'))
-        ph = normalize_phone(n.get('phone'))
+    pipeline_by_email = {}
+    pipeline_by_phone = {}
+    for p in pipeline_list:
+        em = normalize_email(p.get('email'))
+        ph = normalize_phone(p.get('phone'))
         if em:
-            naukri_by_email[em] = n
+            pipeline_by_email[em] = p
         if ph:
-            naukri_by_phone[ph] = n
+            pipeline_by_phone[ph] = p
 
     await db.registered_candidates.drop()
 
     registered_docs = []
-    matched_naukri_ids = set()
     _skip_keys = {"_id", "_is_registered", "created_at", "updated_at"}
 
-    # Pipeline-first: every pipeline record becomes a registered_candidate
-    for pipeline in pipeline_list:
-        email = normalize_email(pipeline.get('email'))
-        phone = normalize_phone(pipeline.get('phone'))
+    for naukri in naukri_list:
+        email = normalize_email(naukri.get('email'))
+        phone = normalize_phone(naukri.get('phone'))
 
-        naukri_match = None
-        if email and email in naukri_by_email:
-            naukri_match = naukri_by_email[email]
-        elif phone and phone in naukri_by_phone:
-            naukri_match = naukri_by_phone[phone]
+        pipeline_match = None
+        if email and email in pipeline_by_email:
+            pipeline_match = pipeline_by_email[email]
+        elif phone and phone in pipeline_by_phone:
+            pipeline_match = pipeline_by_phone[phone]
 
-        # Start from pipeline fields
-        doc = {k: v for k, v in pipeline.items() if k not in _skip_keys}
+        is_registered = pipeline_match is not None
 
-        # Enrich with naukri fields (naukri wins for non-null shared fields)
-        if naukri_match:
-            matched_naukri_ids.add(naukri_match["_id"])
-            for k, v in naukri_match.items():
+        await db.naukri_applies.update_one(
+            {"_id": naukri["_id"]},
+            {"$set": {"_is_registered": is_registered}}
+        )
+
+        if is_registered:
+            doc = {k: v for k, v in pipeline_match.items() if k not in _skip_keys}
+            for k, v in naukri.items():
                 if k in _skip_keys:
                     continue
                 if v is not None and v != "":
                     doc[k] = v
                 elif k not in doc:
                     doc[k] = v
+            if not doc.get("job_title"):
+                doc["job_title"] = doc.get("job_role") or ""
+            doc["_has_naukri_match"] = True
+            registered_docs.append(doc)
 
-        # Canonical job_title (fallback to pipeline.job_role for pipeline-only rows)
-        if not doc.get("job_title"):
-            doc["job_title"] = doc.get("job_role") or ""
-        doc["_has_naukri_match"] = bool(naukri_match)
-
-        registered_docs.append(doc)
-
-    # Bulk-insert in chunks to keep memory/network payload bounded
     chunk = 2000
     for i in range(0, len(registered_docs), chunk):
         await db.registered_candidates.insert_many(registered_docs[i:i + chunk])
 
-    # Step 3: Flag naukri._is_registered based on whether it was matched
-    matched_ids = list(matched_naukri_ids)
-    if matched_ids:
-        await db.naukri_applies.update_many(
-            {"_id": {"$in": matched_ids}},
-            {"$set": {"_is_registered": True}}
-        )
-    await db.naukri_applies.update_many(
-        {"_id": {"$nin": matched_ids}, "isTest": {"$ne": True}},
-        {"$set": {"_is_registered": False}}
-    )
-
-    # Indexes
     await db.registered_candidates.create_index([("email", 1), ("phone", 1)])
     await db.registered_candidates.create_index("email_type")
     await db.registered_candidates.create_index("result_status")
     await db.registered_candidates.create_index("schedule_date")
     await db.registered_candidates.create_index("otp_verified")
-    await db.registered_candidates.create_index("_has_naukri_match")
     await db.naukri_applies.create_index("_is_registered")
 
-    # Persist derived fields so endpoints can filter/aggregate at DB level.
     await _persist_derived_fields("registered_candidates")
     await _persist_derived_fields("naukri_applies")
 
@@ -853,9 +841,10 @@ async def get_unregistered(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Unregistered: in naukri_applies but NOT in pipeline_data"""
+    """Unregistered (May 2026 rule): present in `naukri_applies` but NOT in `pipeline_data`.
+    Uses persisted `_is_registered` flag on naukri_applies."""
     skip = (page - 1) * limit
-    query = {"_is_registered": {"$ne": True}}
+    query = {"_is_registered": {"$ne": True}, "isTest": {"$ne": True}}
     total = await db.naukri_applies.count_documents(query)
     cursor = db.naukri_applies.find(query, {
         "_id": 0, "name": 1, "email": 1, "phone": 1,
@@ -873,17 +862,56 @@ async def get_registered(
     limit: int = Query(50, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Registered: JOIN of naukri_applies and pipeline_data"""
+    """Registered (May 2026 rule): present in `pipeline_data` (HR internal dataset),
+    regardless of Naukri presence. Reads directly from pipeline_data (no duplication)."""
     skip = (page - 1) * limit
-    total = await db.registered_candidates.count_documents({})
-    cursor = db.registered_candidates.find({}, {
+    query = {"isTest": {"$ne": True}}
+    total = await db.pipeline_data.count_documents(query)
+    cursor = db.pipeline_data.find(query, {
         "_id": 0, "name": 1, "email": 1, "phone": 1,
-        "job_title": 1, "date_of_application": 1, "gender": 1, "date_of_birth": 1
+        "job_role": 1, "schedule_date": 1, "gender": 1, "college": 1, "degree": 1,
+        "last_update": 1
     }).skip(skip).limit(limit)
-    data = await cursor.to_list(None)
+    raw = await cursor.to_list(None)
+    # Map to the expected column set (job_title <- job_role, date_of_application <- last_update)
+    data = [{
+        "name": d.get("name") or "-",
+        "email": d.get("email") or "-",
+        "phone": d.get("phone") or "-",
+        "job_title": d.get("job_role") or "-",
+        "date_of_application": d.get("last_update") or "-",
+        "gender": d.get("gender") or "-",
+        "date_of_birth": d.get("degree") or "-",  # pipeline has no DOB; show degree instead
+    } for d in raw]
     return {
         "data": data, "total": total, "page": page, "limit": limit,
         "columns": ["name", "email", "phone", "job_title", "date_of_application", "gender", "date_of_birth"]
+    }
+
+
+@api_router.get("/data/classification")
+async def get_classification_counts(user: str = Depends(get_current_user)):
+    """Explicit classification summary per new rule (May 2026).
+      - total_registered   = pipeline_data (HR internal) count, excluding isTest rows
+      - total_unregistered = naukri_applies with `_is_registered != True`
+      - total_naukri       = naukri_applies count
+      - matched            = naukri records with a pipeline match (intersection)
+    """
+    exclude_test = {"isTest": {"$ne": True}}
+    total_registered = await db.pipeline_data.count_documents(exclude_test)
+    total_naukri = await db.naukri_applies.count_documents(exclude_test)
+    total_unregistered = await db.naukri_applies.count_documents(
+        {**exclude_test, "_is_registered": {"$ne": True}}
+    )
+    matched = await db.naukri_applies.count_documents(
+        {**exclude_test, "_is_registered": True}
+    )
+    return {
+        "total_registered": total_registered,
+        "total_unregistered": total_unregistered,
+        "total_naukri": total_naukri,
+        "matched": matched,
+        "note": "Registered = all HR pipeline records; Unregistered = naukri without pipeline match.",
     }
 
 @api_router.get("/data/shortlisted")
@@ -1213,7 +1241,24 @@ async def get_summary(
         })
 
     total_registered = sum(r["total_registered"] for r in results)
-    return {"data": results, "total_registered": total_registered}
+
+    # May 2026 classification rule: top-level counts come from raw collections.
+    # `total_registered_hr` = all pipeline_data (HR internal) rows.
+    # `total_unregistered` = naukri without a pipeline match.
+    exclude_test = {"isTest": {"$ne": True}}
+    total_registered_hr = await db.pipeline_data.count_documents(exclude_test)
+    total_unregistered_naukri = await db.naukri_applies.count_documents(
+        {**exclude_test, "_is_registered": {"$ne": True}}
+    )
+
+    return {
+        "data": results,
+        # `total_registered` retained for backward-compat (JOIN view count).
+        "total_registered": total_registered,
+        # New rule (May 2026):
+        "total_registered_hr": total_registered_hr,
+        "total_unregistered_naukri": total_unregistered_naukri,
+    }
 
 
 @api_router.get("/job-roles")
