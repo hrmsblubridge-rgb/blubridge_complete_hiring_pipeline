@@ -556,77 +556,94 @@ async def _persist_derived_fields(collection_name: str):
 
 
 async def reprocess_matching():
-    """Rebuild registered_candidates via INNER JOIN — merges ALL fields from both collections.
-    Re-normalizes identifiers before matching to catch format mismatches."""
+    """Rebuild `registered_candidates` using PIPELINE-FIRST classification (May 2026):
+      - Registered   = every record in `pipeline_data` (HR internal dataset),
+                       enriched with matched `naukri_applies` fields where available.
+      - Unregistered = naukri docs without a pipeline match
+                       (flagged via `_is_registered=False`).
+    Test records (`isTest: true`) in raw collections are skipped."""
 
-    # Step 1: Re-normalize existing data in place
+    # Step 1: Re-normalize identifiers in raw collections so matching works
     await renormalize_collection("naukri_applies")
     await renormalize_collection("pipeline_data")
 
-    # Step 2: Load fresh data
-    naukri_list = await db.naukri_applies.find({}).to_list(None)
-    pipeline_list = await db.pipeline_data.find({}).to_list(None)
+    # Step 2: Build naukri lookup (real records only, skip test-tagged rows)
+    naukri_list = await db.naukri_applies.find({"isTest": {"$ne": True}}).to_list(None)
+    pipeline_list = await db.pipeline_data.find({"isTest": {"$ne": True}}).to_list(None)
 
-    # Step 3: Build lookup dicts with normalized keys
-    pipeline_by_email = {}
-    pipeline_by_phone = {}
-    for p in pipeline_list:
-        em = normalize_email(p.get('email'))
-        ph = normalize_phone(p.get('phone'))
+    naukri_by_email = {}
+    naukri_by_phone = {}
+    for n in naukri_list:
+        em = normalize_email(n.get('email'))
+        ph = normalize_phone(n.get('phone'))
         if em:
-            pipeline_by_email[em] = p
+            naukri_by_email[em] = n
         if ph:
-            pipeline_by_phone[ph] = p
+            naukri_by_phone[ph] = n
 
     await db.registered_candidates.drop()
 
     registered_docs = []
+    matched_naukri_ids = set()
     _skip_keys = {"_id", "_is_registered", "created_at", "updated_at"}
 
-    for naukri in naukri_list:
-        # Re-normalize naukri identifiers for matching
-        email = normalize_email(naukri.get('email'))
-        phone = normalize_phone(naukri.get('phone'))
+    # Pipeline-first: every pipeline record becomes a registered_candidate
+    for pipeline in pipeline_list:
+        email = normalize_email(pipeline.get('email'))
+        phone = normalize_phone(pipeline.get('phone'))
 
-        # Match on email OR phone (either is sufficient)
-        pipeline_match = None
-        if email and email in pipeline_by_email:
-            pipeline_match = pipeline_by_email[email]
-        elif phone and phone in pipeline_by_phone:
-            pipeline_match = pipeline_by_phone[phone]
+        naukri_match = None
+        if email and email in naukri_by_email:
+            naukri_match = naukri_by_email[email]
+        elif phone and phone in naukri_by_phone:
+            naukri_match = naukri_by_phone[phone]
 
-        is_registered = pipeline_match is not None
+        # Start from pipeline fields
+        doc = {k: v for k, v in pipeline.items() if k not in _skip_keys}
 
-        await db.naukri_applies.update_one(
-            {"_id": naukri["_id"]},
-            {"$set": {"_is_registered": is_registered}}
-        )
-
-        if is_registered:
-            # Start with ALL pipeline fields as the base
-            doc = {}
-            for k, v in pipeline_match.items():
-                if k not in _skip_keys:
+        # Enrich with naukri fields (naukri wins for non-null shared fields)
+        if naukri_match:
+            matched_naukri_ids.add(naukri_match["_id"])
+            for k, v in naukri_match.items():
+                if k in _skip_keys:
+                    continue
+                if v is not None and v != "":
+                    doc[k] = v
+                elif k not in doc:
                     doc[k] = v
 
-            # Overlay ALL naukri fields (naukri takes precedence for non-null shared fields)
-            for k, v in naukri.items():
-                if k not in _skip_keys:
-                    if v is not None and v != "":
-                        doc[k] = v
-                    elif k not in doc:
-                        doc[k] = v
+        # Canonical job_title (fallback to pipeline.job_role for pipeline-only rows)
+        if not doc.get("job_title"):
+            doc["job_title"] = doc.get("job_role") or ""
+        doc["_has_naukri_match"] = bool(naukri_match)
 
-            registered_docs.append(doc)
+        registered_docs.append(doc)
 
-    if registered_docs:
-        await db.registered_candidates.insert_many(registered_docs)
+    # Bulk-insert in chunks to keep memory/network payload bounded
+    chunk = 2000
+    for i in range(0, len(registered_docs), chunk):
+        await db.registered_candidates.insert_many(registered_docs[i:i + chunk])
 
+    # Step 3: Flag naukri._is_registered based on whether it was matched
+    matched_ids = list(matched_naukri_ids)
+    if matched_ids:
+        await db.naukri_applies.update_many(
+            {"_id": {"$in": matched_ids}},
+            {"$set": {"_is_registered": True}}
+        )
+    await db.naukri_applies.update_many(
+        {"_id": {"$nin": matched_ids}, "isTest": {"$ne": True}},
+        {"$set": {"_is_registered": False}}
+    )
+
+    # Indexes
     await db.registered_candidates.create_index([("email", 1), ("phone", 1)])
     await db.registered_candidates.create_index("email_type")
     await db.registered_candidates.create_index("result_status")
     await db.registered_candidates.create_index("schedule_date")
     await db.registered_candidates.create_index("otp_verified")
+    await db.registered_candidates.create_index("_has_naukri_match")
+    await db.naukri_applies.create_index("_is_registered")
 
     # Persist derived fields so endpoints can filter/aggregate at DB level.
     await _persist_derived_fields("registered_candidates")

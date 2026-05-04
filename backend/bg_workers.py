@@ -72,14 +72,31 @@ async def _worker_otp_generator():
                 # Inside window — generate and send OTP
                 otp = doc.get("otp") or str(random.randint(100000, 999999))
 
+                # Expiry = interview_time (1 min before is the last valid send,
+                # but OTP remains valid until the interview starts, bounded by
+                # the 8h fallback in _worker_otp_expiry).
+                otp_expiry_iso = interview_dt.isoformat()
+
                 await _db.bb_registrations.update_one(
                     {"_id": doc["_id"]},
-                    {"$set": {"otp": otp, "otp_sent": True, "otp_sent_at": now.isoformat()}}
+                    {"$set": {
+                        "otp": otp,
+                        "otp_sent": True,
+                        "otp_sent_at": now.isoformat(),
+                        # camelCase aliases for external integrations
+                        "otpGeneratedAt": now.isoformat(),
+                        "otpExpiry": otp_expiry_iso,
+                    }}
                 )
 
                 await _db.registered_candidates.update_many(
                     {"$or": [{"email": doc.get("email", "")}, {"phone": doc.get("phone", "")}]},
-                    {"$set": {"otp": otp, "otp_send": "1"}}
+                    {"$set": {
+                        "otp": otp,
+                        "otp_send": "1",
+                        "otpGeneratedAt": now.isoformat(),
+                        "otpExpiry": otp_expiry_iso,
+                    }}
                 )
 
                 from messaging import notify_otp
