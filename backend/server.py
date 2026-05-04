@@ -518,6 +518,43 @@ async def renormalize_collection(collection_name: str):
     return fixed
 
 
+async def _persist_derived_fields(collection_name: str):
+    """Compute & persist `_college_status`, `_nirf_category`, `_college_resolved`,
+    `_match_confidence`, `_normalized_job_role` for every document in `collection_name`.
+    Used after `reprocess_matching` and bulk uploads to keep endpoints fast."""
+    from pymongo import UpdateOne
+    coll = db[collection_name]
+    rank_lookup = await _build_college_rank_lookup()
+    mappings = await _get_job_keyword_mappings()
+
+    ops = []
+    cursor = coll.find({}, {"_id": 1, "ug_university": 1, "pg_university": 1, "job_title": 1})
+    async for doc in cursor:
+        cc = _classify_college(doc, rank_lookup)
+        cs = cc["college_status"]
+        cat = "NIRF" if cs.startswith("NIRF - #") else "Non NIRF"
+        normalized_role = _resolve_normalized_job_role(doc.get("job_title") or "", mappings)
+        ops.append(UpdateOne(
+            {"_id": doc["_id"]},
+            {"$set": {
+                "_college_status": cs,
+                "_nirf_category": cat,
+                "_college_resolved": cc.get("college") or "-",
+                "_match_confidence": cc.get("match_confidence") or None,
+                "_normalized_job_role": normalized_role or "Unknown",
+            }}
+        ))
+        if len(ops) >= 1000:
+            await coll.bulk_write(ops, ordered=False)
+            ops = []
+    if ops:
+        await coll.bulk_write(ops, ordered=False)
+
+    await coll.create_index("_college_status")
+    await coll.create_index("_nirf_category")
+    await coll.create_index("_normalized_job_role")
+
+
 async def reprocess_matching():
     """Rebuild registered_candidates via INNER JOIN — merges ALL fields from both collections.
     Re-normalizes identifiers before matching to catch format mismatches."""
@@ -590,6 +627,10 @@ async def reprocess_matching():
     await db.registered_candidates.create_index("result_status")
     await db.registered_candidates.create_index("schedule_date")
     await db.registered_candidates.create_index("otp_verified")
+
+    # Persist derived fields so endpoints can filter/aggregate at DB level.
+    await _persist_derived_fields("registered_candidates")
+    await _persist_derived_fields("naukri_applies")
 
 # ============ JOB ROLE NORMALIZATION ============
 
@@ -1064,7 +1105,12 @@ async def get_summary(
     search: str = Query(None),
     user: str = Depends(get_current_user)
 ):
-    """Job role-wise funnel statistics split by NIRF / Non-NIRF (uses normalized job roles)."""
+    """Job role-wise funnel statistics split by NIRF / Non-NIRF.
+
+    OPTIMIZED: Uses MongoDB aggregation pipelines on persisted derived fields
+    (`_normalized_job_role`, `_nirf_category`) so all grouping happens inside
+    the DB. No 20K-doc in-memory scans.
+    """
     match = {}
     if startDate or endDate:
         date_filter = {}
@@ -1073,92 +1119,80 @@ async def get_summary(
         if endDate:
             date_filter["$lte"] = endDate
         match["date_of_application"] = date_filter
-
-    # Build college rank lookup and keyword mappings
-    rank_lookup = await _build_college_rank_lookup()
-    mappings = await _get_job_keyword_mappings()
-
-    # Get all registered candidates matching filters
-    reg_cursor = db.registered_candidates.find(match, {"_id": 0})
-    reg_docs = await reg_cursor.to_list(None)
+    if search:
+        match["_normalized_job_role"] = {"$regex": re.escape(search), "$options": "i"}
 
     # Helper expressions
-    def is_shortlisted(doc):
-        return bool(re.match(r"shortlist", str(doc.get("email_type") or ""), re.I))
-    def is_rejected(doc):
-        return bool(re.match(r"reject", str(doc.get("email_type") or ""), re.I))
-    def has_schedule(doc):
-        sd = str(doc.get("schedule_date") or "").strip()
-        st = str(doc.get("schedule_time") or "").strip()
-        return bool(sd and st)
-    def has_otp(doc):
-        return bool(str(doc.get("otp_verified") or "").strip())
+    is_shortlisted = {"$regexMatch": {"input": {"$ifNull": ["$email_type", ""]}, "regex": "shortlist", "options": "i"}}
+    is_rejected = {"$regexMatch": {"input": {"$ifNull": ["$email_type", ""]}, "regex": "^reject", "options": "i"}}
+    has_schedule = {"$and": [
+        {"$ne": [{"$ifNull": ["$schedule_date", ""]}, ""]},
+        {"$ne": [{"$ifNull": ["$schedule_time", ""]}, ""]},
+    ]}
+    has_otp = {"$ne": [{"$ifNull": ["$otp_verified", ""]}, ""]}
 
-    # Group by (normalized_job_role, nirf_category)
-    from collections import defaultdict
-    buckets = defaultdict(lambda: {"total": 0, "shortlisted": 0, "rejected": 0,
-                                    "scheduled": 0, "not_scheduled": 0, "attended": 0, "not_attended": 0})
-    for doc in reg_docs:
-        raw_role = doc.get("job_title") or "Unknown"
-        role = _resolve_normalized_job_role(raw_role, mappings)
-        # Apply search filter on normalized role
-        if search and not re.search(re.escape(search), role, re.I):
-            continue
-        cc = _classify_college(doc, rank_lookup)
-        cs = cc["college_status"]
-        cat = "NIRF" if cs.startswith("NIRF - #") else "Non NIRF"
-        key = (role, cat)
-        buckets[key]["total"] += 1
-        if is_shortlisted(doc):
-            buckets[key]["shortlisted"] += 1
-            if has_schedule(doc):
-                buckets[key]["scheduled"] += 1
-                if has_otp(doc):
-                    buckets[key]["attended"] += 1
-                else:
-                    buckets[key]["not_attended"] += 1
-            else:
-                buckets[key]["not_scheduled"] += 1
-        if is_rejected(doc):
-            buckets[key]["rejected"] += 1
+    reg_pipeline = [
+        {"$match": match},
+        {"$group": {
+            "_id": {
+                "role": {"$ifNull": ["$_normalized_job_role", "Unknown"]},
+                "cat": {"$ifNull": ["$_nirf_category", "Non NIRF"]},
+            },
+            "total": {"$sum": 1},
+            "shortlisted": {"$sum": {"$cond": [is_shortlisted, 1, 0]}},
+            "rejected": {"$sum": {"$cond": [is_rejected, 1, 0]}},
+            "scheduled": {"$sum": {"$cond": [{"$and": [is_shortlisted, has_schedule]}, 1, 0]}},
+            "not_scheduled": {"$sum": {"$cond": [{"$and": [is_shortlisted, {"$not": has_schedule}]}, 1, 0]}},
+            "attended": {"$sum": {"$cond": [{"$and": [is_shortlisted, has_schedule, has_otp]}, 1, 0]}},
+            "not_attended": {"$sum": {"$cond": [{"$and": [is_shortlisted, has_schedule, {"$not": has_otp}]}, 1, 0]}},
+        }},
+    ]
+    reg_results = await db.registered_candidates.aggregate(reg_pipeline, allowDiskUse=False).to_list(None)
+    buckets = {(r["_id"]["role"], r["_id"]["cat"]): r for r in reg_results}
 
-    # Get naukri counts per (normalized_role, nirf_category)
+    # Naukri counts per (role, cat) — distinct on email/phone
     naukri_match = {}
     if startDate or endDate:
-        naukri_match["date_of_application"] = match.get("date_of_application", {})
-    naukri_cursor = db.naukri_applies.find(naukri_match if naukri_match else {}, {"_id": 0, "job_title": 1, "email": 1, "phone": 1, "ug_university": 1, "pg_university": 1})
-    naukri_docs = await naukri_cursor.to_list(None)
+        naukri_match["date_of_application"] = match["date_of_application"]
+    if search:
+        naukri_match["_normalized_job_role"] = match["_normalized_job_role"]
 
-    naukri_buckets = defaultdict(set)
-    for doc in naukri_docs:
-        raw_role = doc.get("job_title") or "Unknown"
-        role = _resolve_normalized_job_role(raw_role, mappings)
-        if search and not re.search(re.escape(search), role, re.I):
-            continue
-        cc = _classify_college(doc, rank_lookup)
-        cs = cc["college_status"]
-        cat = "NIRF" if cs.startswith("NIRF - #") else "Non NIRF"
-        key = (role, cat)
-        naukri_buckets[key].add((doc.get("email") or "", doc.get("phone") or ""))
+    naukri_pipeline = [
+        {"$match": naukri_match} if naukri_match else {"$match": {}},
+        {"$group": {
+            "_id": {
+                "role": {"$ifNull": ["$_normalized_job_role", "Unknown"]},
+                "cat": {"$ifNull": ["$_nirf_category", "Non NIRF"]},
+                "email": {"$ifNull": ["$email", ""]},
+                "phone": {"$ifNull": ["$phone", ""]},
+            },
+        }},
+        {"$group": {
+            "_id": {"role": "$_id.role", "cat": "$_id.cat"},
+            "naukri_count": {"$sum": 1},
+        }},
+    ]
+    naukri_results = await db.naukri_applies.aggregate(naukri_pipeline, allowDiskUse=False).to_list(None)
+    naukri_buckets = {(r["_id"]["role"], r["_id"]["cat"]): r["naukri_count"] for r in naukri_results}
 
-    # Build results
+    # Combine
     results = []
     all_keys = set(buckets.keys()) | set(naukri_buckets.keys())
     for (role, cat) in sorted(all_keys):
-        b = buckets.get((role, cat), {"total": 0, "shortlisted": 0, "rejected": 0,
-                                       "scheduled": 0, "not_scheduled": 0, "attended": 0, "not_attended": 0})
-        naukri_count = len(naukri_buckets.get((role, cat), set()))
+        b = buckets.get((role, cat), {})
+        naukri_count = naukri_buckets.get((role, cat), 0)
+        total = b.get("total", 0)
         results.append({
             "job_role": f"{role} - {cat}",
             "total_naukri": naukri_count,
-            "total_registered": b["total"],
-            "total_unregistered": max(naukri_count - b["total"], 0),
-            "shortlisted": b["shortlisted"],
-            "rejected": b["rejected"],
-            "scheduled": b["scheduled"],
-            "not_scheduled": b["not_scheduled"],
-            "attended": b["attended"],
-            "not_attended": b["not_attended"],
+            "total_registered": total,
+            "total_unregistered": max(naukri_count - total, 0),
+            "shortlisted": b.get("shortlisted", 0),
+            "rejected": b.get("rejected", 0),
+            "scheduled": b.get("scheduled", 0),
+            "not_scheduled": b.get("not_scheduled", 0),
+            "attended": b.get("attended", 0),
+            "not_attended": b.get("not_attended", 0),
         })
 
     total_registered = sum(r["total_registered"] for r in results)
@@ -1167,19 +1201,15 @@ async def get_summary(
 
 @api_router.get("/job-roles")
 async def get_job_roles(user: str = Depends(get_current_user)):
-    """Unique normalized job roles with registered applicant counts"""
-    mappings = await _get_job_keyword_mappings()
-    cursor = db.registered_candidates.find(
-        {"job_title": {"$nin": [None, ""]}},
-        {"_id": 0, "job_title": 1}
-    )
-    docs = await cursor.to_list(None)
-    from collections import Counter
-    role_counts = Counter()
-    for doc in docs:
-        normalized = _resolve_normalized_job_role(doc.get("job_title"), mappings)
-        role_counts[normalized] += 1
-    results = [{"job_role": role, "count": count} for role, count in role_counts.most_common()]
+    """Unique normalized job roles with registered applicant counts.
+    OPTIMIZED: aggregation on persisted `_normalized_job_role`."""
+    pipeline = [
+        {"$match": {"_normalized_job_role": {"$nin": [None, "", "Unknown"]}}},
+        {"$group": {"_id": "$_normalized_job_role", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$project": {"_id": 0, "job_role": "$_id", "count": 1}},
+    ]
+    results = await db.registered_candidates.aggregate(pipeline, allowDiskUse=False).to_list(None)
     return {"job_roles": results}
 
 
@@ -1279,68 +1309,71 @@ async def get_global_applicants(
     limit: int = Query(100, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Global registered applicants table with normalized job role, date type, search, and college status filters."""
+    """Global registered applicants table.
+
+    OPTIMIZED: All filters (job role, college status, date, search) are pushed
+    into a single MongoDB `.find()` using persisted `_normalized_job_role` and
+    `_nirf_category` fields. Pagination via DB-level skip/limit. No 20K-doc
+    in-memory scans.
+    """
     match = {}
 
-    # Date filter based on dateType
+    # Date filter
     if startDate and endDate:
         date_field = "last_update" if dateType == "Registered" else "schedule_date"
         match[date_field] = {"$gte": startDate, "$lte": endDate}
 
-    # Search filter (search job_title in DB, normalized check done in-memory)
+    # College status filter (uses persisted _nirf_category / _college_status)
+    if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
+        fval = collegeStatus.strip()
+        if fval == "NIRF":
+            match["_nirf_category"] = "NIRF"
+        elif fval == "Non NIRF":
+            match["_nirf_category"] = "Non NIRF"
+        else:
+            match["_college_status"] = fval
+
+    # Job role filter (uses persisted _normalized_job_role)
+    if jobRole and jobRole.strip() and jobRole.strip().lower() != "all jobs":
+        match["_normalized_job_role"] = {"$regex": f"^{re.escape(jobRole.strip())}$", "$options": "i"}
+
+    # Search filter
     if search:
         search_re = {"$regex": re.escape(search), "$options": "i"}
         match["$or"] = [
             {"name": search_re}, {"email": search_re},
-            {"phone": search_re}, {"job_title": search_re}
+            {"phone": search_re}, {"_normalized_job_role": search_re},
         ]
 
-    # Build college rank lookup and keyword mappings
-    rank_lookup = await _build_college_rank_lookup()
-    mappings = await _get_job_keyword_mappings()
+    # DB-level count + paginated fetch with stable sort on `name`
+    total = await db.registered_candidates.count_documents(match)
+    skip = (page - 1) * limit
 
-    # For large datasets: if no college/jobRole filters, use DB-level pagination
-    needs_memory_filter = bool(collegeStatus and collegeStatus.strip().lower() != "all") or \
-                          bool(jobRole and jobRole.strip().lower() != "all jobs")
+    projection = {
+        "_id": 0, "name": 1, "email": 1, "phone": 1,
+        "_college_status": 1, "_college_resolved": 1, "_match_confidence": 1,
+        "_normalized_job_role": 1,
+        "degree": 1, "email_type": 1, "otp_verified": 1,
+        "schedule_date": 1, "schedule_time": 1, "result_status": 1,
+        "last_update": 1,
+    }
 
-    if needs_memory_filter:
-        # Full in-memory processing (needed for filters that require computation)
-        total_cursor = db.registered_candidates.find(match, {"_id": 0})
-        all_docs = await total_cursor.to_list(None)
-        all_docs.sort(key=lambda x: (x.get("name") or "").lower())
-    else:
-        # Optimized: count + paginate at DB level
-        total_count = await db.registered_candidates.count_documents(match)
-        skip = (page - 1) * limit
-        all_docs = await db.registered_candidates.find(match, {"_id": 0}).skip(skip).limit(limit).to_list(None)
-        all_docs.sort(key=lambda x: (x.get("name") or "").lower())
+    # Use aggregation for sorted pagination (Atlas-friendly: $sort with $limit
+    # uses bounded memory after $match narrows result set, but we add an index
+    # on `name` to avoid 32MB sort cap for large unfiltered result sets).
+    pipeline = [
+        {"$match": match},
+        {"$sort": {"name": 1}},
+        {"$skip": skip},
+        {"$limit": limit},
+        {"$project": projection},
+    ]
+    docs = await db.registered_candidates.aggregate(pipeline, allowDiskUse=False).to_list(None)
 
-    # Compute college_status and apply filters
     applicants = []
-    for doc in all_docs:
-        cc = _classify_college(doc, rank_lookup)
-        cs = cc["college_status"]
-
-        # College status filter
-        if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
-            fval = collegeStatus.strip()
-            if fval == "NIRF":
-                if not cs.startswith("NIRF - #"):
-                    continue
-            elif fval == "Non NIRF":
-                if cs != "Non NIRF":
-                    continue
-            elif cs != fval:
-                continue
-
-        # Normalize job role
-        raw_title = doc.get("job_title") or ""
-        normalized_role = _resolve_normalized_job_role(raw_title, mappings)
-
-        # Job role filter (on normalized role)
-        if jobRole and jobRole.strip() and jobRole.strip().lower() != "all jobs":
-            if normalized_role.lower() != jobRole.strip().lower():
-                continue
+    for doc in docs:
+        cs = doc.get("_college_status") or "Non NIRF"
+        normalized_role = doc.get("_normalized_job_role") or doc.get("job_title") or "Unknown"
 
         email_type = str(doc.get("email_type") or "").strip().lower()
         otp_verified = str(doc.get("otp_verified") or "").strip()
@@ -1348,7 +1381,6 @@ async def get_global_applicants(
         schedule_time = str(doc.get("schedule_time") or "").strip()
         result_status_raw = str(doc.get("result_status") or "").strip()
 
-        # Derive registered_status using strict priority hierarchy
         if (email_type in ("shortlist", "shortlisted") and schedule_date and schedule_time
                 and otp_verified and otp_verified != "0"):
             reg_status = "Attended"
@@ -1366,7 +1398,6 @@ async def get_global_applicants(
         else:
             reg_status = "Registered"
 
-        # Result status only for Attended
         if reg_status == "Attended":
             res_status = result_status_raw if result_status_raw and result_status_raw not in ("-", "") else "NA"
         else:
@@ -1377,8 +1408,8 @@ async def get_global_applicants(
             "email": doc.get("email") or "-",
             "phone": doc.get("phone") or "-",
             "college_status": cs,
-            "college": cc["college"],
-            "match_confidence": cc.get("match_confidence") or "-",
+            "college": doc.get("_college_resolved") or "-",
+            "match_confidence": doc.get("_match_confidence") or "-",
             "degree": doc.get("degree") or "-",
             "job_role": normalized_role or "-",
             "registered_status": reg_status,
@@ -1389,35 +1420,30 @@ async def get_global_applicants(
             "result_status": res_status,
         })
 
-    if needs_memory_filter:
-        total = len(applicants)
-        start = (page - 1) * limit
-        end = start + limit
-        return {"data": applicants[start:end], "total": total, "page": page, "limit": limit}
-    else:
-        return {"data": applicants, "total": total_count, "page": page, "limit": limit}
+    return {"data": applicants, "total": total, "page": page, "limit": limit}
 
 
 # ============ ATTENDED APPLICANTS MODULE ============
 
 @api_router.get("/attended-roles")
 async def get_attended_roles(user: str = Depends(get_current_user)):
-    """Job role boxes with attended applicant counts (normalized)."""
-    mappings = await _get_job_keyword_mappings()
-    match = {
-        "email_type": {"$regex": "shortlist", "$options": "i"},
-        "schedule_date": _not_null_filter,
-        "schedule_time": _not_null_filter,
-        "otp_verified": _not_null_filter,
-    }
-    cursor = db.registered_candidates.find(match, {"_id": 0, "job_title": 1})
-    docs = await cursor.to_list(None)
-    from collections import Counter
-    role_counts = Counter()
-    for doc in docs:
-        normalized = _resolve_normalized_job_role(doc.get("job_title"), mappings)
-        role_counts[normalized] += 1
-    roles = [{"job_role": role, "count": count} for role, count in sorted(role_counts.items())]
+    """Job role boxes with attended applicant counts.
+    OPTIMIZED: aggregation on persisted `_normalized_job_role`."""
+    pipeline = [
+        {"$match": {
+            "email_type": {"$regex": "shortlist", "$options": "i"},
+            "schedule_date": _not_null_filter,
+            "schedule_time": _not_null_filter,
+            "otp_verified": _not_null_filter,
+        }},
+        {"$group": {
+            "_id": {"$ifNull": ["$_normalized_job_role", "Unknown"]},
+            "count": {"$sum": 1},
+        }},
+        {"$sort": {"_id": 1}},
+        {"$project": {"_id": 0, "job_role": "$_id", "count": 1}},
+    ]
+    roles = await db.registered_candidates.aggregate(pipeline, allowDiskUse=False).to_list(None)
     return {"job_roles": roles}
 
 
@@ -1433,71 +1459,106 @@ async def get_attended_applicants(
     limit: int = Query(100, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Global attended applicants table with scores (uses normalized job roles)."""
+    """Global attended applicants table with scores.
+    OPTIMIZED: filters pushed to DB; pagination at DB level; scores fetched
+    for the current page only."""
 
-    # Base match: registered candidates who attended (otp_verified NOT NULL)
-    match = {
-        "otp_verified": _not_null_filter,
-    }
+    match = {"otp_verified": _not_null_filter}
 
-    # Date filter on schedule_date, only when BOTH dates provided
     if startDate and endDate:
         match["schedule_date"] = {**_not_null_filter, "$gte": startDate, "$lte": endDate}
+
+    # College status filter via persisted _nirf_category / _college_status
+    if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
+        fval = collegeStatus.strip()
+        if fval == "NIRF":
+            match["_nirf_category"] = "NIRF"
+        elif fval == "Non NIRF":
+            match["_nirf_category"] = "Non NIRF"
+        else:
+            match["_college_status"] = fval
+
+    # Job role filter via persisted _normalized_job_role
+    if jobRole and jobRole.strip() and jobRole.strip().lower() != "all jobs":
+        match["_normalized_job_role"] = {"$regex": f"^{re.escape(jobRole.strip())}$", "$options": "i"}
+
     if search:
         search_re = {"$regex": re.escape(search), "$options": "i"}
-        match["$or"] = [{"name": search_re}, {"email": search_re}, {"phone": search_re}, {"job_title": search_re}]
+        match["$or"] = [
+            {"name": search_re}, {"email": search_re},
+            {"phone": search_re}, {"_normalized_job_role": search_re},
+        ]
 
-    # Pre-fetch all score records and build lookups (batch — avoids N+1)
-    score_records = await db.score_sheet.find({}, {"_id": 0}).to_list(None)
+    # Round filter requires score data; if specified, intersect with score_sheet identifiers
+    if round:
+        canonical_round = ROUND_NAME_MAP.get(round.strip().lower())
+        if canonical_round:
+            score_emails = set()
+            score_phones = set()
+            async for sr in db.score_sheet.find(
+                {"round_name": {"$regex": f"^{re.escape(canonical_round)}$", "$options": "i"}},
+                {"_id": 0, "email": 1, "phone": 1}
+            ):
+                se = normalize_email(sr.get("email"))
+                sp = normalize_phone(sr.get("phone"))
+                if se: score_emails.add(se)
+                if sp: score_phones.add(sp)
+            id_filter = []
+            if score_emails:
+                id_filter.append({"email": {"$in": list(score_emails)}})
+            if score_phones:
+                id_filter.append({"phone": {"$in": list(score_phones)}})
+            if id_filter:
+                # combine with existing match (preserve existing $or if any)
+                round_or = {"$or": id_filter} if len(id_filter) > 1 else id_filter[0]
+                match = {"$and": [match, round_or]}
+            else:
+                # No scores for this round — empty result
+                return {"data": [], "total": 0, "page": page, "limit": limit,
+                        "columns": ["name", "email", "phone", "college_status", "college",
+                                    "degree", "course", "year_of_graduation", "job_role",
+                                    "schedule_date", "result_status"] + SCORE_ROUND_COLUMNS}
+
+    total = await db.registered_candidates.count_documents(match)
+    skip = (page - 1) * limit
+
+    pipeline = [
+        {"$match": match},
+        {"$sort": {"name": 1}},
+        {"$skip": skip},
+        {"$limit": limit},
+    ]
+    docs = await db.registered_candidates.aggregate(pipeline, allowDiskUse=False).to_list(None)
+
+    # Fetch scores ONLY for this page's emails/phones
+    page_emails = list({normalize_email(d.get("email")) for d in docs if d.get("email")})
+    page_phones = list({normalize_phone(d.get("phone")) for d in docs if d.get("phone")})
+    score_query = []
+    if page_emails: score_query.append({"email": {"$in": page_emails}})
+    if page_phones: score_query.append({"phone": {"$in": page_phones}})
+    score_records = []
+    if score_query:
+        score_records = await db.score_sheet.find(
+            {"$or": score_query} if len(score_query) > 1 else score_query[0],
+            {"_id": 0}
+        ).to_list(None)
+
     score_by_email = {}
     score_by_phone = {}
     for sr in score_records:
         se = normalize_email(sr.get("email"))
         sp = normalize_phone(sr.get("phone"))
-        if se:
-            score_by_email.setdefault(se, []).append(sr)
-        if sp:
-            score_by_phone.setdefault(sp, []).append(sr)
+        if se: score_by_email.setdefault(se, []).append(sr)
+        if sp: score_by_phone.setdefault(sp, []).append(sr)
 
-    # Build college rank lookup and keyword mappings
-    rank_lookup = await _build_college_rank_lookup()
-    mappings = await _get_job_keyword_mappings()
-
-    # Fetch all matching attended candidates (pre-filter, then apply round filter in-memory)
-    cursor = db.registered_candidates.find(match, {"_id": 0})
-    all_docs = await cursor.to_list(None)
-    all_docs.sort(key=lambda x: (x.get("name") or "").lower())
-
-    # Build applicant rows with scores
     applicants = []
-    for doc in all_docs:
-        # College status filter
-        cc = _classify_college(doc, rank_lookup)
-        cs = cc["college_status"]
-        if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
-            fval = collegeStatus.strip()
-            if fval == "NIRF":
-                if not cs.startswith("NIRF - #"):
-                    continue
-            elif fval == "Non NIRF":
-                if cs != "Non NIRF":
-                    continue
-            elif cs != fval:
-                continue
-
-        # Normalize job role
-        raw_title = doc.get("job_title") or ""
-        normalized_role = _resolve_normalized_job_role(raw_title, mappings)
-
-        # Job role filter (on normalized role)
-        if jobRole and jobRole.strip() and jobRole.strip().lower() != "all jobs":
-            if normalized_role.lower() != jobRole.strip().lower():
-                continue
+    for doc in docs:
+        cs = doc.get("_college_status") or "Non NIRF"
+        normalized_role = doc.get("_normalized_job_role") or doc.get("job_title") or "Unknown"
 
         doc_email = normalize_email(doc.get("email"))
         doc_phone = normalize_phone(doc.get("phone"))
 
-        # Fetch matched scores
         matched_scores = []
         if doc_email and doc_email in score_by_email:
             matched_scores.extend(score_by_email[doc_email])
@@ -1506,7 +1567,6 @@ async def get_attended_applicants(
                 if s not in matched_scores:
                     matched_scores.append(s)
 
-        # Map round_name -> column
         round_scores = {}
         for sr in matched_scores:
             rn = sr.get("round_name", "").strip().lower()
@@ -1514,19 +1574,13 @@ async def get_attended_applicants(
             if canonical:
                 round_scores[canonical] = sr.get("score", 0)
 
-        # Apply round filter: only include rows that have a score for the selected round
-        if round:
-            canonical_round = ROUND_NAME_MAP.get(round.strip().lower())
-            if canonical_round and canonical_round not in round_scores:
-                continue
-
         row = {
             "name": doc.get("name") or "-",
             "email": doc.get("email") or "-",
             "phone": doc.get("phone") or "-",
             "college_status": cs,
-            "college": cc["college"],
-            "match_confidence": cc.get("match_confidence") or "-",
+            "college": doc.get("_college_resolved") or "-",
+            "match_confidence": doc.get("_match_confidence") or "-",
             "degree": doc.get("degree") or "-",
             "course": doc.get("course") or "-",
             "year_of_graduation": doc.get("year_of_graduation") or "-",
@@ -1536,23 +1590,17 @@ async def get_attended_applicants(
         }
         for col in SCORE_ROUND_COLUMNS:
             row[col] = round_scores.get(col, "-")
-
         applicants.append(row)
-
-    total = len(applicants)
-    start = (page - 1) * limit
-    end = start + limit
-    paginated = applicants[start:end]
 
     columns = ["name", "email", "phone", "college_status", "college", "degree", "course",
                "year_of_graduation", "job_role", "schedule_date", "result_status"] + SCORE_ROUND_COLUMNS
 
     return {
-        "data": paginated,
+        "data": applicants,
         "total": total,
         "page": page,
         "limit": limit,
-        "columns": columns
+        "columns": columns,
     }
 
 
@@ -2389,6 +2437,12 @@ async def startup_event():
     await db.registered_candidates.create_index("result_status")
     await db.registered_candidates.create_index("schedule_date")
     await db.registered_candidates.create_index("otp_verified")
+    await db.registered_candidates.create_index("_normalized_job_role")
+    await db.registered_candidates.create_index("_nirf_category")
+    await db.registered_candidates.create_index("_college_status")
+    await db.registered_candidates.create_index("name")
+    await db.naukri_applies.create_index("_normalized_job_role")
+    await db.naukri_applies.create_index("_nirf_category")
     await db.job_titles_master.create_index("normalized_job_title", unique=True)
     await db.job_titles_master.create_index("is_mapped")
     await db.bulk_upload_queue.create_index([("status", 1), ("created_at", 1)])

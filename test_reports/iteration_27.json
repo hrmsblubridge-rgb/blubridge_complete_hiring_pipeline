@@ -1,0 +1,91 @@
+{
+  "summary": "Iteration 27: Backend regression test for performance optimization (persisted derived fields + DB-level aggregation/filter for /api/summary, /api/applicants, /api/job-roles, /api/attended, /api/attended-roles). 18/18 tests pass (100%). All endpoints return correct shape, filters work, pagination distinct, perf within budget.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_tests": {
+    "auth": [
+      "POST /api/login with 'Admin User'/'Admin User' -> 200 + cookie set"
+    ],
+    "summary": [
+      "GET /api/summary -> 200, total_registered=19913, ~0.96s",
+      "GET /api/summary?startDate=2026-01-01&endDate=2026-12-31 -> 200, valid",
+      "GET /api/summary?search=AI -> 200, returned rows all contain 'AI' in job_role"
+    ],
+    "applicants": [
+      "GET /api/applicants?page=1&limit=100 -> 200, 100 rows, all 14 expected keys present (name,email,phone,college_status,college,match_confidence,degree,job_role,registered_status,registered_date,schedule_date,schedule_time,attended_or_not,result_status), ~1.22s",
+      "GET /api/applicants?collegeStatus=NIRF -> 200, all rows start with 'NIRF - #'",
+      "GET /api/applicants?collegeStatus=Non NIRF -> 200, no NIRF rows leaked",
+      "GET /api/applicants?jobRole=<real role> -> 200, non-empty",
+      "GET /api/applicants?search=<email substr> -> 200, results match substring",
+      "GET /api/applicants pagination page=1 vs page=2 -> rows distinct, total consistent"
+    ],
+    "job_roles": [
+      "GET /api/job-roles -> 200, sorted desc by count, contains job_role+count keys"
+    ],
+    "attended": [
+      "GET /api/attended -> 200, schedule_date present, dynamic round score columns present (ZA, C++, Java, BA, LA, Mensa Org, Accounts2, Accounts1, BE, Mensa, BP), ~5.1s",
+      "GET /api/attended?collegeStatus=NIRF -> 200, only NIRF rows"
+    ],
+    "attended_roles": [
+      "GET /api/attended-roles -> 200, list returned"
+    ],
+    "role_not_refactored": [
+      "GET /api/role?jobRole=<role>&page=1&limit=100 -> 200 (legacy not-refactored path still works)"
+    ],
+    "smoke_iteration26": [
+      "GET /api/bb/holidays -> 200",
+      "GET /api/bb/job-roles -> 200",
+      "GET /api/bb/hiring-forms -> 200"
+    ]
+  },
+  "performance_observed": {
+    "/api/summary": "~0.96s",
+    "/api/summary?search=AI": "~0.95s",
+    "/api/applicants?page=1&limit=100": "~1.22s",
+    "/api/applicants?collegeStatus=NIRF": "~1.0s",
+    "/api/applicants pagination (2 calls)": "~1.53s",
+    "/api/job-roles": "<1s",
+    "/api/attended": "~5.1s",
+    "/api/role (legacy)": "~0.9s",
+    "perf_budget_used": "12s per endpoint (manual curl numbers were 0.4-5s, observed values match)"
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration27_perf_regression.py",
+    "/app/test_reports/pytest/pytest_results_iteration27.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Performance refactor verified: persisted derived fields (_normalized_job_role, _nirf_category, _college_status, _college_resolved, _match_confidence) on registered_candidates and naukri_applies enable DB-level filtering instead of 20K-doc in-memory scans, all endpoints stay <12s budget.",
+    "Aggregation pipelines correctly use allowDiskUse=False (Atlas free tier compatible) and indexes on _normalized_job_role/_nirf_category/_college_status/name/last_update/schedule_date.",
+    "Filters work correctly: collegeStatus=NIRF filters strictly (no leak); collegeStatus=Non NIRF excludes NIRF rows; jobRole and search filters return non-empty correct results.",
+    "Pagination preserves total count between pages and returns distinct rows; expected response keys match brief exactly.",
+    "/api/attended is the slowest at ~5s but well within budget; may be worth a follow-up index review if dataset grows.",
+    "/api/role was intentionally not refactored and still functional - candidate for next perf pass if user-facing latency becomes a concern."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration27_perf_regression.py"
+  ],
+  "success_rate": {
+    "backend": "100% (18/18 tests passed)",
+    "frontend": "Not tested (backend only per request)"
+  },
+  "test_credentials": {
+    "username": "Admin User",
+    "password": "Admin User",
+    "note": "/app/memory/test_credentials.md still says admin/admin but actual working creds are 'Admin User'/'Admin User' per task brief and prior iteration"
+  },
+  "seed_data_creation": "No new seed data created. Tests are read-only against the existing 19,913 registered_candidates and 35,469 naukri_applies docs in MongoDB Atlas.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Performance optimization (Atlas-friendly aggregation + persisted derived fields) verified. Reusable regression suite at /app/backend/tests/test_iteration27_perf_regression.py covers login, /api/summary (basic+date+search), /api/applicants (page/limit/filters/search/pagination), /api/job-roles (sort), /api/attended (basic+NIRF filter, dynamic round columns), /api/attended-roles, /api/role legacy path, plus iter26 bb/* smoke. Future iterations should keep this suite green; if /api/role gets refactored next, extend TestRoleNotRefactored.",
+  "mocked_apis": {
+    "WhatsApp AiSensy": "Returns 401 (key issue, gracefully handled) - inherited from iter26, NOT a regression in iter27"
+  }
+}
