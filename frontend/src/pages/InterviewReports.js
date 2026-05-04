@@ -124,7 +124,7 @@ export default function InterviewReports() {
             </div>
 
             {/* Table */}
-            <div className="px-8 py-6">
+            <div className="px-8 py-6 pb-24" data-testid="reports-section">
                 {loading ? <div className="text-center py-20 text-zinc-500">Loading...</div> :
                 <div className="overflow-x-auto border border-zinc-800" data-testid="reports-table">
                     <table className="w-full text-sm">

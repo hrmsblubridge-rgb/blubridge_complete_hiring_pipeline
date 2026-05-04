@@ -135,7 +135,7 @@ export default function UpdateScores() {
             </div>
 
             {/* Applicant List */}
-            <div className="px-8 py-6">
+            <div className="px-8 py-6 pb-24">
                 {loading ? <div className="text-center py-20 text-zinc-500">Loading...</div> :
                 <div className="overflow-x-auto border border-zinc-800" data-testid="scores-table">
                     <table className="w-full text-sm">
