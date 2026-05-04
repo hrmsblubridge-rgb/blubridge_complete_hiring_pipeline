@@ -1,50 +1,55 @@
-# Recruitment Analytics - Product Requirements Document
+# Recruitment Analytics — Product Requirements
 
 ## Original Problem Statement
-Build BluBridge Hiring Pipeline — a comprehensive recruitment platform with analytics, form-based hiring, interview scheduling, candidate management, and automated messaging.
+Build BluBridge Hiring Pipeline — a recruitment platform with analytics, hiring forms, interview scheduling, candidate management, and automated WhatsApp + Email messaging.
 
 ## Core Architecture
-- **Frontend**: React + Tailwind CSS + Shadcn UI + Phosphor Icons
+- **Frontend**: React + Tailwind + Shadcn UI + Phosphor Icons
 - **Backend**: FastAPI + Motor (async MongoDB) + bb_modules.py + messaging.py + bg_workers.py
-- **Database**: MongoDB
-- **Auth**: Admin User / Admin User (JWT cookie)
-- **Messaging**: AiSensy WhatsApp API + SMTP Email (Gmail)
+- **Database**: MongoDB Atlas (free tier — has `allowDiskUse` + 32MB sort restrictions)
+- **Auth**: Hardcoded `Admin User` / `Admin User` (JWT cookie)
+- **Messaging**: AiSensy WhatsApp + SMTP Email (Gmail SSL 465)
 
-## All Features (Complete)
+## Persisted Derived Fields (added May 2026 — perf optimization)
+On `registered_candidates` and `naukri_applies` we now persist:
+- `_college_status` — `"NIRF - #<rank>"` or `"Non NIRF"`
+- `_nirf_category` — `"NIRF"` or `"Non NIRF"`
+- `_college_resolved` — best-matched college string
+- `_match_confidence` — HIGH | MEDIUM | LOW | None
+- `_normalized_job_role` — canonical role from `job_keyword_mapping`
 
-### Core Platform
-- Upload (Naukri, Pipeline, Score Sheet, College Rank), matching, derived statuses
-- Summary, Applicants, Attended pages with filters + pagination
-- DB-driven bulk upload queue, Job keyword mapping, Multi-criteria College matching
+This eliminates 20K-doc in-memory scans on every API request. Endpoints filter and aggregate at the DB level.
 
-### BluBridge Extension Modules
-- Home Page (8 buttons), Job Roles CRUD, Form Types + Hiring Forms with conditions
-- Interview Schedule Reports (filters + export), Update Scores (export + import)
-- Job Openings (vacancies, education, salary, responsibilities)
-- Set Holidays, Verify Applicant OTP
-- Public Registration Form with auto-shortlisting
-- Interview Schedule/Reschedule with holiday blocking
+## Endpoints (now Atlas-free-tier safe)
+- `GET /api/summary` — aggregation pipeline grouping by `_normalized_job_role` + `_nirf_category`
+- `GET /api/applicants` — `.find({...}).skip().limit()` with persisted-field filters; aggregation `$sort` on indexed `name`
+- `GET /api/job-roles` — `$group` aggregation
+- `GET /api/attended` — DB-level pagination + per-page score lookup (no full score_sheet scan)
+- `GET /api/attended-roles` — aggregation pipeline
 
-### Live Messaging System (Completed - Apr 28, 2026)
-- **messaging.py**: Centralized service with `_resolve_recipient()` for TEST_MODE guard
-- **AiSensy WhatsApp**: 5 campaign templates (ShortList, Reject, Schedule Detail, OTP With Job, Candidate FollowUp)
-- **SMTP Email**: Real sending via smtp.gmail.com:465 (hr@blubridge.com)
-- **Feature Flags**: ENABLE_WHATSAPP, ENABLE_EMAIL, TEST_MODE in .env
-- **TEST_MODE**: All recipients overridden to phone=9443109903, email=rishi.nayak@blubridge.com
+## Backfill / Reprocess
+- One-time backfill: `python3 /app/backend/backfill_derived.py`
+- Auto-runs after `reprocess_matching` (which is invoked from `/api/reprocess` and bulk uploads)
+- Indexes auto-created on `_normalized_job_role`, `_nirf_category`, `_college_status`, `name`, `schedule_date`
 
-### Background Workers (Completed - Apr 28, 2026)
-- **OTP Generator** (every 60s): Generates + sends OTP 3h before interview, idempotent via `otp_sent` flag
-- **Schedule Link Sender** (every 60s): Sends shortlist/reject notifications 5-30 min after registration, idempotent via `schedule_link_sent` flag
-- **24h Reminder** (every 5 min): Re-sends schedule link if not scheduled after 24h, idempotent via `reminder_24h_sent` flag
+## Live Messaging System
+- AiSensy WhatsApp (5 campaigns), SMTP Email (Gmail SSL 465)
+- TEST_MODE overrides recipients to `TEST_PHONE` / `TEST_EMAIL`
+- Background workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Feature Flags (.env)
-- ENABLE_WHATSAPP=true — toggle WhatsApp sending
-- ENABLE_EMAIL=true — toggle Email sending
-- TEST_MODE=true — override all recipients to test phone/email
-- TEST_PHONE=9443109903
-- TEST_EMAIL=rishi.nayak@blubridge.com
+- `ENABLE_WHATSAPP`, `ENABLE_EMAIL`, `TEST_MODE`, `TEST_PHONE`, `TEST_EMAIL`
+- `MONGO_URL`, `DB_NAME`, `JWT_SECRET`, `SMTP_*`
+
+## Changelog
+- **May 2026** — Performance fix: persisted derived fields, all hot endpoints DB-level optimized; pass 18/18 backend regression (`iteration_27.json`).
+- **Apr 2026** — Atlas DB swap, registered_candidates rebuilt (19,913 docs).
+- **Apr 2026** — Live messaging + background workers, registration UI clone, global Back Button.
 
 ## Prioritized Backlog
-- P1: Fix AiSensy API key (currently returns 401 — user may need to regenerate)
-- P2: OTP expiry after 8 hours (set otp_expired field)
-- P2: Advanced chart visualizations, Role-based access control
+- **P1** — Fix AiSensy API key (currently 401, gracefully handled)
+- **P2** — Upload History view
+- **P2** — Advanced chart visualizations on dashboard
+- **P2** — Role-based access control (Admin vs Recruiter)
+- **P2** — Refactor `/api/role` to use persisted fields (currently legacy path)
+- **P3** — Move routes into `/app/backend/routes/`, models into `/app/backend/models/`

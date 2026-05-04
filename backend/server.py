@@ -2460,9 +2460,9 @@ async def startup_event():
         os.makedirs("/app/memory", exist_ok=True)
         with open("/app/memory/test_credentials.md", "w") as f:
             f.write("# Test Credentials\n\n")
-            f.write("## Admin Account\n")
-            f.write("- Username: admin\n")
-            f.write("- Password: admin\n")
+            f.write("## Admin Account (RecruitIQ)\n")
+            f.write("- Username: `Admin User`\n")
+            f.write("- Password: `Admin User`\n")
     except Exception as e:
         logger.error(f"Failed to write test credentials: {e}")
 
