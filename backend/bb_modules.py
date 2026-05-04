@@ -978,8 +978,12 @@ async def schedule_interview(token: str, data: ScheduleBody):
     )
 
     # Send schedule confirmation ONLY if shortlist mail was already sent (sequencing rule)
+    # Cutoff guard (May 2026): never message records registered before MESSAGING_CUTOFF_TS.
+    import os as _os
+    _cutoff = _os.environ.get("MESSAGING_CUTOFF_TS", "9999-12-31T23:59:59+00:00")
+    _is_new_record = (reg.get("registered_at") or "0000") >= _cutoff
     try:
-        if reg.get("shortlist_mail_sent"):
+        if reg.get("shortlist_mail_sent") and _is_new_record:
             from messaging import notify_schedule_confirmation
             await notify_schedule_confirmation(
                 reg.get("full_name", ""), reg.get("phone", ""), reg.get("email", ""),
@@ -989,6 +993,8 @@ async def schedule_interview(token: str, data: ScheduleBody):
                 {"_id": reg["_id"]},
                 {"$set": {"interview_mail_sent": True, "interview_mail_sent_at": datetime.now(timezone.utc).isoformat()}}
             )
+        elif not _is_new_record:
+            _logger.info(f"[CutoffGuard] Skipped messaging for legacy record {reg.get('email')} (registered_at < cutoff)")
         else:
             # Shortlist mail not yet sent — interview mail will be sent by worker after shortlist mail
             _logger.info(f"[Sequencing] Interview mail deferred for {reg.get('email')} — awaiting shortlist mail first")

@@ -1,8 +1,16 @@
 """Background workers for automated messaging tasks.
-All workers are idempotent — safe to run repeatedly without duplicate sends."""
+All workers are idempotent — safe to run repeatedly without duplicate sends.
+
+MESSAGING_CUTOFF_TS guard (May 2026):
+  Every worker filters `registered_at >= MESSAGING_CUTOFF_TS` (set in .env).
+  Records created BEFORE this timestamp (legacy / pre-deployment data) are NEVER
+  contacted. Only NEW applicants registered after the cutoff trigger messages.
+  See `_cutoff_filter()` below.
+"""
 
 import asyncio
 import logging
+import os
 import random
 from datetime import datetime, timezone, timedelta
 
@@ -10,6 +18,15 @@ _logger = logging.getLogger("bg_workers")
 
 _db = None
 _running = False
+
+# Cutoff: only contact applicants whose `registered_at` is >= this ISO timestamp.
+# If env var missing, default to far-future so we send NOTHING by accident.
+MESSAGING_CUTOFF_TS = os.environ.get("MESSAGING_CUTOFF_TS", "9999-12-31T23:59:59+00:00")
+
+
+def _cutoff_filter() -> dict:
+    """Mongo filter fragment — restricts to NEW records only (post-cutoff)."""
+    return {"registered_at": {"$gte": MESSAGING_CUTOFF_TS}}
 
 
 def init_workers(database):
@@ -24,6 +41,7 @@ async def start_all_workers():
         return
     _running = True
     _logger.info("Starting background messaging workers")
+    _logger.info(f"[CutoffGuard] MESSAGING_CUTOFF_TS={MESSAGING_CUTOFF_TS} — only post-cutoff registrations will be messaged")
     asyncio.create_task(_worker_otp_generator())
     asyncio.create_task(_worker_schedule_link_sender())
     asyncio.create_task(_worker_24h_reminder())
@@ -41,8 +59,9 @@ async def _worker_otp_generator():
             now = datetime.now(timezone.utc)
             today_str = now.strftime("%Y-%m-%d")
 
-            # Query ONLY today's interviews where OTP not yet sent
+            # Query ONLY today's interviews where OTP not yet sent (NEW records only)
             cursor = _db.bb_registrations.find({
+                **_cutoff_filter(),
                 "schedule_date": today_str,
                 "is_shortlisted": True,
                 "otp_sent": {"$ne": True},
@@ -128,11 +147,12 @@ async def _worker_schedule_link_sender():
             five_min_ago = (now - timedelta(minutes=30)).isoformat()
             thirty_min_future = (now - timedelta(minutes=5)).isoformat()
 
-            # Find shortlisted registrations submitted 5-30 min ago, link not sent
+            # Find shortlisted registrations submitted 5-30 min ago, link not sent (NEW only)
             cursor = _db.bb_registrations.find({
+                **_cutoff_filter(),
                 "is_shortlisted": True,
                 "schedule_link_sent": {"$ne": True},
-                "registered_at": {"$lte": thirty_min_future, "$gte": five_min_ago},
+                "registered_at": {"$lte": thirty_min_future, "$gte": max(five_min_ago, MESSAGING_CUTOFF_TS)},
             })
             docs = await cursor.to_list(None)
 
@@ -160,11 +180,12 @@ async def _worker_schedule_link_sender():
                 )
                 _logger.info(f"[ScheduleLink] Sent to {doc.get('email')}")
 
-            # Also send rejection notifications for rejected applicants not yet notified
+            # Also send rejection notifications for rejected applicants not yet notified (NEW only)
             rejected_cursor = _db.bb_registrations.find({
+                **_cutoff_filter(),
                 "is_shortlisted": False,
                 "reject_notified": {"$ne": True},
-                "registered_at": {"$lte": thirty_min_future, "$gte": five_min_ago},
+                "registered_at": {"$lte": thirty_min_future, "$gte": max(five_min_ago, MESSAGING_CUTOFF_TS)},
             })
             rejected_docs = await rejected_cursor.to_list(None)
 
@@ -181,8 +202,9 @@ async def _worker_schedule_link_sender():
                 )
                 _logger.info(f"[Reject] Notified {doc.get('email')}")
 
-            # Send deferred interview mails: shortlist sent but interview mail not yet sent
+            # Send deferred interview mails (NEW only): shortlist sent but interview mail not yet sent
             deferred_cursor = _db.bb_registrations.find({
+                **_cutoff_filter(),
                 "shortlist_mail_sent": True,
                 "interview_mail_sent": {"$ne": True},
                 "schedule_date": {"$nin": [None, ""], "$exists": True},
@@ -221,8 +243,9 @@ async def _worker_24h_reminder():
             now = datetime.now(timezone.utc)
             twenty_four_h_ago = (now - timedelta(hours=24)).isoformat()
 
-            # Find applicants: link sent > 24h ago, not scheduled, no reminder sent
+            # Find applicants (NEW only): link sent > 24h ago, not scheduled, no reminder sent
             cursor = _db.bb_registrations.find({
+                **_cutoff_filter(),
                 "is_shortlisted": True,
                 "schedule_link_sent": True,
                 "schedule_date": {"$in": [None, ""]},
@@ -266,8 +289,9 @@ async def _worker_otp_expiry():
             now = datetime.now(timezone.utc)
             eight_hours_ago = (now - timedelta(hours=8)).isoformat()
 
-            # Find registrations with OTP sent > 8h ago and not yet expired
+            # Find registrations (NEW only) with OTP sent > 8h ago and not yet expired
             cursor = _db.bb_registrations.find({
+                **_cutoff_filter(),
                 "otp_sent": True,
                 "otp_expired": {"$ne": True},
                 "otp_verified": {"$ne": True},
@@ -298,8 +322,9 @@ async def _worker_missed_interview():
             now = datetime.now(timezone.utc)
             today_str = now.strftime("%Y-%m-%d")
 
-            # Find scheduled interviews for today (or past) that weren't attended
+            # Find scheduled interviews (NEW only) for today/past that weren't attended
             cursor = _db.bb_registrations.find({
+                **_cutoff_filter(),
                 "status": "Interview Scheduled",
                 "otp_verified": {"$ne": True},
                 "missed_marked": {"$ne": True},
