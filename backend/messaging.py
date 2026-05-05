@@ -130,9 +130,9 @@ async def notify_shortlisted(name: str, phone: str, email: str, schedule_token: 
 
 
 async def notify_rejected(name: str, phone: str, email: str):
-    """Send rejection notification via WhatsApp + Email."""
+    """Send rejection notification via WhatsApp + Email. Returns True if at least one channel succeeded."""
     # WhatsApp: Reject campaign
-    await send_whatsapp("Reject", phone, email, [])
+    wa_ok = await send_whatsapp("Reject", phone, email, [])
 
     # Email
     html = f"""
@@ -143,7 +143,8 @@ async def notify_rejected(name: str, phone: str, email: str):
     <p>Wishing you the best in your future endeavours!</p>
     <p>Warm regards,<br>Blubridge Technologies</p>
     """
-    await send_email(email, phone, "Application Update - Blubridge Technologies", html)
+    em_ok = await send_email(email, phone, "Application Update - Blubridge Technologies", html)
+    return bool(wa_ok or em_ok)
 
 
 async def notify_schedule_confirmation(name: str, phone: str, email: str, date: str, time: str):
