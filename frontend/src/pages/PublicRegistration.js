@@ -48,19 +48,19 @@ export default function PublicRegistration() {
         finally { setSubmitting(false); }
     };
 
-    if (loading) return <div className="min-h-screen bg-[#f0ebe3] flex items-center justify-center text-gray-500">Loading...</div>;
-    if (error) return <div className="min-h-screen bg-[#f0ebe3] flex items-center justify-center text-red-500">{error}</div>;
+    if (loading) return <div className="min-h-screen bg-[#f3f1e9] flex items-center justify-center text-gray-500">Loading...</div>;
+    if (error) return <div className="min-h-screen bg-[#f3f1e9] flex items-center justify-center text-red-500">{error}</div>;
 
     // Job Description Page
     if (step === 'jd' && form?.job_opening) {
         const jo = form.job_opening;
         return (
-            <div className="min-h-screen bg-[#f0ebe3]" data-testid="jd-page">
-                <header className="bg-[#f0ebe3] border-b border-gray-300 py-4 px-6 flex justify-center">
+            <div className="min-h-screen bg-[#f3f1e9]" data-testid="jd-page">
+                <header className="bg-[#efede5] border-b border-gray-300 py-4 px-6 flex justify-center">
                     <img src="/blubridge-logo.png" alt="Blubridge" className="" />
                 </header>
                 <div className="max-w-2xl mx-auto px-6 py-10">
-                    <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+                    <div className="bg-[#fffdf7] rounded-xl shadow-sm overflow-hidden">
                         <div className="bg-[#1a2332] h-3 rounded-t-xl"></div>
                         <div className="p-8 space-y-5">
                             <h1 className="text-2xl font-bold text-gray-900">Our Current Openings:</h1>
@@ -88,12 +88,12 @@ export default function PublicRegistration() {
     // AI & ML Info Page (Joining Our Deep Learning Research Team)
     if (step === 'aiml') {
         return (
-            <div className="min-h-screen bg-[#f0ebe3] flex flex-col" data-testid="aiml-page">
-                <header className="bg-[#f0ebe3] border-b border-gray-300 py-4 px-6 flex justify-center">
+            <div className="min-h-screen bg-[#f3f1e9] flex flex-col" data-testid="aiml-page">
+                <header className="bg-[#efede5] border-b border-gray-300 py-4 px-6 flex justify-center">
                     <img src="/blubridge-logo.png" alt="Blubridge" className="" />
                 </header>
                 <div className="flex-1 max-w-4xl w-full mx-auto px-6 py-10">
-                    <div className="bg-white rounded-xl shadow-sm p-10 md:p-14 text-[#1a1a1a]">
+                    <div className="bg-[#fffdf7] rounded-xl shadow-sm p-10 md:p-14 text-[#1a1a1a]">
                         {/* Title */}
                         <h2 className="text-2xl font-bold text-center underline underline-offset-4 decoration-2">Joining Our Deep Learning Research Team</h2>
                         <h3 className="text-xl font-bold text-center mt-2 mb-10">What You Need to Know ?</h3>
@@ -211,13 +211,13 @@ export default function PublicRegistration() {
     // Success Page
     if (step === 'success') {
         return (
-            <div className="min-h-screen bg-[#f0ebe3] flex flex-col" data-testid="success-page">
-                <header className="bg-[#f0ebe3] border-b border-gray-300 py-4 px-6 flex justify-center">
+            <div className="min-h-screen bg-[#f3f1e9] flex flex-col" data-testid="success-page">
+                <header className="bg-[#efede5] border-b border-gray-300 py-4 px-6 flex justify-center">
                     <img src="/blubridge-logo.png" alt="Blubridge" className="" />
                 </header>
                 <div className="flex-1 flex items-center justify-center px-6">
                     <div className="max-w-lg w-full">
-                        <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+                        <div className="bg-[#fffdf7] rounded-xl shadow-sm overflow-hidden">
                             <div className="bg-[#1a2332] h-3 rounded-t-xl"></div>
                             <div className="p-8 text-center space-y-4">
                                 <h2 className="text-xl font-bold text-gray-900">Submission Successful!</h2>
@@ -243,14 +243,14 @@ export default function PublicRegistration() {
 
     // Main Registration Form — exact clone of blubridge.ai reference
     return (
-        <div className="min-h-screen bg-[#f0ebe3] flex flex-col" data-testid="registration-form-page">
-            <header className="bg-[#f0ebe3] border-b border-gray-300 py-4 px-6 flex justify-center">
+        <div className="min-h-screen bg-[#f3f1e9] flex flex-col" data-testid="registration-form-page">
+            <header className="bg-[#efede5] border-b border-gray-300 py-4 px-6 flex justify-center">
                 <img src="/blubridge-logo.png" alt="Blubridge" className="" />
             </header>
 
             <div className="flex-1 flex items-start justify-center px-4 py-10">
                 <div className="w-full max-w-[640px]">
-                    <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+                    <div className="bg-[#fffdf7] rounded-xl shadow-sm overflow-hidden">
                         <div className="bg-[#1a2332] h-3 rounded-t-xl"></div>
                         <div className="px-8 py-8">
                             <h2 className="text-2xl font-bold text-gray-900 text-center mb-8" style={{fontFamily:'serif'}}>Registration Form</h2>
