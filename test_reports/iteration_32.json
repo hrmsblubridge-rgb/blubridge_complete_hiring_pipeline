@@ -1,0 +1,74 @@
+{
+  "summary": "Iteration 32: Validated the May 2026 refactor that switches /api/applicants, /api/attended, /api/job-roles, /api/attended-roles from registered_candidates (19K JOIN view) to pipeline_data (100K HR-internal source). All 15/15 backend pytest cases PASS in ~30s. Frontend /roles page shows Total: 100798 with working pagination (1008 pages); /attended-roles page shows Total: 5335 with score columns and proper NIRF/Non NIRF badges. Original user-reported bug ('only counts in Summary page updating, not the data in View Applicants / View Attended pages') is FIXED: both list pages now serve the full pipeline_data dataset.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/roles and /attended-roles", "issues": ["React hydration warning: '<span> cannot be a child of <option>' at Roles.js line 243 and AttendedRoles.js line 239 — caused by Emergent dev-mode source instrumentation injecting <span> wrappers around dynamic option text. Non-blocking and likely benign in production builds, but pollutes the console."]}
+    ]
+  },
+  "passed_tests": {
+    "applicants_pipeline_source": [
+      "GET /api/applicants?page=1&limit=10 returns total=100798 (NOT 19913); response < 5s",
+      "Row schema has all required keys: name, email, phone, college_status, college, job_role, registered_status, registered_date, schedule_date, schedule_time, result_status",
+      "collegeStatus=NIRF returns rows whose college_status starts with 'NIRF' (e.g. 'NIRF - #40')",
+      "collegeStatus=Non NIRF returns rows with college_status='Non NIRF'",
+      "jobRole filter with a real role from /api/job-roles correctly filters (total decreases, all rows match)",
+      "search=gmail.com finds matching candidates",
+      "page=1 and page=2 return DISJOINT email sets; total stays consistent"
+    ],
+    "job_roles": [
+      "GET /api/job-roles returns 30+ unique normalized roles aggregated from pipeline_data; top role count > 1000"
+    ],
+    "attended_pipeline_source": [
+      "GET /api/attended?page=1&limit=10 returns total=5335 (NOT 1024)",
+      "Row contains schedule_date, result_status, AND score round columns: ZA, C++, Java, BA, LA, Mensa, Mensa Org, Accounts1, Accounts2, BE, BP",
+      "collegeStatus=NIRF filter works (rows have college_status starting 'NIRF')",
+      "Pagination distinct: page 1 and page 2 emails disjoint; total consistent"
+    ],
+    "attended_roles": [
+      "GET /api/attended-roles returns aggregated counts; sum is in expected proportion to /api/attended total"
+    ],
+    "summary_regression": [
+      "GET /api/summary still returns total_registered=100798 (iter31 contract preserved)",
+      "GET /api/data/classification still returns total_registered > 50000 (unchanged)"
+    ],
+    "frontend": [
+      "/roles page renders with Total: 100798 in [data-testid=total-count]; pagination shows 'Page 1 of 1008 (100798 records)'; 100 rows on page 1 and a different 100 rows on page 2",
+      "/attended-roles page renders with Total: 5335; table shows COLLEGE STATUS / COLLEGE / DEGREE / COURSE columns and rows with NIRF-#XX badges; Job Role filter dropdown populated with 40+ roles",
+      "Login flow with Admin User / Admin User succeeds and yields access to both pages"
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration32_pipeline_applicants.py",
+    "/app/test_reports/pytest/pytest_iter32.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Roles.js (line ~243) and AttendedRoles.js (line ~239) render <option><span>{label}</span></option>. While Emergent dev instrumentation is the trigger for the hydration warning, the underlying JSX should be {`${s} / page`} rendered directly without a <span> wrapper to avoid future dev-mode warnings.",
+    "/api/attended-roles uses (email_type matches shortlist) AND (schedule_date AND schedule_time AND otp_verified all not-null), while /api/attended uses only (otp_verified not-null). This means /api/attended-roles tile-sum can be slightly less than /api/attended total (5335). Today they are close enough for the test to pass, but the two endpoints have subtly different definitions of 'attended' — worth aligning or documenting.",
+    "get_global_applicants and get_attended_applicants both run a $sort on 'name' before $skip/$limit on a 100K collection. If pipeline_data does not have an index on name, this aggregation does an in-memory sort. For the 100798-row dataset Mongo should handle it, but listing page 1008 of 1008 should be benchmarked. Consider adding an index on name (or sort by _id for fastest pagination)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration32_pipeline_applicants.py"
+  ],
+  "success_rate": {
+    "backend": "100% (15/15 pytest passed in ~30s)",
+    "frontend": "100% (both /roles and /attended-roles render correct totals and data)"
+  },
+  "test_credentials": {
+    "username": "Admin User",
+    "password": "Admin User"
+  },
+  "seed_data_creation": "None — all tests are read-only against the live HR analytics DB. No isTest:true documents were created.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "test_iteration32_pipeline_applicants.py validates the May 2026 contract: /api/applicants total~=100798 (pipeline_data source), /api/attended total~=5335. Auth via POST /api/login with Admin User/Admin User (cookie-based session). Run with `REACT_APP_BACKEND_URL=https://applicant-details.preview.emergentagent.com pytest backend/tests/test_iteration32_pipeline_applicants.py -v`. Score round columns visible on /api/attended rows are: ZA, C++, Java, BA, LA, Mensa, Mensa Org, Accounts1, Accounts2, BE, BP. If the totals shift by more than the test tolerance (5000 for applicants, 1500 for attended), the upstream HR ingest was re-run.",
+  "mocked_apis": {
+    "WhatsApp AiSensy": "Returns 401 — not exercised in this iteration"
+  }
+}

@@ -1271,15 +1271,16 @@ async def get_summary(
 
 @api_router.get("/job-roles")
 async def get_job_roles(user: str = Depends(get_current_user)):
-    """Unique normalized job roles with registered applicant counts.
+    """Unique normalized job roles with HR-internal applicant counts (pipeline_data).
     OPTIMIZED: aggregation on persisted `_normalized_job_role`."""
     pipeline = [
-        {"$match": {"_normalized_job_role": {"$nin": [None, "", "Unknown"]}}},
+        {"$match": {"_normalized_job_role": {"$nin": [None, "", "Unknown"]},
+                     "isTest": {"$ne": True}}},
         {"$group": {"_id": "$_normalized_job_role", "count": {"$sum": 1}}},
         {"$sort": {"count": -1}},
         {"$project": {"_id": 0, "job_role": "$_id", "count": 1}},
     ]
-    results = await db.registered_candidates.aggregate(pipeline, allowDiskUse=False).to_list(None)
+    results = await db.pipeline_data.aggregate(pipeline, allowDiskUse=False).to_list(None)
     return {"job_roles": results}
 
 
@@ -1379,16 +1380,15 @@ async def get_global_applicants(
     limit: int = Query(100, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Global registered applicants table.
+    """Global registered applicants table (HR-internal source, May 2026 rule).
 
-    OPTIMIZED: All filters (job role, college status, date, search) are pushed
-    into a single MongoDB `.find()` using persisted `_normalized_job_role` and
-    `_nirf_category` fields. Pagination via DB-level skip/limit. No 20K-doc
-    in-memory scans.
+    Reads directly from `pipeline_data` (every HR-internal record is "Registered"
+    regardless of Naukri presence). All filters pushed to MongoDB via persisted
+    `_normalized_job_role` and `_nirf_category` fields. DB-level pagination.
     """
-    match = {}
+    match = {"isTest": {"$ne": True}}
 
-    # Date filter
+    # Date filter (pipeline uses last_update for "registered" date, schedule_date for interview)
     if startDate and endDate:
         date_field = "last_update" if dateType == "Registered" else "schedule_date"
         match[date_field] = {"$gte": startDate, "$lte": endDate}
@@ -1415,8 +1415,7 @@ async def get_global_applicants(
             {"phone": search_re}, {"_normalized_job_role": search_re},
         ]
 
-    # DB-level count + paginated fetch with stable sort on `name`
-    total = await db.registered_candidates.count_documents(match)
+    total = await db.pipeline_data.count_documents(match)
     skip = (page - 1) * limit
 
     projection = {
@@ -1425,12 +1424,9 @@ async def get_global_applicants(
         "_normalized_job_role": 1,
         "degree": 1, "email_type": 1, "otp_verified": 1,
         "schedule_date": 1, "schedule_time": 1, "result_status": 1,
-        "last_update": 1,
+        "last_update": 1, "job_role": 1, "job_title": 1,
     }
 
-    # Use aggregation for sorted pagination (Atlas-friendly: $sort with $limit
-    # uses bounded memory after $match narrows result set, but we add an index
-    # on `name` to avoid 32MB sort cap for large unfiltered result sets).
     pipeline = [
         {"$match": match},
         {"$sort": {"name": 1}},
@@ -1438,12 +1434,12 @@ async def get_global_applicants(
         {"$limit": limit},
         {"$project": projection},
     ]
-    docs = await db.registered_candidates.aggregate(pipeline, allowDiskUse=False).to_list(None)
+    docs = await db.pipeline_data.aggregate(pipeline, allowDiskUse=False).to_list(None)
 
     applicants = []
     for doc in docs:
         cs = doc.get("_college_status") or "Non NIRF"
-        normalized_role = doc.get("_normalized_job_role") or doc.get("job_title") or "Unknown"
+        normalized_role = doc.get("_normalized_job_role") or doc.get("job_role") or doc.get("job_title") or "Unknown"
 
         email_type = str(doc.get("email_type") or "").strip().lower()
         otp_verified = str(doc.get("otp_verified") or "").strip()
@@ -1497,10 +1493,11 @@ async def get_global_applicants(
 
 @api_router.get("/attended-roles")
 async def get_attended_roles(user: str = Depends(get_current_user)):
-    """Job role boxes with attended applicant counts.
+    """Job role boxes with attended applicant counts (HR-internal pipeline_data).
     OPTIMIZED: aggregation on persisted `_normalized_job_role`."""
     pipeline = [
         {"$match": {
+            "isTest": {"$ne": True},
             "email_type": {"$regex": "shortlist", "$options": "i"},
             "schedule_date": _not_null_filter,
             "schedule_time": _not_null_filter,
@@ -1513,7 +1510,7 @@ async def get_attended_roles(user: str = Depends(get_current_user)):
         {"$sort": {"_id": 1}},
         {"$project": {"_id": 0, "job_role": "$_id", "count": 1}},
     ]
-    roles = await db.registered_candidates.aggregate(pipeline, allowDiskUse=False).to_list(None)
+    roles = await db.pipeline_data.aggregate(pipeline, allowDiskUse=False).to_list(None)
     return {"job_roles": roles}
 
 
@@ -1529,11 +1526,11 @@ async def get_attended_applicants(
     limit: int = Query(100, ge=1, le=500),
     user: str = Depends(get_current_user)
 ):
-    """Global attended applicants table with scores.
+    """Global attended applicants table (HR-internal pipeline_data) with scores.
     OPTIMIZED: filters pushed to DB; pagination at DB level; scores fetched
     for the current page only."""
 
-    match = {"otp_verified": _not_null_filter}
+    match = {"isTest": {"$ne": True}, "otp_verified": _not_null_filter}
 
     if startDate and endDate:
         match["schedule_date"] = {**_not_null_filter, "$gte": startDate, "$lte": endDate}
@@ -1589,7 +1586,7 @@ async def get_attended_applicants(
                                     "degree", "course", "year_of_graduation", "job_role",
                                     "schedule_date", "result_status"] + SCORE_ROUND_COLUMNS}
 
-    total = await db.registered_candidates.count_documents(match)
+    total = await db.pipeline_data.count_documents(match)
     skip = (page - 1) * limit
 
     pipeline = [
@@ -1598,7 +1595,7 @@ async def get_attended_applicants(
         {"$skip": skip},
         {"$limit": limit},
     ]
-    docs = await db.registered_candidates.aggregate(pipeline, allowDiskUse=False).to_list(None)
+    docs = await db.pipeline_data.aggregate(pipeline, allowDiskUse=False).to_list(None)
 
     # Fetch scores ONLY for this page's emails/phones
     page_emails = list({normalize_email(d.get("email")) for d in docs if d.get("email")})
@@ -1624,7 +1621,7 @@ async def get_attended_applicants(
     applicants = []
     for doc in docs:
         cs = doc.get("_college_status") or "Non NIRF"
-        normalized_role = doc.get("_normalized_job_role") or doc.get("job_title") or "Unknown"
+        normalized_role = doc.get("_normalized_job_role") or doc.get("job_role") or doc.get("job_title") or "Unknown"
 
         doc_email = normalize_email(doc.get("email"))
         doc_phone = normalize_phone(doc.get("phone"))
