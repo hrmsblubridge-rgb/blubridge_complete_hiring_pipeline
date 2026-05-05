@@ -57,7 +57,7 @@ export default function PublicRegistration() {
         return (
             <div className="min-h-screen bg-[#f0ebe3]" data-testid="jd-page">
                 <header className="bg-[#f0ebe3] border-b border-gray-300 py-4 px-6 flex justify-center">
-                    <img src="/blubridge-logo.png" alt="Blubridge" className="h-10" />
+                    <img src="/blubridge-logo.png" alt="Blubridge" className="" />
                 </header>
                 <div className="max-w-2xl mx-auto px-6 py-10">
                     <div className="bg-white rounded-xl shadow-sm overflow-hidden">
@@ -90,35 +90,35 @@ export default function PublicRegistration() {
         return (
             <div className="min-h-screen bg-[#f0ebe3]" data-testid="aiml-page">
                 <header className="bg-[#f0ebe3] border-b border-gray-300 py-4 px-6 flex justify-center">
-                    <img src="/blubridge-logo.png" alt="Blubridge" className="h-10" />
+                    <img src="/blubridge-logo.png" alt="Blubridge" className="" />
                 </header>
                 <div className="max-w-2xl mx-auto px-6 py-10">
                     <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-                        <div className="bg-[#1a2332] h-3 rounded-t-xl"></div>
-                        <div className="p-8 space-y-4">
-                            <h2 className="text-xl font-bold text-gray-900">Joining Our Deep Learning Research Team</h2>
-                            <h3 className="font-semibold text-gray-800">What You Need to Know?</h3>
-                            <div className="text-sm text-gray-700 space-y-2">
-                                <p><b>a) Are we a startup?</b> No. We are a Deep Learning Research Organization, not a startup.</p>
-                                <p><b>b) Who is funding us?</b> We are entirely self-funded.</p>
-                                <p><b>c) Am I eligible to apply?</b> Ask yourself: Do I truly understand the depth of Deep Learning research?</p>
-                                <p><b>d) Where do I begin?</b> Begin by appearing for the initial interview rounds.</p>
-                                <p><b>e) How is the pay?</b> We offer competitive compensation.</p>
-                                <p><b>f) Why is this opportunity unique?</b> We offer a rare research environment focused solely on foundation model development.</p>
-                                <p><b>g) Who should not apply?</b> Those looking for a routine 9-to-5 job. Anyone who struggled with 12th-grade mathematics.</p>
+                        <div className="bg-[#0F1B3A] h-8 rounded-t-xl"></div>
+                        <div className="p-8 md:p-10 space-y-5">
+                            <h2 className="text-3xl font-extrabold text-[#0F1B3A] leading-tight">Joining Our Deep Learning Research Team</h2>
+                            <h3 className="text-xl font-bold text-[#0F1B3A]">What You Need to Know?</h3>
+                            <div className="text-base text-gray-800 space-y-4 leading-relaxed">
+                                <p><b className="text-[#0F1B3A]">a) Are we a startup?</b> No. We are a Deep Learning Research Organization, not a startup.</p>
+                                <p><b className="text-[#0F1B3A]">b) Who is funding us?</b> We are entirely self-funded.</p>
+                                <p><b className="text-[#0F1B3A]">c) Am I eligible to apply?</b> Ask yourself: Do I truly understand the depth of Deep Learning research?</p>
+                                <p><b className="text-[#0F1B3A]">d) Where do I begin?</b> Begin by appearing for the initial interview rounds.</p>
+                                <p><b className="text-[#0F1B3A]">e) How is the pay?</b> We offer competitive compensation.</p>
+                                <p><b className="text-[#0F1B3A]">f) Why is this opportunity unique?</b> We offer a rare research environment focused solely on foundation model development.</p>
+                                <p><b className="text-[#0F1B3A]">g) Who should not apply?</b> Those looking for a routine 9-to-5 job. Anyone who struggled with 12th-grade mathematics.</p>
                             </div>
-                            <div className="bg-[#eef4ff] border border-[#c8deff] rounded-lg p-4 mt-4">
-                                <label className="flex items-start gap-2 cursor-pointer">
-                                    <input type="checkbox" className="mt-1 accent-blue-600 w-4 h-4" />
-                                    <span className="text-sm text-gray-700">I have read and understood the information above, and I am willing to join Blubridge's Deep Learning Research Unit under these expectations.</span>
+                            <div className="bg-[#eef4ff] border border-[#c8deff] rounded-lg p-5 mt-2">
+                                <label className="flex items-start gap-3 cursor-pointer">
+                                    <input type="checkbox" data-testid="aiml-accept-checkbox" className="mt-1 accent-[#1E4FFF] w-4 h-4 shrink-0" />
+                                    <span className="text-sm text-gray-700 leading-relaxed">I have read and understood the information above, and I am willing to join Blubridge's Deep Learning Research Unit under these expectations.</span>
                                 </label>
                             </div>
                             <button onClick={() => setStep('success')} data-testid="aiml-apply-btn"
-                                className="w-full py-3 bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-bold rounded-lg mt-4">APPLY</button>
+                                className="w-full py-4 bg-[#1E4FFF] hover:bg-[#1840d6] text-white font-bold tracking-wide text-base rounded-lg mt-2 transition-colors">APPLY</button>
                         </div>
                     </div>
                 </div>
-                <footer className="py-4 text-center text-sm text-gray-500">Copyright 2026 &copy; <b>Blubridge.com</b></footer>
+                <footer className="py-6 text-center text-sm text-gray-500">Copyright 2026 &copy; <b className="text-gray-700">Blubridge.com</b></footer>
             </div>
         );
     }
@@ -128,7 +128,7 @@ export default function PublicRegistration() {
         return (
             <div className="min-h-screen bg-[#f0ebe3] flex flex-col" data-testid="success-page">
                 <header className="bg-[#f0ebe3] border-b border-gray-300 py-4 px-6 flex justify-center">
-                    <img src="/blubridge-logo.png" alt="Blubridge" className="h-10" />
+                    <img src="/blubridge-logo.png" alt="Blubridge" className="" />
                 </header>
                 <div className="flex-1 flex items-center justify-center px-6">
                     <div className="max-w-lg w-full">
@@ -160,7 +160,7 @@ export default function PublicRegistration() {
     return (
         <div className="min-h-screen bg-[#f0ebe3] flex flex-col" data-testid="registration-form-page">
             <header className="bg-[#f0ebe3] border-b border-gray-300 py-4 px-6 flex justify-center">
-                <img src="/blubridge-logo.png" alt="Blubridge" className="h-10" />
+                <img src="/blubridge-logo.png" alt="Blubridge" className="" />
             </header>
 
             <div className="flex-1 flex items-start justify-center px-4 py-10">
