@@ -612,6 +612,7 @@ async def reprocess_matching():
     await db.registered_candidates.drop()
 
     registered_docs = []
+    naukri_updates = []
     _skip_keys = {"_id", "_is_registered", "created_at", "updated_at"}
 
     for naukri in naukri_list:
@@ -626,10 +627,12 @@ async def reprocess_matching():
 
         is_registered = pipeline_match is not None
 
-        await db.naukri_applies.update_one(
+        # Batched update for speed (was per-row await update_one — minutes on Atlas)
+        from pymongo import UpdateOne as _UpdateOne
+        naukri_updates.append(_UpdateOne(
             {"_id": naukri["_id"]},
             {"$set": {"_is_registered": is_registered}}
-        )
+        ))
 
         if is_registered:
             doc = {k: v for k, v in pipeline_match.items() if k not in _skip_keys}
@@ -644,6 +647,11 @@ async def reprocess_matching():
                 doc["job_title"] = doc.get("job_role") or ""
             doc["_has_naukri_match"] = True
             registered_docs.append(doc)
+
+    # Flush naukri _is_registered updates in bulk (1 round-trip per chunk vs N)
+    chunk = 1000
+    for i in range(0, len(naukri_updates), chunk):
+        await db.naukri_applies.bulk_write(naukri_updates[i:i + chunk], ordered=False)
 
     chunk = 2000
     for i in range(0, len(registered_docs), chunk):
@@ -2114,17 +2122,21 @@ async def _bg_queue_worker():
                     return_document=ReturnDocument.AFTER,
                 )
                 if not job:
-                    # Queue drained — run deferred reprocess_matching ONCE
+                    # Queue drained — schedule deferred reprocess_matching ONCE
+                    # (fire-and-forget so the worker immediately returns to the
+                    # claim loop and can pick up new uploads while reprocess runs).
                     if drained_pending_match:
-                        try:
-                            logger.info("Queue drained — running deferred reprocess_matching()")
-                            t0 = datetime.now(timezone.utc)
-                            await reprocess_matching()
-                            await _sync_job_titles_master()
-                            elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
-                            logger.info(f"Deferred reprocess_matching() completed in {elapsed:.1f}s")
-                        except Exception as e:
-                            logger.exception(f"Deferred reprocess_matching failed: {e}")
+                        async def _deferred_reprocess():
+                            try:
+                                logger.info("Queue drained — deferred reprocess_matching() running in background")
+                                t0 = datetime.now(timezone.utc)
+                                await reprocess_matching()
+                                await _sync_job_titles_master()
+                                elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
+                                logger.info(f"Deferred reprocess_matching() completed in {elapsed:.1f}s")
+                            except Exception as e:
+                                logger.exception(f"Deferred reprocess_matching failed: {e}")
+                        asyncio.create_task(_deferred_reprocess())
                         drained_pending_match = False
                     await asyncio.sleep(3)
                     continue
