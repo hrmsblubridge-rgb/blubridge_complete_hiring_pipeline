@@ -2074,7 +2074,9 @@ _worker_running = False
 
 async def _bg_queue_worker():
     """Persistent background worker: continuously polls bulk_upload_queue for pending jobs.
-    Processes ONE file at a time, sequentially. Runs independent of UI/browser."""
+    Processes ONE file at a time, sequentially. Runs independent of UI/browser.
+    Hardened against malformed legacy queue documents — never dies on a bad row.
+    """
     global _worker_running
     if _worker_running:
         return
@@ -2082,76 +2084,116 @@ async def _bg_queue_worker():
     logger.info("Background queue worker started")
     try:
         while True:
-            # Fetch next pending job (FIFO)
-            job = await db.bulk_upload_queue.find_one(
-                {"status": "pending"},
-                sort=[("created_at", 1)]
-            )
-            if not job:
-                await asyncio.sleep(3)
-                continue
-
-            job_id = job["_id"]
-            file_type = job["file_type"]
-            file_path = job["file_path"]
-            file_name = job["file_name"]
-
-            # Mark as processing
-            await db.bulk_upload_queue.update_one(
-                {"_id": job_id},
-                {"$set": {"status": "processing", "updated_at": datetime.now(timezone.utc).isoformat()}}
-            )
-            logger.info(f"Queue: processing {file_type}/{file_name}")
-
             try:
-                path = Path(file_path)
-                if not path.exists():
-                    raise FileNotFoundError(f"File not found: {file_path}")
+                # Fetch next pending job (FIFO)
+                job = await db.bulk_upload_queue.find_one(
+                    {"status": "pending"},
+                    sort=[("created_at", 1)]
+                )
+                if not job:
+                    await asyncio.sleep(3)
+                    continue
 
-                content = path.read_bytes()
-                process_fn = _PROCESS_FN.get(file_type)
-                if not process_fn:
-                    raise ValueError(f"Unknown file type: {file_type}")
+                job_id = job["_id"]
+                # Accept both new schema (file_type/file_name/file_path) and legacy
+                # schema (upload_type/filename/filepath) without crashing the worker.
+                file_type = job.get("file_type") or job.get("upload_type")
+                file_name = job.get("file_name") or job.get("filename")
+                file_path = job.get("file_path") or job.get("filepath")
 
-                result = await process_fn(content, file_name)
-
-                if result.get("success"):
-                    # Move file to processed_files directory
-                    dest = PROCESSED_BASE / file_type / path.name
-                    shutil.move(str(path), str(dest))
-                    await db.bulk_upload_queue.update_one(
-                        {"_id": job_id},
-                        {"$set": {
-                            "status": "completed",
-                            "result": result,
-                            "updated_at": datetime.now(timezone.utc).isoformat()
-                        }}
-                    )
-                    logger.info(f"Queue: completed {file_type}/{file_name}")
-                else:
+                if not (file_type and file_name and file_path):
+                    # Malformed row — mark failed and move on. Never let one bad
+                    # doc kill the worker (root cause of "files stuck pending").
+                    logger.error(f"Queue: malformed job {job_id} keys={list(job.keys())} → marking failed")
                     await db.bulk_upload_queue.update_one(
                         {"_id": job_id},
                         {"$set": {
                             "status": "failed",
-                            "error_message": result.get("error", "Processing returned failure"),
+                            "error_message": "Malformed queue record — missing file_type/file_name/file_path",
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        }},
+                    )
+                    continue
+
+                # Mark as processing
+                await db.bulk_upload_queue.update_one(
+                    {"_id": job_id},
+                    {"$set": {"status": "processing", "updated_at": datetime.now(timezone.utc).isoformat()}}
+                )
+                logger.info(f"Queue: processing {file_type}/{file_name}")
+
+                try:
+                    path = Path(file_path)
+                    if not path.exists():
+                        # Legacy rows sometimes store the file content in the doc itself
+                        # ("file_content"). Restore it to disk if so.
+                        if job.get("file_content"):
+                            path.parent.mkdir(parents=True, exist_ok=True)
+                            content_blob = job["file_content"]
+                            if isinstance(content_blob, str):
+                                import base64
+                                try:
+                                    content_blob = base64.b64decode(content_blob)
+                                except Exception:
+                                    content_blob = content_blob.encode("utf-8", errors="ignore")
+                            path.write_bytes(content_blob)
+                        else:
+                            raise FileNotFoundError(f"File not found: {file_path}")
+
+                    content = path.read_bytes()
+                    process_fn = _PROCESS_FN.get(file_type)
+                    if not process_fn:
+                        raise ValueError(f"Unknown file type: {file_type}")
+
+                    result = await process_fn(content, file_name)
+
+                    if result.get("success"):
+                        # Move file to processed_files directory
+                        dest = PROCESSED_BASE / file_type / path.name
+                        try:
+                            shutil.move(str(path), str(dest))
+                        except Exception as me:
+                            logger.warning(f"Queue: move failed for {path} → {dest}: {me}")
+                        await db.bulk_upload_queue.update_one(
+                            {"_id": job_id},
+                            {"$set": {
+                                "status": "completed",
+                                "result": result,
+                                "updated_at": datetime.now(timezone.utc).isoformat()
+                            }}
+                        )
+                        logger.info(f"Queue: completed {file_type}/{file_name}")
+                    else:
+                        await db.bulk_upload_queue.update_one(
+                            {"_id": job_id},
+                            {"$set": {
+                                "status": "failed",
+                                "error_message": result.get("error", "Processing returned failure"),
+                                "updated_at": datetime.now(timezone.utc).isoformat()
+                            }}
+                        )
+                        logger.warning(f"Queue: failed {file_type}/{file_name} — {result}")
+
+                except Exception as e:
+                    logger.exception(f"Queue: error {file_type}/{file_name} — {e}")
+                    await db.bulk_upload_queue.update_one(
+                        {"_id": job_id},
+                        {"$set": {
+                            "status": "failed",
+                            "error_message": str(e),
                             "updated_at": datetime.now(timezone.utc).isoformat()
                         }}
                     )
-                    logger.warning(f"Queue: failed {file_type}/{file_name} — {result}")
 
-            except Exception as e:
-                logger.error(f"Queue: error {file_type}/{file_name} — {e}")
-                await db.bulk_upload_queue.update_one(
-                    {"_id": job_id},
-                    {"$set": {
-                        "status": "failed",
-                        "error_message": str(e),
-                        "updated_at": datetime.now(timezone.utc).isoformat()
-                    }}
-                )
-
-            # Small delay between jobs
-            await asyncio.sleep(0.5)
+                # Small delay between jobs
+                await asyncio.sleep(0.5)
+            except asyncio.CancelledError:
+                raise
+            except Exception as outer:
+                # Last-resort safety net: log & sleep so the worker never dies on
+                # an unexpected row. (Original cause of "files stuck pending".)
+                logger.exception(f"Queue: unexpected outer-loop error — {outer}")
+                await asyncio.sleep(5)
 
     except asyncio.CancelledError:
         logger.info("Background queue worker stopped")
