@@ -795,8 +795,14 @@ async def get_interview_reports(
 
     match = _build_interview_reports_match(startDate, endDate, jobRole, attendance, collegeType)
 
-    # Total + paginated page (DB-level)
-    total = await _db.registered_candidates.count_documents(match)
+    # Source: pipeline_data is the live collection (May 2026 architecture migration);
+    # fall back to legacy registered_candidates if empty so older environments still work.
+    src = _db.pipeline_data
+    total = await src.count_documents(match)
+    if total == 0:
+        src = _db.registered_candidates
+        total = await src.count_documents(match)
+
     skip = (page - 1) * limit
     pipeline = [
         {"$match": match},
@@ -817,7 +823,7 @@ async def get_interview_reports(
             "_nirf_category": 1, "otp_verified": 1,
         }},
     ]
-    docs = await _db.registered_candidates.aggregate(pipeline, allowDiskUse=False).to_list(None)
+    docs = await src.aggregate(pipeline, allowDiskUse=False).to_list(None)
 
     rows = []
     for d in docs:
@@ -858,7 +864,7 @@ async def get_interview_reports(
             ]}},
         }},
     ]
-    sres = await _db.registered_candidates.aggregate(summary_pipeline, allowDiskUse=False).to_list(None)
+    sres = await src.aggregate(summary_pipeline, allowDiskUse=False).to_list(None)
     base = sres[0] if sres else {"attended": 0, "not_attended": 0, "premium_colleges": 0, "non_premium_colleges": 0}
 
     # Role counts per filter set
@@ -871,7 +877,7 @@ async def get_interview_reports(
         {"$sort": {"count": -1}},
         {"$limit": 100},
     ]
-    role_results = await _db.registered_candidates.aggregate(role_pipeline, allowDiskUse=False).to_list(None)
+    role_results = await src.aggregate(role_pipeline, allowDiskUse=False).to_list(None)
     role_counts = {r["_id"]: r["count"] for r in role_results}
 
     total_pages = (total + limit - 1) // limit if total else 1
