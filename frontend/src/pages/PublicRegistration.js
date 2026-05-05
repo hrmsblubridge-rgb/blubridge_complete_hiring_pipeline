@@ -68,7 +68,7 @@ export default function PublicRegistration() {
         return (
             <div className="min-h-screen bg-[#f3f1e9]" data-testid="jd-page">
                 <header className="bg-[#efede5] border-b border-gray-300 py-4 px-6 flex justify-center">
-                    <img src="/blubridge-logo.png" alt="Blubridge" className="" />
+                    <img src="/blubridge-logo.webp" alt="Blubridge" className="" />
                 </header>
                 <div className="max-w-2xl mx-auto px-6 py-10">
                     <div className="bg-[#fffdf7] rounded-xl shadow-sm overflow-hidden">
@@ -101,7 +101,7 @@ export default function PublicRegistration() {
         return (
             <div className="min-h-screen bg-[#f3f1e9] flex flex-col" data-testid="aiml-page">
                 <header className="bg-[#efede5] border-b border-gray-300 py-4 px-6 flex justify-center">
-                    <img src="/blubridge-logo.png" alt="Blubridge" className="" />
+                    <img src="/blubridge-logo.webp" alt="Blubridge" className="" />
                 </header>
                 <div className="flex-1 max-w-4xl w-full mx-auto px-6 py-10">
                     <div className="bg-[#fffdf7] rounded-xl shadow-sm p-10 md:p-14 text-[#1a1a1a]">
@@ -231,7 +231,7 @@ export default function PublicRegistration() {
         return (
             <div className="min-h-screen bg-[#f3f1e9] flex flex-col" data-testid={isShortlisted ? 'result-shortlisted' : `result-rejected-${(reason || 'general').toLowerCase()}`}>
                 <header className="bg-[#efede5] border-b border-gray-300 py-4 px-6 flex justify-center">
-                    <img src="/blubridge-logo.png" alt="Blubridge" className="" />
+                    <img src="/blubridge-logo.webp" alt="Blubridge" className="" />
                 </header>
                 <div className="flex-1 flex items-center justify-center px-6 py-10">
                     <div className="max-w-lg w-full">
@@ -274,7 +274,7 @@ export default function PublicRegistration() {
     return (
         <div className="min-h-screen bg-[#f3f1e9] flex flex-col" data-testid="registration-form-page">
             <header className="bg-[#efede5] border-b border-gray-300 py-4 px-6 flex justify-center">
-                <img src="/blubridge-logo.png" alt="Blubridge" className="" />
+                <img src="/blubridge-logo.webp" alt="Blubridge" className="" />
             </header>
 
             <div className="flex-1 flex items-start justify-center px-4 py-10">
