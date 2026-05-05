@@ -88,37 +88,122 @@ export default function PublicRegistration() {
     // AI & ML Info Page (Joining Our Deep Learning Research Team)
     if (step === 'aiml') {
         return (
-            <div className="min-h-screen bg-[#f0ebe3]" data-testid="aiml-page">
+            <div className="min-h-screen bg-[#f0ebe3] flex flex-col" data-testid="aiml-page">
                 <header className="bg-[#f0ebe3] border-b border-gray-300 py-4 px-6 flex justify-center">
                     <img src="/blubridge-logo.png" alt="Blubridge" className="" />
                 </header>
-                <div className="max-w-2xl mx-auto px-6 py-10">
-                    <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-                        <div className="bg-[#0F1B3A] h-8 rounded-t-xl"></div>
-                        <div className="p-8 md:p-10 space-y-5">
-                            <h2 className="text-3xl font-extrabold text-[#0F1B3A] leading-tight">Joining Our Deep Learning Research Team</h2>
-                            <h3 className="text-xl font-bold text-[#0F1B3A]">What You Need to Know?</h3>
-                            <div className="text-base text-gray-800 space-y-4 leading-relaxed">
-                                <p><b className="text-[#0F1B3A]">a) Are we a startup?</b> No. We are a Deep Learning Research Organization, not a startup.</p>
-                                <p><b className="text-[#0F1B3A]">b) Who is funding us?</b> We are entirely self-funded.</p>
-                                <p><b className="text-[#0F1B3A]">c) Am I eligible to apply?</b> Ask yourself: Do I truly understand the depth of Deep Learning research?</p>
-                                <p><b className="text-[#0F1B3A]">d) Where do I begin?</b> Begin by appearing for the initial interview rounds.</p>
-                                <p><b className="text-[#0F1B3A]">e) How is the pay?</b> We offer competitive compensation.</p>
-                                <p><b className="text-[#0F1B3A]">f) Why is this opportunity unique?</b> We offer a rare research environment focused solely on foundation model development.</p>
-                                <p><b className="text-[#0F1B3A]">g) Who should not apply?</b> Those looking for a routine 9-to-5 job. Anyone who struggled with 12th-grade mathematics.</p>
-                            </div>
-                            <div className="bg-[#eef4ff] border border-[#c8deff] rounded-lg p-5 mt-2">
-                                <label className="flex items-start gap-3 cursor-pointer">
-                                    <input type="checkbox" data-testid="aiml-accept-checkbox" className="mt-1 accent-[#1E4FFF] w-4 h-4 shrink-0" />
-                                    <span className="text-sm text-gray-700 leading-relaxed">I have read and understood the information above, and I am willing to join Blubridge's Deep Learning Research Unit under these expectations.</span>
-                                </label>
-                            </div>
-                            <button onClick={() => setStep('success')} data-testid="aiml-apply-btn"
-                                className="w-full py-4 bg-[#1E4FFF] hover:bg-[#1840d6] text-white font-bold tracking-wide text-base rounded-lg mt-2 transition-colors">APPLY</button>
+                <div className="flex-1 max-w-4xl w-full mx-auto px-6 py-10">
+                    <div className="bg-white rounded-xl shadow-sm p-10 md:p-14 text-[#1a1a1a]">
+                        {/* Title */}
+                        <h2 className="text-2xl font-bold text-center underline underline-offset-4 decoration-2">Joining Our Deep Learning Research Team</h2>
+                        <h3 className="text-xl font-bold text-center mt-2 mb-10">What You Need to Know ?</h3>
+
+                        {/* a) */}
+                        <div className="space-y-2">
+                            <h4 className="text-base font-bold">a) Are we a startup?</h4>
+                            <p className="text-sm leading-relaxed text-gray-800"><b>No.</b> We are a <b>Deep Learning Research Organization</b>, not a startup.</p>
+                        </div>
+                        <hr className="my-7 border-gray-200" />
+
+                        {/* b) */}
+                        <div className="space-y-2">
+                            <h4 className="text-base font-bold">b) Who is funding us?</h4>
+                            <p className="text-sm leading-relaxed text-gray-800">We are entirely <b>self-funded.</b></p>
+                        </div>
+                        <hr className="my-7 border-gray-200" />
+
+                        {/* c) */}
+                        <div className="space-y-2">
+                            <h4 className="text-base font-bold">c) Am I eligible to apply?</h4>
+                            <p className="text-sm text-gray-800">Ask yourself the following:</p>
+                            <ul className="list-disc pl-6 space-y-1.5 text-sm text-gray-800 leading-relaxed marker:text-gray-700">
+                                <li>Do I truly understand the <b>depth of Deep Learning research?</b></li>
+                                <li>Am I aware this is a pragmatic, mathematics-driven science, not just a language task?</li>
+                                <li>Am I ready to work with first principles of Machine Learning, not frameworks alone?</li>
+                            </ul>
+                        </div>
+                        <hr className="my-7 border-gray-200" />
+
+                        {/* d) */}
+                        <div className="space-y-2">
+                            <h4 className="text-base font-bold">d) Where do I begin? What should I study for the interview?</h4>
+                            <ul className="list-disc pl-6 space-y-1.5 text-sm text-gray-800 leading-relaxed marker:text-gray-700">
+                                <li>Begin by appearing for the <b>initial interview rounds.</b></li>
+                                <li>If selected, you'll be invited to a <b>second stage</b> where a strong grasp of Mathematics for Machine Learning is essential.</li>
+                                <li>You'll get <b>up to a month</b> to prepare. Final selection is based on a <b>Maths for Deep Learning</b> test.</li>
+                            </ul>
+                        </div>
+                        <hr className="my-7 border-gray-200" />
+
+                        {/* e) */}
+                        <div className="space-y-2">
+                            <h4 className="text-base font-bold">e) How is the pay?</h4>
+                            <p className="text-sm text-gray-800">We offer competitive compensation, but ask you to consider:</p>
+                            <ul className="list-disc pl-6 space-y-1.5 text-sm text-gray-800 leading-relaxed marker:text-gray-700">
+                                <li>You'll be working on Deep Learning from first principles — how many organizations offer that?</li>
+                                <li>We are among the very few in India genuinely building a foundation model, not just hyping it.</li>
+                                <li>Building from "first principles" is not the same as starting "from scratch."</li>
+                                <li>If you were to study this in a university:
+                                    <ul className="pl-5 mt-1.5 space-y-1.5 list-none">
+                                        <li className="flex gap-2"><span className="text-gray-600">▸</span><span>You'd likely go abroad (e.g., the US)</span></li>
+                                        <li className="flex gap-2"><span className="text-gray-600">▸</span><span>Pay for a Master's degree</span></li>
+                                        <li className="flex gap-2"><span className="text-gray-600">▸</span><span>Learn theory without real-world application</span></li>
+                                    </ul>
+                                </li>
+                            </ul>
+                            <p className="text-sm text-gray-800 leading-relaxed pt-2">
+                                <span className="text-yellow-500 mr-1">💡</span>
+                                <b>If compensation is your main driver,</b> you will find better-paying jobs. We are seeking <b>like-minded individuals</b> who value the mission over money.
+                            </p>
+                        </div>
+                        <hr className="my-7 border-gray-200" />
+
+                        {/* f) */}
+                        <div className="space-y-2">
+                            <h4 className="text-base font-bold">f) Why is this opportunity unique?</h4>
+                            <ul className="list-disc pl-6 space-y-1.5 text-sm text-gray-800 leading-relaxed marker:text-gray-700">
+                                <li>We offer a <b>rare research environment</b> focused solely on foundation model development.</li>
+                                <li>We're assembling a team of <b>passionate, like-minded individuals</b></li>
+                                <li>Whether you're a research scholar or a self-taught enthusiast — if you have the fire to understand and build <b>Large Language Models</b>, you're welcome to apply.</li>
+                            </ul>
+                        </div>
+                        <hr className="my-7 border-gray-200" />
+
+                        {/* g) */}
+                        <div className="space-y-2">
+                            <h4 className="text-base font-bold">g) Who should not apply?</h4>
+                            <ul className="list-disc pl-6 space-y-1.5 text-sm text-gray-800 leading-relaxed marker:text-gray-700">
+                                <li>Those looking for a <b>routine 9-to-5 job</b></li>
+                                <li>Anyone who <b>struggled with 12th-grade mathematics</b></li>
+                            </ul>
+                        </div>
+                        <hr className="my-7 border-gray-200" />
+
+                        {/* Confirmation */}
+                        <label className="flex items-start gap-3 cursor-pointer pl-2">
+                            <input type="checkbox" data-testid="aiml-accept-checkbox"
+                                checked={f.aiml_accepted || false}
+                                onChange={(e) => setF(p => ({ ...p, aiml_accepted: e.target.checked }))}
+                                className="mt-1 w-4 h-4 shrink-0 accent-blue-600" />
+                            <span className="text-sm text-gray-800 leading-relaxed">I have read and understood the information above, and I am willing to join Blubridge's Deep Learning Research Unit under these expectations.</span>
+                        </label>
+
+                        {/* APPLY button */}
+                        <div className="flex justify-center mt-8">
+                            <button onClick={() => f.aiml_accepted && setStep('success')}
+                                disabled={!f.aiml_accepted}
+                                data-testid="aiml-apply-btn"
+                                className={`px-16 py-3 text-sm font-bold tracking-wider text-white rounded-lg transition-colors ${f.aiml_accepted ? 'bg-[#1E4FFF] hover:bg-[#1840d6]' : 'bg-[#bfd5ff] cursor-not-allowed'}`}>
+                                APPLY
+                            </button>
                         </div>
                     </div>
                 </div>
-                <footer className="py-6 text-center text-sm text-gray-500">Copyright 2026 &copy; <b className="text-gray-700">Blubridge.com</b></footer>
+                <footer className="bg-[#1f1f1f] text-gray-300 py-5 px-6 mt-10">
+                    <div className="max-w-4xl mx-auto text-sm">
+                        Copyright 2026 &copy; <b className="text-white">Blubridge.com</b>
+                    </div>
+                </footer>
             </div>
         );
     }
