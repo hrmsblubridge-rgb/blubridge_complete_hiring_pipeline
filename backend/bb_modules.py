@@ -1346,8 +1346,6 @@ async def schedule_interview(token: str, data: ScheduleBody):
         else:
             _logger.info(f"[CutoffGuard] Skipped scheduling msg for legacy record {email}")
     except Exception as e:
-        _logger.error(f"Schedule confirmation send failed: {e}")
-    except Exception as e:
-        _logger.error(f"Schedule confirmation send failed: {e}")
+        _logger.exception(f"Schedule confirmation send failed: {e}")
 
     return {"success": True, "is_reschedule": is_reschedule, "otp": otp}
