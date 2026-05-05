@@ -67,14 +67,40 @@ export default function InterviewReports() {
     const totalPages = Math.ceil(total / pageSize) || 1;
     const navPage = (pg) => { if (pg >= 1 && pg <= totalPages) { setPage(pg); fetchData(pg, pageSize, sort); } };
 
-    const handleExport = () => {
-        const headers = ['NAME', 'EMAIL', 'DATE', 'TIME', 'JOB ROLE', 'COLLEGE TYPE', 'ATTENDANCE'];
-        const csvRows = [headers.join(',')];
-        data.forEach(r => csvRows.push([r.name, r.email, r.date, r.time, r.job_role, r.college_type, r.attendance].map(v => `"${(v || '').replace(/"/g, '""')}"`).join(',')));
-        const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a'); a.href = url; a.download = `interview_report_${dayjs().format('YYYY-MM-DD')}.csv`; a.click();
-        URL.revokeObjectURL(url);
+    const [exporting, setExporting] = useState(false);
+
+    const handleExport = async () => {
+        setExporting(true);
+        try {
+            const params = {};
+            if (startDate) params.startDate = startDate;
+            if (endDate) params.endDate = endDate;
+            if (jobRole) params.jobRole = jobRole;
+            if (attendance) params.attendance = attendance;
+            if (collegeType) params.collegeType = collegeType;
+            const res = await axios.get(`${API}/api/bb/interview-reports/export`, {
+                params, withCredentials: true, responseType: 'blob',
+            });
+            const blob = new Blob([res.data], { type: res.headers['content-type'] });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `Interview_Report_${dayjs().format('YYYY-MM-DD')}.xlsx`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            toast.success('Export downloaded');
+        } catch (err) {
+            // Backend returns 404 with detail "No data available to export" when filtered set is empty
+            if (err.response?.status === 404) {
+                toast.error('No data available to export');
+            } else {
+                toast.error('Failed to export reports');
+            }
+        } finally {
+            setExporting(false);
+        }
     };
 
     const roleCounts = summary.role_counts || {};
@@ -111,7 +137,7 @@ export default function InterviewReports() {
                     </div>
                     <button onClick={applyFilters} data-testid="apply-btn" className="flex items-center gap-2 px-5 py-2 bg-cyan-700 hover:bg-cyan-600 text-sm font-medium"><FunnelSimple size={16} /> APPLY</button>
                     <button onClick={resetFilters} className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium"><ArrowCounterClockwise size={16} /> Reset</button>
-                    <button onClick={handleExport} data-testid="export-btn" className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium"><Export size={16} /> Export</button>
+                    <button onClick={handleExport} disabled={exporting} data-testid="export-btn" className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-60 disabled:cursor-not-allowed text-sm font-medium"><Export size={16} /> {exporting ? 'Exporting…' : 'Export'}</button>
                 </div>
             </div>
 

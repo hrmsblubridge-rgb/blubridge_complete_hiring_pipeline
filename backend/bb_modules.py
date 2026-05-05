@@ -461,6 +461,216 @@ async def delete_job_opening(opening_id: str, request: Request):
 
 # ============ INTERVIEW SCHEDULE REPORTS ============
 
+def _build_interview_reports_match(startDate, endDate, jobRole, attendance, collegeType) -> dict:
+    """Shared filter-builder for /interview-reports and /interview-reports/export."""
+    match = {
+        "schedule_date": {"$nin": [None, ""], "$exists": True},
+        "schedule_time": {"$nin": [None, ""], "$exists": True},
+    }
+    if startDate or endDate:
+        sd = {"$nin": [None, ""], "$exists": True}
+        if startDate:
+            sd["$gte"] = startDate
+        if endDate:
+            sd["$lte"] = endDate
+        match["schedule_date"] = sd
+    if jobRole and jobRole.strip().lower() not in ("", "all"):
+        match["_normalized_job_role"] = {
+            "$regex": f"^{re.escape(jobRole.strip())}$", "$options": "i"
+        }
+    if collegeType and collegeType.strip().lower() not in ("", "all"):
+        ct = collegeType.strip().lower()
+        if "non" in ct:
+            match["_nirf_category"] = "Non NIRF"
+        elif "premium" in ct:
+            match["_nirf_category"] = "NIRF"
+    if attendance and attendance.strip().lower() not in ("", "all"):
+        att = attendance.strip().lower().replace(" ", "")
+        if att == "attended":
+            match["otp_verified"] = {"$nin": [None, ""], "$exists": True}
+        elif att == "notattended":
+            match["$or"] = [
+                {"otp_verified": {"$in": [None, ""]}},
+                {"otp_verified": {"$exists": False}},
+            ]
+    return match
+
+
+def _format_date_ddmmyyyy(s: str) -> str:
+    """Convert 'YYYY-MM-DD' → 'DD/MM/YYYY'. Returns input if not parseable."""
+    if not s or not isinstance(s, str):
+        return ""
+    try:
+        d = datetime.strptime(s[:10], "%Y-%m-%d")
+        return d.strftime("%d/%m/%Y")
+    except Exception:
+        return s
+
+
+def _format_time_12h(s: str) -> str:
+    """Convert 'HH:MM:SS' or 'HH:MM' (24h) → '12-hour AM/PM'. Falls back to input."""
+    if not s or not isinstance(s, str):
+        return ""
+    parts = s.split(":")
+    if len(parts) < 2:
+        return s
+    try:
+        h = int(parts[0]); m = int(parts[1])
+        period = "AM" if h < 12 else "PM"
+        h12 = h % 12 or 12
+        return f"{h12:02d}:{m:02d} {period}"
+    except Exception:
+        return s
+
+
+@bb_router.get("/interview-reports/export")
+async def export_interview_reports(
+    request: Request,
+    startDate: str = Query(None), endDate: str = Query(None),
+    jobRole: str = Query(None), attendance: str = Query(None),
+    collegeType: str = Query(None),
+    format: str = Query("xlsx", regex="^(xlsx|csv)$"),
+):
+    """Export the FULL filtered Interview Schedule Reports dataset to XLSX/CSV.
+    Includes Name, Email, Phone, College, Job Role, Schedule Date, Schedule Time,
+    Attendance and College Type. De-dupes by (email, schedule_date)."""
+    await _require_auth(request)
+
+    match = _build_interview_reports_match(startDate, endDate, jobRole, attendance, collegeType)
+
+    pipeline = [
+        {"$match": match},
+        {"$sort": {"schedule_date": -1, "schedule_time": -1}},
+        {"$project": {
+            "_id": 0, "name": 1, "email": 1, "phone": 1,
+            "college": 1, "_college_resolved": 1,
+            "schedule_date": 1, "schedule_time": 1,
+            "job_role": 1, "_normalized_job_role": 1,
+            "_nirf_category": 1, "otp_verified": 1,
+        }},
+    ]
+    headers = [
+        "Name", "Email", "Phone", "College", "Job Role",
+        "Schedule Date", "Schedule Time", "Attendance", "College Type",
+    ]
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    filename_base = f"Interview_Report_{today}"
+
+    from fastapi.responses import StreamingResponse
+    import io, csv as _csv
+
+    # Pre-flight count: if zero, return 404 immediately. Use pipeline_data first; fall back.
+    src = _db.pipeline_data
+    cnt = await src.count_documents(match)
+    if cnt == 0:
+        src = _db.registered_candidates
+        cnt = await src.count_documents(match)
+    if cnt == 0:
+        raise HTTPException(status_code=404, detail="No data available to export")
+
+    def _row(d: dict) -> Optional[dict]:
+        name = (d.get("name") or "").strip()
+        email = (d.get("email") or "").strip().lower()
+        phone = (d.get("phone") or "").strip()
+        if not (name and email):
+            return None
+        attended = "Attended" if (d.get("otp_verified") not in (None, "", False)) else "Not Attended"
+        nirf = d.get("_nirf_category") or ""
+        college_type = "Premium" if nirf == "NIRF" else ("Non-Premium" if nirf == "Non NIRF" else "")
+        return {
+            "Name": name, "Email": email, "Phone": phone,
+            "College": d.get("_college_resolved") or d.get("college") or "",
+            "Job Role": d.get("_normalized_job_role") or d.get("job_role") or "",
+            "Schedule Date": _format_date_ddmmyyyy(d.get("schedule_date") or ""),
+            "Schedule Time": _format_time_12h(d.get("schedule_time") or ""),
+            "Attendance": attended,
+            "College Type": college_type,
+        }
+
+    if format == "csv":
+        # True streaming CSV with gzip compression — yields rows as they are fetched
+        # from Mongo. Gzip reduces wire bytes ~10x on text, comfortably fitting the
+        # K8s ingress 60s read-timeout for large datasets.
+        import gzip as _gzip
+
+        async def _csv_rows():
+            yield (",".join(headers) + "\n").encode("utf-8")
+            buf = io.StringIO()
+            writer = _csv.DictWriter(buf, fieldnames=headers)
+            seen = set()
+            cursor = src.aggregate(pipeline, allowDiskUse=True, batchSize=2000)
+            async for d in cursor:
+                row = _row(d)
+                if not row:
+                    continue
+                key = (row["Email"], d.get("schedule_date") or "")
+                if key in seen:
+                    continue
+                seen.add(key)
+                writer.writerow(row)
+                data = buf.getvalue().encode("utf-8")
+                buf.seek(0); buf.truncate(0)
+                yield data
+
+        async def _gzip_stream():
+            comp = _gzip.GzipFile(fileobj=(out := io.BytesIO()), mode="wb", compresslevel=6)
+            async for chunk in _csv_rows():
+                comp.write(chunk)
+                comp.flush()
+                buffered = out.getvalue()
+                out.seek(0); out.truncate(0)
+                if buffered:
+                    yield buffered
+            comp.close()
+            tail = out.getvalue()
+            if tail:
+                yield tail
+
+        return StreamingResponse(
+            _gzip_stream(),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename_base}.csv"',
+                "Content-Encoding": "gzip",
+            },
+        )
+
+    # XLSX: build in-memory using openpyxl write_only mode.
+    # Since XLSX is a ZIP archive, the file can only be sent after wb.save() completes.
+    # On Atlas free-tier with very large datasets (>10k rows) the ingress 60s idle timeout
+    # may be hit. Recommend filtering or using ?format=csv for huge exports.
+    docs = await src.aggregate(pipeline, allowDiskUse=True).to_list(None)
+    seen = set(); rows = []
+    for d in docs:
+        row = _row(d)
+        if not row:
+            continue
+        key = (row["Email"], d.get("schedule_date") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(row)
+    if not rows:
+        raise HTTPException(status_code=404, detail="No data available to export")
+
+    from openpyxl import Workbook
+    from openpyxl.writer.excel import ExcelWriter  # noqa: F401
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet(title="Interview Reports")
+    ws.append(headers)
+    for r in rows:
+        ws.append([r.get(h, "") for h in headers])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename_base}.xlsx"'},
+    )
+
+
 @bb_router.get("/interview-reports")
 async def get_interview_reports(
     request: Request,
@@ -478,43 +688,7 @@ async def get_interview_reports(
     """
     await _require_auth(request)
 
-    # Base match: only candidates with a schedule
-    match = {
-        "schedule_date": {"$nin": [None, ""], "$exists": True},
-        "schedule_time": {"$nin": [None, ""], "$exists": True},
-    }
-    if startDate or endDate:
-        sd = {"$nin": [None, ""], "$exists": True}
-        if startDate:
-            sd["$gte"] = startDate
-        if endDate:
-            sd["$lte"] = endDate
-        match["schedule_date"] = sd
-
-    # Job role filter → persisted _normalized_job_role (case-insensitive exact)
-    if jobRole and jobRole.strip().lower() not in ("", "all"):
-        match["_normalized_job_role"] = {
-            "$regex": f"^{re.escape(jobRole.strip())}$", "$options": "i"
-        }
-
-    # College type filter → persisted _nirf_category
-    if collegeType and collegeType.strip().lower() not in ("", "all"):
-        ct = collegeType.strip().lower()
-        if "non" in ct:
-            match["_nirf_category"] = "Non NIRF"
-        elif "premium" in ct:
-            match["_nirf_category"] = "NIRF"
-
-    # Attendance filter → otp_verified presence
-    if attendance and attendance.strip().lower() not in ("", "all"):
-        att = attendance.strip().lower().replace(" ", "")
-        if att == "attended":
-            match["otp_verified"] = {"$nin": [None, ""], "$exists": True}
-        elif att == "notattended":
-            match["$or"] = [
-                {"otp_verified": {"$in": [None, ""]}},
-                {"otp_verified": {"$exists": False}},
-            ]
+    match = _build_interview_reports_match(startDate, endDate, jobRole, attendance, collegeType)
 
     # Total + paginated page (DB-level)
     total = await _db.registered_candidates.count_documents(match)
