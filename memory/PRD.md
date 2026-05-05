@@ -45,12 +45,17 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter35)** — Slug-based registration URLs (`/register/ai-ml`) + Candidate Evaluation Engine: structured response `{status, reason, message, showSchedule, scheduleLink}` with reasons `AGE | GRADUATION_YEAR | LOCATION | GENERAL`; instant Email + WhatsApp post-evaluation (workers remain as fallback); dynamic frontend result page with reason-specific copy + Schedule Interview CTA. Backward compat: ObjectId URLs still work. 8/8 pytest + frontend E2E PASS.
 - **May 2026** — Classification rule update (view-based), `/api/data/classification`, camelCase OTP aliases, isTest safety tagging. 14/14 backend tests (iter28).
 - **May 2026** — Perf fix: persisted derived fields, DB-level aggregation. 18/18 tests (iter27).
 - **Apr 2026** — Atlas DB swap, live messaging + background workers, registration UI clone, global Back Button.
 
 ## Prioritized Backlog
+- **P1** — Add explicit form flag (e.g. `conditions.show_aiml_interstitial`) instead of role string parsing in PublicRegistration.js (currently brittle)
+- **P1** — Refactor `bb_modules.py` (1540 lines) → split into `bb_pub_register.py`, `bb_slug.py`, `bb_hiring_forms.py`
+- **P1** — Hard-require `FRONTEND_URL` env at startup (Schedule link breaks if missing)
 - **P1** — Fix AiSensy API key (401)
+- **P2** — Configure dedicated AiSensy WhatsApp templates per rejection reason (currently all rejections share one Reject template)
 - **P2** — Upload History view
 - **P2** — Advanced chart visualizations
 - **P2** — Role-based access control (Admin vs Recruiter)

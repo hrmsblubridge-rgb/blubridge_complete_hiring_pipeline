@@ -225,7 +225,8 @@ export default function PublicRegistration() {
         const reason = result?.reason || '';
         const message = result?.message || '';
         const showSchedule = result?.showSchedule || (isShortlisted && result?.schedule_token);
-        const scheduleHref = result?.schedule_token ? `/schedule-interview/${result.schedule_token}` : (result?.scheduleLink || '#');
+        // Prefer backend-supplied absolute scheduleLink (uses FRONTEND_URL); fall back to relative.
+        const scheduleHref = result?.scheduleLink || (result?.schedule_token ? `/schedule-interview/${result.schedule_token}` : '#');
 
         return (
             <div className="min-h-screen bg-[#f3f1e9] flex flex-col" data-testid={isShortlisted ? 'result-shortlisted' : `result-rejected-${(reason || 'general').toLowerCase()}`}>
