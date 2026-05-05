@@ -1,0 +1,70 @@
+{
+  "summary": "Iteration 35 — Slug-based form URLs + Candidate Evaluation Engine fully verified end-to-end. Backend pytest 8/8 PASS in 34s covering: GET /api/pub/form/{slug} (returns slug field), GET by ObjectId backward compat (id=69f9ae18dec9a8c504283e7c, slug=ai-ml), 404 on non-existent slug, POST /api/pub/register structured response for AGE / GRADUATION_YEAR / LOCATION rejections + SHORTLISTED case (with schedule_token and scheduleLink containing /schedule-interview/), POST with ObjectId form_id also works. Backend log shows '[Eval] email=... reason=AGE/GRADUATION_YEAR/LOCATION/-' for every registration AND '[Reject:<reason>] em_ok=True wa_ok=True' instant messaging for rejections (instant fire-and-forget confirmed, no worker wait needed). Frontend E2E (Playwright on REACT_APP_BACKEND_URL): /register/ai-ml loads form by slug; AGE rejection shows data-testid='result-rejected-age' with reason-specific copy; SHORTLISTED valid candidate transits to AI/ML interstitial (aiml-page) → checkbox → APPLY → result page with data-testid='result-shortlisted' + 'Schedule Interview' CTA (data-testid='schedule-cta-btn') href=/schedule-interview/<token>. Backward compat: /register/69f9ae18dec9a8c504283e7c also loads same form correctly. /hiring-forms admin page link buttons use slugs ('/register/ai-ml', '/register/ai-ml-college-placement-form') — never ObjectIds.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_tests": {
+    "backend_pytest": [
+      "TestPublicFormResolution::test_get_form_by_slug — slug 'ai-ml' returns 200 with slug field + id",
+      "TestPublicFormResolution::test_get_form_by_objectid_backward_compat — ObjectId returns same form (id=69f9ae18dec9a8c504283e7c, slug=ai-ml)",
+      "TestPublicFormResolution::test_get_form_nonexistent_slug_returns_404",
+      "TestRegistrationEvaluation::test_reject_age — age=15 → status=REJECTED reason=AGE showSchedule=False",
+      "TestRegistrationEvaluation::test_reject_graduation_year — year=2018 → REJECTED reason=GRADUATION_YEAR",
+      "TestRegistrationEvaluation::test_reject_location — Mumbai+No+No → REJECTED reason=LOCATION",
+      "TestRegistrationEvaluation::test_shortlisted_valid_candidate — age=24/2024/Chennai/Yes/Yes → SHORTLISTED with schedule_token + scheduleLink containing /schedule-interview/",
+      "TestRegistrationEvaluation::test_register_with_objectid_works — POST with form_id=ObjectId also works"
+    ],
+    "backend_logs_observed": [
+      "INFO:bb_modules:[Eval] email=test_iter35_age_*@example.com status=Rejected reason=AGE shortlisted=False",
+      "INFO:messaging:[Reject:AGE] email=... wa_ok=True em_ok=True text='Hi Iter35 Test, thank you for applying...'",
+      "INFO:messaging:[Reject:GRADUATION_YEAR] em_ok=True text='...we are currently hiring only 2022–2026 batch candidates.'",
+      "INFO:messaging:[Reject:LOCATION] em_ok=True text='...candidates available for in-person interviews in Chennai.'",
+      "INFO:bb_modules:[Eval] email=test_iter35_ok_*@example.com status=Interview Not Scheduled reason=- shortlisted=True"
+    ],
+    "frontend_e2e": [
+      "/register/ai-ml: form loads via slug (console: 'form loaded {id: 69f9ae18dec9a8c504283e7c, slug: ai-ml}')",
+      "AGE rejection: data-testid='result-rejected-age' visible with copy 'Thank you for your interest. Unfortunately, your profile does not meet our current eligibility criteria.'",
+      "SHORTLISTED + AI/ML role: aiml-page interstitial reached → aiml-accept-checkbox → aiml-apply-btn → result-shortlisted with Schedule Interview CTA href=/schedule-interview/<token> (verified token=831bef0d62d34048d651f63d)",
+      "Backward compat: /register/69f9ae18dec9a8c504283e7c loads same form with slug=ai-ml in response",
+      "/hiring-forms admin page: both link-<formId> anchors use slugs (/register/ai-ml, /register/ai-ml-college-placement-form), no ObjectId in URL"
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration35_slug_eval.py",
+    "/app/test_reports/pytest/pytest_iter35.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "bb_modules.py is now 1540 lines — already flagged in iter33/34 (>700 line guideline). Slug helpers + evaluation logic added without splitting. Consider extracting bb_pub_register.py and bb_slug.py.",
+    "PublicRegistration.js line 53: AI/ML interstitial gating uses string substring check `job_role.toLowerCase().includes('ai') && includes('ml')`. Brittle: 'mainframe' contains 'ai' and 'm', 'family' contains 'fa' (won't match) — works for current 'AI & ML Engineer' but a job role like 'Famil ai... ml...' could falsely match. Recommend an explicit form flag (e.g., conditions.show_aiml_interstitial=true) instead of role string parsing.",
+    "bb_modules.py line 1356: schedule_link falls back to relative path '/schedule-interview/<token>' if FRONTEND_URL env not set — Email/WhatsApp messages would receive a broken link. Backend should hard-require FRONTEND_URL or assert at startup.",
+    "PublicRegistration.js line 228: scheduleHref logic prefers result.schedule_token (legacy) over result.scheduleLink, then falls back to scheduleLink. Order is fine but means CTA href uses relative path even when backend supplied absolute scheduleLink. Minor — but if FRONTEND_URL is set on backend, frontend silently ignores the absolute URL.",
+    "Tests for grad_year_min/max edge boundaries (== threshold) not added; classification of 'GENERAL' fallback bucket also untested. Acceptable given primary 4 reasons are validated, but worth adding."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration35_slug_eval.py"
+  ],
+  "success_rate": {
+    "backend": "100% (8/8 pytest passed in 34s)",
+    "frontend": "100% (slug routing, AGE rejection, SHORTLISTED+AIML interstitial+CTA, ObjectId backward compat, HiringForms slug links — all verified)"
+  },
+  "test_credentials": {
+    "username": "Admin User",
+    "password": "Admin User"
+  },
+  "seed_data_creation": "Created 5 documents in bb_registrations + pipeline_data with prefix test_iter35_*@example.com and 2 frontend test docs test_iter35_fe_*@example.com. Cleanup not strictly required (registration is upsert by email so duplicates won't accumulate); admin can purge via {email:{$regex:'test_iter35_'}}.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter35 confirmed slug routing + Candidate Evaluation Engine working end-to-end. Slug 'ai-ml' is auto-backfilled at startup via backfill_form_slugs() — first GET /api/pub/form/<id> on a legacy doc also lazily fills slug. Reason classification: bb_modules._classify_reason() maps reason text strings to AGE / GRADUATION_YEAR / LOCATION / GENERAL. notify_rejected_with_reason() picks template from REJECTION_TEMPLATES dict; AiSensy WhatsApp 'Reject' template uses empty params []. Schedule CTA in result page uses relative `/schedule-interview/<token>` (frontend ignores backend scheduleLink absolute URL — see code review note). To run backend tests: `pytest /app/backend/tests/test_iteration35_slug_eval.py -v`. Frontend testids on /register/<slug>: jd-page, apply-now-btn, registration-form-page, reg-name/email/phone/age/state/city/year/college/degree/course, proceed-btn, aiml-page, aiml-accept-checkbox, aiml-apply-btn, result-shortlisted, result-rejected-{age|graduation_year|location|general}, result-title, result-message, schedule-cta-btn. /hiring-forms data-testid: link-<formId>.",
+  "mocked_apis": {
+    "WhatsApp AiSensy": "LIVE — wa_ok=True observed in [Reject:*] log lines",
+    "SMTP Gmail": "LIVE — em_ok=True observed in [Reject:*] log lines"
+  },
+  "rca_of_the_issue": "N/A — all features in scope verified working."
+}

@@ -155,6 +155,56 @@ async def notify_rejected(name: str, phone: str, email: str, is_test: bool = Fal
     return bool(wa_ok or em_ok)
 
 
+# Reason-specific rejection templates ------------------------------------------------
+# Reason codes: AGE | GRADUATION_YEAR | LOCATION | GENERAL
+REJECTION_TEMPLATES = {
+    "AGE": {
+        "subject": "Application Update - Blubridge Technologies",
+        "email_body": "Thank you for your interest. Unfortunately, your profile does not currently meet our eligibility criteria for this role. We will reach out if a more suitable opportunity opens up.",
+        "wa_body": "Hi {name}, thank you for applying. We will reach out if suitable opportunities arise.",
+    },
+    "GRADUATION_YEAR": {
+        "subject": "Application Update - Blubridge Technologies",
+        "email_body": "Thank you for applying. We are currently hiring candidates from the {grad_min}–{grad_max} batch only. We'll reach out if future openings match your batch.",
+        "wa_body": "Hi {name}, we are currently hiring only {grad_min}–{grad_max} batch candidates.",
+    },
+    "LOCATION": {
+        "subject": "Application Update - Blubridge Technologies",
+        "email_body": "Thank you for your interest. We are currently proceeding only with candidates willing to attend in-person interviews in Chennai. We'll get in touch if remote opportunities open up.",
+        "wa_body": "Hi {name}, we are proceeding only with candidates available for in-person interviews in Chennai.",
+    },
+    "GENERAL": {
+        "subject": "Application Update - Blubridge Technologies",
+        "email_body": "Thank you for applying. We will get back to you if your profile matches future requirements.",
+        "wa_body": "Hi {name}, thank you for applying. We will reach out if suitable opportunities arise.",
+    },
+}
+
+
+async def notify_rejected_with_reason(
+    name: str, phone: str, email: str, reason: str,
+    grad_min=None, grad_max=None, is_test: bool = False,
+):
+    """Send a reason-specific rejection (Email + WhatsApp). Returns True if any channel succeeded."""
+    tmpl = REJECTION_TEMPLATES.get(reason) or REJECTION_TEMPLATES["GENERAL"]
+    fmt_args = {"name": name, "grad_min": grad_min or "", "grad_max": grad_max or ""}
+    wa_text = tmpl["wa_body"].format(**fmt_args)
+    em_text = tmpl["email_body"].format(**fmt_args)
+    # WhatsApp: AiSensy "Reject" campaign template is pre-approved with 0 params.
+    # Reason-specific copy is delivered via Email only; WA remains the generic
+    # template until the recruiter configures dedicated reason-based campaigns.
+    wa_ok = await send_whatsapp("Reject", phone, email, [], is_test=is_test)
+    html = f"""
+    <p>Dear {name},</p>
+    <p>{em_text}</p>
+    <p>Wishing you the best in your future endeavours!</p>
+    <p>Warm regards,<br>Blubridge Technologies</p>
+    """
+    em_ok = await send_email(email, phone, tmpl["subject"], html, is_test=is_test)
+    _logger.info(f"[Reject:{reason}] email={email} wa_ok={wa_ok} em_ok={em_ok} text={wa_text!r}")
+    return bool(wa_ok or em_ok)
+
+
 async def notify_schedule_confirmation(name: str, phone: str, email: str, date: str, time: str, is_test: bool = False):
     """Send schedule confirmation via WhatsApp + Email."""
     await send_whatsapp("Schedule Detail", phone, email, [name, date, time, OFFICE_LOCATION], is_test=is_test)

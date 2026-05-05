@@ -143,7 +143,7 @@ export default function HiringForms() {
                                         )}
                                     </div>
                                     <div className="flex gap-2 shrink-0">
-                                        <a href={`/register/${f.id}`} target="_blank" rel="noreferrer" data-testid={`link-${f.id}`} className="p-2 text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800" title="Registration Link"><LinkIcon size={16} /></a>
+                                        <a href={`/register/${f.slug || f.id}`} target="_blank" rel="noreferrer" data-testid={`link-${f.id}`} className="p-2 text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800" title="Registration Link"><LinkIcon size={16} /></a>
                                         <button onClick={() => openEditForm(f)} className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800"><PencilSimple size={16} /></button>
                                         <button onClick={() => deleteForm(f.id)} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800"><Trash size={16} /></button>
                                     </div>

@@ -34,6 +34,29 @@ def init_bb(database, auth_fn, college_lookup_fn, classify_fn):
     _classify_college_fn = classify_fn
 
 
+async def backfill_form_slugs():
+    """Backfill `slug` for any hiring form missing it, and ensure unique index.
+    Safe to call repeatedly. Should be invoked at app startup.
+    """
+    if _db is None:
+        return
+    try:
+        # Build slug for docs missing it
+        cursor = _db.bb_hiring_forms.find({"$or": [{"slug": {"$exists": False}}, {"slug": ""}, {"slug": None}]})
+        async for f in cursor:
+            base = _slugify(f.get("name") or f.get("job_role") or "form")
+            slug = await _unique_slug(base)
+            await _db.bb_hiring_forms.update_one({"_id": f["_id"]}, {"$set": {"slug": slug}})
+            _logger.info(f"backfilled slug '{slug}' for form {f['_id']}")
+        # Ensure unique index on slug (sparse to allow legacy nulls during migration)
+        try:
+            await _db.bb_hiring_forms.create_index("slug", unique=True, sparse=True)
+        except Exception as e:
+            _logger.warning(f"slug index creation skipped: {e}")
+    except Exception as e:
+        _logger.error(f"backfill_form_slugs failed: {e}")
+
+
 async def _require_auth(request: Request):
     return await _auth_fn(request)
 
@@ -43,6 +66,82 @@ def _oid(id_str: str) -> ObjectId:
         return ObjectId(id_str)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid ID format")
+
+
+def _slugify(text: str) -> str:
+    """Convert a form name to a URL-friendly slug.
+    Lowercase, alphanumerics + hyphens only, collapse repeats, trim hyphens.
+    """
+    if not text:
+        return ""
+    s = text.strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s
+
+
+async def _unique_slug(base: str, exclude_id: Optional[ObjectId] = None) -> str:
+    """Return a unique slug, appending -1, -2, ... on collision."""
+    if not base:
+        base = "form"
+    candidate = base
+    n = 0
+    while True:
+        q = {"slug": candidate}
+        if exclude_id is not None:
+            q["_id"] = {"$ne": exclude_id}
+        existing = await _db.bb_hiring_forms.find_one(q, {"_id": 1})
+        if not existing:
+            return candidate
+        n += 1
+        candidate = f"{base}-{n}"
+
+
+async def _resolve_form_by_slug_or_id(key: str):
+    """Try slug first, fallback to ObjectId. Returns the form doc or None."""
+    if not key:
+        return None
+    # Try slug first
+    form = await _db.bb_hiring_forms.find_one({"slug": key})
+    if form:
+        return form
+    # Fallback: ObjectId
+    try:
+        return await _db.bb_hiring_forms.find_one({"_id": ObjectId(key)})
+    except Exception:
+        return None
+
+
+def _classify_reason(rejected_reasons: list) -> str:
+    """Map raw rejection-reason strings to a single primary category code.
+    Priority: AGE > GRADUATION_YEAR > LOCATION > GENERAL.
+    """
+    if not rejected_reasons:
+        return ""
+    joined = " | ".join(r.lower() for r in rejected_reasons)
+    if "age" in joined:
+        return "AGE"
+    if "graduation" in joined or "grad year" in joined:
+        return "GRADUATION_YEAR"
+    if "location" in joined or "attend in person" in joined:
+        return "LOCATION"
+    return "GENERAL"
+
+
+_REASON_UI_MESSAGE = {
+    "AGE": "Thank you for your interest. Unfortunately, your profile does not meet our current eligibility criteria.",
+    "GRADUATION_YEAR": "We are currently looking for candidates from the {grad_min} to {grad_max} batch only.",
+    "LOCATION": "Currently, we are proceeding only with candidates who are willing to attend in-person interviews in Chennai.",
+    "GENERAL": "Thank you for applying. We will get back to you if your profile matches future requirements.",
+    "": "Thank you for completing your registration. We will review your profile and get in touch shortly.",
+}
+
+
+def _build_ui_message(reason: str, grad_min=None, grad_max=None) -> str:
+    msg = _REASON_UI_MESSAGE.get(reason, _REASON_UI_MESSAGE[""])
+    if reason == "GRADUATION_YEAR":
+        msg = msg.format(grad_min=grad_min or "the recent", grad_max=grad_max or "current")
+    return msg
 
 
 # ============ JOB ROLES ============
@@ -159,6 +258,12 @@ async def list_hiring_forms(request: Request):
     forms = await _db.bb_hiring_forms.find({}).sort("created_at", -1).to_list(None)
     for f in forms:
         f["id"] = str(f.pop("_id"))
+        # Backfill slug on-the-fly for legacy docs missing it
+        if not f.get("slug"):
+            base = _slugify(f.get("name") or f.get("job_role") or "form")
+            slug = await _unique_slug(base)
+            await _db.bb_hiring_forms.update_one({"_id": _oid(f["id"])}, {"$set": {"slug": slug}})
+            f["slug"] = slug
     return {"forms": forms}
 
 @bb_router.post("/hiring-forms")
@@ -170,9 +275,12 @@ async def create_hiring_form(data: HiringFormCreate, request: Request):
     cond = data.conditions.dict() if data.conditions else {}
     if cond.get("locations"):
         cond["locations"] = [l.strip() for l in cond["locations"] if l.strip()]
+    name = data.name.strip()
+    slug = await _unique_slug(_slugify(name))
     doc = {
-        "name": data.name.strip(), "form_type_id": data.form_type_id,
+        "name": name, "form_type_id": data.form_type_id,
         "form_type_name": ft["name"], "job_role": data.job_role.strip(),
+        "slug": slug,
         "conditions": cond,
         "job_description_attached": data.job_description_attached or False,
         "job_opening_id": data.job_opening_id or None,
@@ -190,7 +298,10 @@ async def update_hiring_form(form_id: str, data: HiringFormUpdate, request: Requ
     oid = _oid(form_id)
     updates = {"updated_at": datetime.now(timezone.utc).isoformat()}
     if data.name is not None:
-        updates["name"] = data.name.strip()
+        new_name = data.name.strip()
+        updates["name"] = new_name
+        # Auto-regenerate slug on rename
+        updates["slug"] = await _unique_slug(_slugify(new_name), exclude_id=oid)
     if data.job_role is not None:
         updates["job_role"] = data.job_role.strip()
     if data.form_type_id is not None:
@@ -1041,12 +1152,21 @@ class RegistrationBody(BaseModel):
 
 @pub_router.get("/form/{form_id}")
 async def get_public_form(form_id: str):
-    """Get form details for public registration (no auth)."""
-    form = await _db.bb_hiring_forms.find_one({"_id": _oid(form_id)})
+    """Get form details for public registration (no auth).
+    Accepts either a slug or an ObjectId for backward compatibility.
+    """
+    form = await _resolve_form_by_slug_or_id(form_id)
     if not form:
         raise HTTPException(status_code=404, detail="Form not found")
+    # Backfill slug if missing (legacy doc)
+    if not form.get("slug"):
+        base = _slugify(form.get("name") or form.get("job_role") or "form")
+        slug = await _unique_slug(base)
+        await _db.bb_hiring_forms.update_one({"_id": form["_id"]}, {"$set": {"slug": slug}})
+        form["slug"] = slug
     result = {
         "id": str(form["_id"]),
+        "slug": form.get("slug", ""),
         "name": form.get("name", ""),
         "job_role": form.get("job_role", ""),
         "form_type_name": form.get("form_type_name", ""),
@@ -1073,8 +1193,10 @@ async def get_public_form(form_id: str):
 
 @pub_router.post("/register")
 async def register_applicant(data: RegistrationBody):
-    """Public registration — no auth. Checks shortlist conditions and stores applicant."""
-    form = await _db.bb_hiring_forms.find_one({"_id": _oid(data.form_id)})
+    """Public registration — no auth. Checks shortlist conditions and stores applicant.
+    `form_id` accepts either a slug or an ObjectId.
+    """
+    form = await _resolve_form_by_slug_or_id(data.form_id)
     if not form:
         raise HTTPException(status_code=404, detail="Form not found")
 
@@ -1144,7 +1266,8 @@ async def register_applicant(data: RegistrationBody):
         phone_normalized = phone_normalized[-10:]
 
     reg_doc = {
-        "form_id": data.form_id,
+        "form_id": str(form["_id"]),
+        "form_slug": form.get("slug", ""),
         "form_name": form.get("name", ""),
         "job_role": job_role,
         "full_name": data.full_name.strip(),
@@ -1218,10 +1341,75 @@ async def register_applicant(data: RegistrationBody):
         upsert=True,
     )
 
-    # Messaging handled by background workers (schedule_link_sender)
+    # ---- Build structured evaluation response ----
+    reason = _classify_reason(rejected_reasons) if not is_shortlisted else ""
+    ui_message = _build_ui_message(
+        reason,
+        grad_min=cond.get("grad_year_min"),
+        grad_max=cond.get("grad_year_max"),
+    ) if not is_shortlisted else "You are shortlisted! We have shared the interview scheduling link via Email / WhatsApp. Please check and book your slot."
+
+    schedule_link = None
+    if is_shortlisted and schedule_token:
+        import os as _os
+        _frontend = _os.environ.get("FRONTEND_URL", "")
+        schedule_link = f"{_frontend}/schedule-interview/{schedule_token}" if _frontend else f"/schedule-interview/{schedule_token}"
+
+    # ---- Trigger Email + WhatsApp instantly (fire-and-forget) ----
+    # Background workers remain as fallback retry safety net (they skip records
+    # already marked schedule_link_sent / reject_notified).
+    is_test_record = bool(reg_doc.get("isTest"))
+    import asyncio as _asyncio
+    _logger.info(f"[Eval] email={data.email} status={status} reason={reason or '-'} shortlisted={is_shortlisted}")
+
+    async def _instant_notify():
+        try:
+            from messaging import notify_shortlisted, notify_rejected_with_reason
+            now_iso = datetime.now(timezone.utc).isoformat()
+            if is_shortlisted:
+                ok = await notify_shortlisted(
+                    data.full_name.strip(), phone_normalized,
+                    data.email.strip().lower(), schedule_token,
+                    is_test=is_test_record,
+                )
+                await _db.bb_registrations.update_one(
+                    {"email": data.email.strip().lower(), "schedule_token": schedule_token},
+                    {"$set": {
+                        "schedule_link_sent": bool(ok),
+                        "schedule_link_sent_at": now_iso if ok else None,
+                        "shortlist_mail_sent": bool(ok),
+                        "shortlist_mail_sent_time": now_iso if ok else None,
+                    }},
+                )
+            else:
+                ok = await notify_rejected_with_reason(
+                    data.full_name.strip(), phone_normalized,
+                    data.email.strip().lower(), reason,
+                    grad_min=cond.get("grad_year_min"),
+                    grad_max=cond.get("grad_year_max"),
+                    is_test=is_test_record,
+                )
+                await _db.bb_registrations.update_one(
+                    {"email": data.email.strip().lower(), "registered_at": reg_doc["registered_at"]},
+                    {"$set": {
+                        "reject_notified": bool(ok),
+                        "reject_notified_at": now_iso if ok else None,
+                        "reject_reason_code": reason,
+                    }},
+                )
+        except Exception as e:
+            _logger.exception(f"[InstantNotify] failed for {data.email}: {e}")
+
+    _asyncio.create_task(_instant_notify())
+
     return {
         "success": True,
-        "status": status,
+        "status": "SHORTLISTED" if is_shortlisted else "REJECTED",
+        "reason": reason,
+        "message": ui_message,
+        "showSchedule": bool(is_shortlisted and schedule_token),
+        "scheduleLink": schedule_link,
+        # Legacy fields kept for backward compatibility with existing frontend code
         "is_shortlisted": is_shortlisted,
         "schedule_token": schedule_token,
         "rejected_reasons": rejected_reasons,

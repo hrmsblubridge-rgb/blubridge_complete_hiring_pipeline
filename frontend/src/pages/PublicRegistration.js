@@ -47,10 +47,13 @@ export default function PublicRegistration() {
             const payload = { form_id: formId, ...f, age: f.age ? Number(f.age) : null, year_of_graduation: f.year_of_graduation ? Number(f.year_of_graduation) : null };
             const r = await axios.post(`${API}/api/pub/register`, payload);
             setResult(r.data);
-            if (form?.job_role?.toLowerCase().includes('ai') && form?.job_role?.toLowerCase().includes('ml')) {
+            // For AI/ML role we still show the "What You Need to Know" interstitial,
+            // then the result page. For all other forms go straight to result.
+            const isShortlisted = r.data?.status === 'SHORTLISTED' || r.data?.is_shortlisted;
+            if (isShortlisted && form?.job_role?.toLowerCase().includes('ai') && form?.job_role?.toLowerCase().includes('ml')) {
                 setStep('aiml');
             } else {
-                setStep('success');
+                setStep('result');
             }
         } catch (e) { alert(e.response?.data?.detail || 'Registration failed'); }
         finally { setSubmitting(false); }
@@ -198,7 +201,7 @@ export default function PublicRegistration() {
 
                         {/* APPLY button */}
                         <div className="flex justify-center mt-8">
-                            <button onClick={() => f.aiml_accepted && setStep('success')}
+                            <button onClick={() => f.aiml_accepted && setStep('result')}
                                 disabled={!f.aiml_accepted}
                                 data-testid="aiml-apply-btn"
                                 className={`px-16 py-3 text-sm font-bold tracking-wider text-white rounded-lg transition-colors ${f.aiml_accepted ? 'bg-[#1E4FFF] hover:bg-[#1840d6]' : 'bg-[#bfd5ff] cursor-not-allowed'}`}>
@@ -216,29 +219,46 @@ export default function PublicRegistration() {
         );
     }
 
-    // Success Page
-    if (step === 'success') {
+    // Result Page — dynamic shortlisted / rejected UI
+    if (step === 'result' || step === 'success') {
+        const isShortlisted = result?.status === 'SHORTLISTED' || result?.is_shortlisted;
+        const reason = result?.reason || '';
+        const message = result?.message || '';
+        const showSchedule = result?.showSchedule || (isShortlisted && result?.schedule_token);
+        const scheduleHref = result?.schedule_token ? `/schedule-interview/${result.schedule_token}` : (result?.scheduleLink || '#');
+
         return (
-            <div className="min-h-screen bg-[#f3f1e9] flex flex-col" data-testid="success-page">
+            <div className="min-h-screen bg-[#f3f1e9] flex flex-col" data-testid={isShortlisted ? 'result-shortlisted' : `result-rejected-${(reason || 'general').toLowerCase()}`}>
                 <header className="bg-[#efede5] border-b border-gray-300 py-4 px-6 flex justify-center">
                     <img src="/blubridge-logo.png" alt="Blubridge" className="" />
                 </header>
-                <div className="flex-1 flex items-center justify-center px-6">
+                <div className="flex-1 flex items-center justify-center px-6 py-10">
                     <div className="max-w-lg w-full">
                         <div className="bg-[#fffdf7] rounded-xl shadow-sm overflow-hidden">
-                            <div className="bg-[#1a2332] h-3 rounded-t-xl"></div>
-                            <div className="p-8 text-center space-y-4">
-                                <h2 className="text-xl font-bold text-gray-900">Submission Successful!</h2>
-                                <p className="text-gray-600 text-sm">Thank you for completing your registration form. We appreciate your interest in joining Blubridge Technologies.</p>
-                                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-left text-sm text-gray-700">
-                                    <p className="font-semibold mb-1">Next Steps:</p>
-                                    <p>Our team will review your responses, and you will receive an update on your application via Email / WhatsApp within 24 hours.</p>
-                                </div>
-                                {result?.schedule_token && (
-                                    <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-left text-sm text-emerald-800">
-                                        <p className="font-semibold mb-1">You are shortlisted!</p>
-                                        <a href={`/schedule-interview/${result.schedule_token}`} className="text-blue-600 underline">Schedule your interview</a>
-                                    </div>
+                            <div className={`h-3 rounded-t-xl ${isShortlisted ? 'bg-emerald-600' : 'bg-[#1a2332]'}`}></div>
+                            <div className="p-8 text-center space-y-5">
+                                {isShortlisted ? (
+                                    <>
+                                        <h2 className="text-2xl font-bold text-emerald-700" data-testid="result-title">You are shortlisted!</h2>
+                                        <p className="text-sm text-gray-700">Congratulations on clearing the initial screening.</p>
+                                        <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-left text-sm text-emerald-900">
+                                            <p>{message}</p>
+                                        </div>
+                                        {showSchedule && (
+                                            <a href={scheduleHref} data-testid="schedule-cta-btn"
+                                                className="inline-block w-full py-3 bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-bold rounded-lg text-center">
+                                                Schedule Interview
+                                            </a>
+                                        )}
+                                    </>
+                                ) : (
+                                    <>
+                                        <h2 className="text-xl font-bold text-gray-900" data-testid="result-title">Thank you for applying</h2>
+                                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-left text-sm text-gray-700" data-testid="result-message">
+                                            <p>{message}</p>
+                                        </div>
+                                        <p className="text-xs text-gray-500">A confirmation has been sent to your email and WhatsApp.</p>
+                                    </>
                                 )}
                             </div>
                         </div>

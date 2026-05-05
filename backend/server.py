@@ -2486,7 +2486,7 @@ async def root():
 app.include_router(api_router)
 
 # Include BluBridge modules router
-from bb_modules import bb_router, pub_router, init_bb
+from bb_modules import bb_router, pub_router, init_bb, backfill_form_slugs
 init_bb(db, get_current_user, _build_college_rank_lookup, _classify_college)
 app.include_router(bb_router)
 app.include_router(pub_router)
@@ -2524,6 +2524,9 @@ async def startup_event():
     await db.job_titles_master.create_index("normalized_job_title", unique=True)
     await db.job_titles_master.create_index("is_mapped")
     await db.bulk_upload_queue.create_index([("status", 1), ("created_at", 1)])
+
+    # Backfill slugs for existing hiring forms + ensure unique index
+    await backfill_form_slugs()
     
     # Resume: reset any stuck "processing" records to "pending"
     stuck = await db.bulk_upload_queue.update_many(
