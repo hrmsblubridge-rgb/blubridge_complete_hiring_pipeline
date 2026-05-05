@@ -8,6 +8,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Upload
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+from pymongo import ReturnDocument
 import logging
 import shutil
 import glob as glob_module
@@ -2077,6 +2078,10 @@ async def _bg_queue_worker():
     Processes ONE file at a time, sequentially. Runs independent of UI/browser.
     Hardened against malformed legacy queue documents — never dies on a bad row.
 
+    ATOMIC CLAIM: Uses `find_one_and_update` to claim the next pending row in a
+    single round-trip — preventing any concurrent writer (older deploy, atlas
+    trigger, duplicate task) from sniping the row between our find and update.
+
     POST-BATCH MATCHING: To keep per-file processing fast, the heavy
     `reprocess_matching()` rebuild is deferred until after the queue is
     drained (no more pending jobs). It runs ONCE per drained batch.
@@ -2085,15 +2090,28 @@ async def _bg_queue_worker():
     if _worker_running:
         return
     _worker_running = True
-    logger.info("Background queue worker started")
+    worker_pid = os.getpid()
+    logger.info(f"Background queue worker started (pid={worker_pid})")
     drained_pending_match = False  # True when at least one naukri/pipeline file was processed since last reprocess
     try:
         while True:
             try:
-                # Fetch next pending job (FIFO)
-                job = await db.bulk_upload_queue.find_one(
-                    {"status": "pending"},
-                    sort=[("created_at", 1)]
+                # ATOMIC CLAIM: pick the oldest queued/pending row AND mark it processing
+                # in a single Mongo round-trip. We use status="queued" (our private
+                # discriminator) primarily; legacy "pending" is also accepted for
+                # backward-compat with rows created before this fix.
+                now_iso = datetime.now(timezone.utc).isoformat()
+                job = await db.bulk_upload_queue.find_one_and_update(
+                    {"status": {"$in": ["queued", "pending"]}, "owner": {"$in": [None, "e1_recruitment_app"]}},
+                    {"$set": {
+                        "status": "processing",
+                        "owner": "e1_recruitment_app",
+                        "updated_at": now_iso,
+                        "worker_pid": worker_pid,
+                        "claimed_at": now_iso,
+                    }},
+                    sort=[("created_at", 1)],
+                    return_document=ReturnDocument.AFTER,
                 )
                 if not job:
                     # Queue drained — run deferred reprocess_matching ONCE
@@ -2132,11 +2150,6 @@ async def _bg_queue_worker():
                     )
                     continue
 
-                # Mark as processing
-                await db.bulk_upload_queue.update_one(
-                    {"_id": job_id},
-                    {"$set": {"status": "processing", "updated_at": datetime.now(timezone.utc).isoformat()}}
-                )
                 logger.info(f"Queue: processing {file_type}/{file_name} (id={job_id})")
 
                 try:
@@ -2231,9 +2244,10 @@ async def bulk_upload_status(user: str = Depends(get_current_user)):
     """Return queue status for all types: pending, processing, completed, failed."""
     result = {}
     for utype in BULK_TYPES_LIST:
-        # Pending + Processing from DB
+        # Pending + Processing from DB (queued is our discriminator; pending kept
+        # for backward-compat)
         active = await db.bulk_upload_queue.find(
-            {"file_type": utype, "status": {"$in": ["pending", "processing"]}},
+            {"file_type": utype, "status": {"$in": ["queued", "pending", "processing"]}},
             {"_id": 1, "file_name": 1, "file_path": 1, "status": 1, "created_at": 1, "error_message": 1}
         ).sort("created_at", 1).to_list(None)
         pending = []
@@ -2327,12 +2341,16 @@ async def bulk_upload_files(
             skipped.append({"name": f.filename, "reason": f"Disk write failed: {e}"})
             continue
         try:
+            # Insert with our internal status `queued` (not `pending`) so any
+            # external/legacy worker that scans for {status: 'pending'} cannot
+            # snipe our row. Our own worker reads {status: 'queued'}.
             await db.bulk_upload_queue.insert_one({
                 "file_name": f.filename,
                 "file_path": str(dest),
                 "file_type": upload_type,
                 "file_size": len(content),
-                "status": "pending",
+                "status": "queued",
+                "owner": "e1_recruitment_app",
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
                 "error_message": None,
@@ -2663,13 +2681,15 @@ async def startup_event():
     # Backfill slugs for existing hiring forms + ensure unique index
     await backfill_form_slugs()
     
-    # Resume: reset any stuck "processing" records to "pending"
+    # Resume: reset any stuck "processing" records (from our own worker) back
+    # to "queued". Only touches rows we own to avoid resurrecting legacy/phantom
+    # rows.
     stuck = await db.bulk_upload_queue.update_many(
-        {"status": "processing"},
-        {"$set": {"status": "pending", "updated_at": datetime.now(timezone.utc).isoformat()}}
+        {"status": "processing", "owner": "e1_recruitment_app"},
+        {"$set": {"status": "queued", "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
     if stuck.modified_count > 0:
-        logger.info(f"Reset {stuck.modified_count} stuck processing jobs to pending")
+        logger.info(f"Reset {stuck.modified_count} stuck processing jobs to queued")
 
     # One-time cleanup: archive legacy phantom records (pre-fix queue rows that
     # had `error: 'Invalid upload_type'` and a stray `started_at` field). They

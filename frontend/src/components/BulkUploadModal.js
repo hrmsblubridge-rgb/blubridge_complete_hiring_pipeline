@@ -78,13 +78,14 @@ export default function BulkUploadModal({ type, onClose }) {
     };
 
     const statusBadge = (status) => {
+        const display = status === 'queued' ? 'pending' : status;
         const styles = {
             pending: 'bg-zinc-800 text-zinc-400',
             processing: 'bg-cyan-900/40 text-cyan-400',
             completed: 'bg-emerald-900/40 text-emerald-400',
             failed: 'bg-red-900/40 text-red-400',
         };
-        return <span className={`text-xs px-2 py-0.5 rounded ${styles[status] || styles.pending}`}>{status}</span>;
+        return <span className={`text-xs px-2 py-0.5 rounded ${styles[display] || styles.pending}`}>{display}</span>;
     };
 
     return (
@@ -129,7 +130,7 @@ export default function BulkUploadModal({ type, onClose }) {
                                         <span className="text-sm truncate flex-1" title={f.name}>{f.name}</span>
                                         <span className="text-xs text-zinc-500">{formatSize(f.size)}</span>
                                         {statusBadge(f.status)}
-                                        {f.status === 'pending' && (
+                                        {(f.status === 'pending' || f.status === 'queued') && (
                                             <button onClick={() => handleDelete(f.id)} data-testid={`delete-${f.id}`}
                                                 className="p-1 hover:bg-zinc-700 transition-colors text-zinc-500 hover:text-red-400">
                                                 <Trash size={16} />
