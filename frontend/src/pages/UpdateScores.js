@@ -87,29 +87,57 @@ export default function UpdateScores() {
     // Used rounds for current update (prevent duplicate selection)
     const usedRounds = new Set(updateScores.map(s => s.round_name).filter(Boolean));
 
-    // Export report
-    const handleExport = () => {
-        const headers = ['NAME', 'DATE OF INTERVIEW', 'JOB ROLE', 'STATUS'];
-        const csvRows = [headers.join(',')];
-        applicants.forEach(a => csvRows.push([a.name, a.date_of_interview, a.job_role, a.status].map(v => `"${(v || '').replace(/"/g, '""')}"`).join(',')));
-        const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a'); a.href = url; a.download = `scores_report_${new Date().toISOString().split('T')[0]}.csv`; a.click();
-        URL.revokeObjectURL(url);
+    const [importPreview, setImportPreview] = useState(null); // {rows, round_columns, errors, total}
+
+    // Export — calls backend XLSX endpoint (full schema)
+    const handleExport = async (fmt = 'xlsx') => {
+        try {
+            const params = new URLSearchParams({ format: fmt });
+            if (startDate) params.append('startDate', startDate);
+            if (endDate) params.append('endDate', endDate);
+            const res = await axios.get(`${API}/api/bb/export-scores?${params}`, {
+                withCredentials: true, responseType: 'blob',
+            });
+            const url = URL.createObjectURL(new Blob([res.data]));
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `applicant_scores_${new Date().toISOString().split('T')[0]}.${fmt}`;
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch { toast.error('Export failed'); }
     };
 
-    // Import report
+    // Import — STEP 1: preview parsed rows
     const handleImport = async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
         try {
             const formData = new FormData();
             formData.append('file', file);
-            const res = await axios.post(`${API}/api/bb/import-scores`, formData, { withCredentials: true, headers: { 'Content-Type': 'multipart/form-data' } });
-            toast.success(`Imported ${res.data.imported} records`);
-            fetchApplicants(page, pageSize);
-        } catch { toast.error('Import failed'); }
+            const res = await axios.post(
+                `${API}/api/bb/import-scores/preview`, formData,
+                { withCredentials: true, headers: { 'Content-Type': 'multipart/form-data' } },
+            );
+            setImportPreview(res.data);
+            if (res.data.errors?.length) toast.warning(`${res.data.errors.length} row(s) had issues`);
+            else toast.success(`Parsed ${res.data.total} rows. Review and confirm.`);
+        } catch (err) { toast.error(err?.response?.data?.detail || 'Import failed'); }
         e.target.value = '';
+    };
+
+    // Import — STEP 2: confirm and save
+    const handleImportConfirm = async () => {
+        if (!importPreview?.rows?.length) return;
+        try {
+            const res = await axios.post(
+                `${API}/api/bb/import-scores/confirm`,
+                { rows: importPreview.rows },
+                { withCredentials: true },
+            );
+            toast.success(`Imported ${res.data.imported} records (batch=${res.data.batch_id.slice(0, 8)})`);
+            setImportPreview(null);
+            fetchApplicants(page, pageSize);
+        } catch { toast.error('Confirm failed'); }
     };
 
     return (
@@ -126,10 +154,11 @@ export default function UpdateScores() {
                     <div className="space-y-1"><label className="text-xs text-zinc-500 uppercase tracking-wider">Start Date</label><input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="block w-40 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" /></div>
                     <div className="space-y-1"><label className="text-xs text-zinc-500 uppercase tracking-wider">End Date</label><input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="block w-40 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" /></div>
                     <button onClick={applyFilter} data-testid="apply-btn" className="flex items-center gap-2 px-5 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm font-medium"><FunnelSimple size={16} /> Apply</button>
-                    <button onClick={handleExport} data-testid="export-btn" className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium"><Export size={16} /> Export report</button>
+                    <button onClick={() => handleExport('xlsx')} data-testid="export-xlsx-btn" className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium"><Export size={16} /> Export XLSX</button>
+                    <button onClick={() => handleExport('csv')} data-testid="export-csv-btn" className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium"><Export size={16} /> Export CSV</button>
                     <label className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium cursor-pointer" data-testid="import-btn">
                         <UploadSimple size={16} /> Import report
-                        <input type="file" accept=".csv,.xlsx" onChange={handleImport} className="hidden" />
+                        <input type="file" accept=".csv,.xlsx,.xls" onChange={handleImport} className="hidden" />
                     </label>
                 </div>
             </div>
@@ -225,6 +254,58 @@ export default function UpdateScores() {
                                     className="flex-1 bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" onKeyDown={e => e.key === 'Enter' && saveRound()} />
                                 <button onClick={saveRound} data-testid="save-round-btn" className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm font-medium">{editRoundId ? 'Update' : 'Create'}</button>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Import Preview Modal */}
+            {importPreview && (
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-6" data-testid="import-preview-modal">
+                    <div className="bg-zinc-900 border border-zinc-800 w-full max-w-6xl max-h-[85vh] flex flex-col">
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
+                            <h3 className="text-lg font-semibold">Review Imported Records</h3>
+                            <button onClick={() => setImportPreview(null)} data-testid="import-preview-close" className="p-1 hover:bg-zinc-800"><X size={20} /></button>
+                        </div>
+                        <div className="px-6 py-3 border-b border-zinc-800 text-xs text-zinc-400 flex gap-4">
+                            <span data-testid="import-preview-count">Total: {importPreview.total}</span>
+                            <span>Round columns: {importPreview.round_columns?.join(', ') || '—'}</span>
+                            {importPreview.errors?.length > 0 && (
+                                <span className="text-amber-400">Issues: {importPreview.errors.length}</span>
+                            )}
+                        </div>
+                        <div className="flex-1 overflow-auto">
+                            <table className="w-full text-xs">
+                                <thead className="bg-zinc-800 sticky top-0">
+                                    <tr>
+                                        <th className="px-3 py-2 text-left">Name</th>
+                                        <th className="px-3 py-2 text-left">Email</th>
+                                        <th className="px-3 py-2 text-left">Job Role</th>
+                                        <th className="px-3 py-2 text-left">Status</th>
+                                        {importPreview.round_columns?.map(r => (
+                                            <th key={r} className="px-3 py-2 text-left">{r}</th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {importPreview.rows.map((r, i) => (
+                                        <tr key={i} className="border-t border-zinc-800" data-testid={`import-preview-row-${i}`}>
+                                            <td className="px-3 py-1.5">{r.name}</td>
+                                            <td className="px-3 py-1.5">{r.email}</td>
+                                            <td className="px-3 py-1.5">{r.job_role}</td>
+                                            <td className={`px-3 py-1.5 ${r.status === 'Rejected' ? 'text-red-400' : ''}`}>{r.status}</td>
+                                            {importPreview.round_columns?.map(rc => {
+                                                const sc = (r.scores || []).find(s => s.round_name === rc);
+                                                return <td key={rc} className="px-3 py-1.5">{sc?.score ?? '-'}</td>;
+                                            })}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div className="px-6 py-4 border-t border-zinc-800 flex justify-end gap-3">
+                            <button onClick={() => setImportPreview(null)} data-testid="import-cancel-btn" className="px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm">Cancel</button>
+                            <button onClick={handleImportConfirm} data-testid="import-confirm-btn" className="px-5 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm font-medium">Confirm & Save</button>
                         </div>
                     </div>
                 </div>

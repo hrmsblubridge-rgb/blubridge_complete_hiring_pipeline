@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, timezone
 from bson import ObjectId
-import hashlib, secrets, re, logging
+import hashlib, secrets, re, logging, uuid
 
 bb_router = APIRouter(prefix="/api/bb")
 # Public router — no auth prefix
@@ -621,31 +621,325 @@ async def update_applicant_score(email: str, data: ApplicantScoreUpdate, request
     return {"success": True}
 
 
-@bb_router.post("/import-scores")
-async def import_scores(request: Request):
-    """Import applicant scores from uploaded CSV file."""
+@bb_router.post("/import-scores/preview")
+async def import_scores_preview(request: Request):
+    """STEP 1 of 2 — Parse uploaded CSV/XLSX and return rows for user preview.
+    Does NOT write to DB. Use POST /import-scores/confirm to commit.
+    Expected columns (in order):
+      Name, Schedule Date, College, Degree, Course, Year of Graduation,
+      Email, Phone, Job Role, Status, <round columns alphabetical...>
+    """
     await _require_auth(request)
-    from fastapi import UploadFile, File
     form = await request.form()
     file = form.get("file")
     if not file:
         raise HTTPException(status_code=400, detail="No file uploaded")
     content = await file.read()
-    import io, csv
+    filename = (getattr(file, "filename", "") or "").lower()
+
+    rows, headers = _parse_score_file(content, filename)
+    fixed = ["Name", "Schedule Date", "College", "Degree", "Course",
+             "Year of Graduation", "Email", "Phone", "Job Role", "Status"]
+    missing = [h for h in fixed if h not in headers]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Invalid file: missing columns {missing}")
+    round_cols = [h for h in headers if h not in fixed]
+
+    parsed = []
+    errors = []
+    for idx, row in enumerate(rows, start=2):  # start=2 because row 1 is header
+        email = str(row.get("Email", "") or "").strip().lower()
+        if not email:
+            errors.append({"row": idx, "error": "Missing Email"})
+            continue
+        scores = []
+        for r in round_cols:
+            v = str(row.get(r, "") or "").strip()
+            if v == "" or v == "-":
+                continue
+            try:
+                scores.append({"round_name": r, "score": float(v)})
+            except (TypeError, ValueError):
+                errors.append({"row": idx, "error": f"Invalid score for {r}: '{v}'"})
+        parsed.append({
+            "name": str(row.get("Name", "") or "").strip(),
+            "schedule_date": str(row.get("Schedule Date", "") or "").strip(),
+            "college": str(row.get("College", "") or "").strip(),
+            "degree": str(row.get("Degree", "") or "").strip(),
+            "course": str(row.get("Course", "") or "").strip(),
+            "year_of_graduation": str(row.get("Year of Graduation", "") or "").strip(),
+            "email": email,
+            "phone": str(row.get("Phone", "") or "").strip(),
+            "job_role": str(row.get("Job Role", "") or "").strip(),
+            "status": str(row.get("Status", "") or "On hold").strip() or "On hold",
+            "scores": scores,
+        })
+
+    return {
+        "rows": parsed,
+        "round_columns": sorted(round_cols),
+        "errors": errors,
+        "total": len(parsed),
+    }
+
+
+@bb_router.post("/import-scores/confirm")
+async def import_scores_confirm(data: dict, request: Request):
+    """STEP 2 of 2 — Commit previewed rows. Tags every record with
+    `isImported:true`, `import_batch_id`, `imported_at` so the 7 PM rejection
+    mailer can target ONLY this batch (never legacy DB records)."""
+    await _require_auth(request)
+    rows = data.get("rows", [])
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(status_code=400, detail="No rows provided")
+
+    batch_id = str(uuid.uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
+    imported = 0
+    for r in rows:
+        email = str(r.get("email", "") or "").strip().lower()
+        if not email:
+            continue
+        scores_in = r.get("scores", []) or []
+        scores = [{"round_name": s.get("round_name"), "score": s.get("score")}
+                  for s in scores_in if s.get("round_name")]
+        await _db.bb_applicant_updates.update_one(
+            {"email": email},
+            {"$set": {
+                "email": email,
+                "status": r.get("status", "On hold"),
+                "scores": scores,
+                "name": r.get("name", ""),
+                "phone": r.get("phone", ""),
+                "job_role": r.get("job_role", ""),
+                "schedule_date": r.get("schedule_date", ""),
+                "isImported": True,
+                "import_batch_id": batch_id,
+                "imported_at": now_iso,
+                "import_rejection_notified": False,
+                "updated_at": now_iso,
+            }},
+            upsert=True,
+        )
+        imported += 1
+    return {"success": True, "imported": imported, "batch_id": batch_id}
+
+
+@bb_router.post("/import-scores")
+async def import_scores_legacy(request: Request):
+    """Legacy single-step import (kept for backward compat).
+    For the new preview→confirm flow, use /import-scores/preview then /import-scores/confirm.
+    """
+    await _require_auth(request)
+    form = await request.form()
+    file = form.get("file")
+    if not file:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+    content = await file.read()
+    filename = (getattr(file, "filename", "") or "").lower()
+    try:
+        rows, headers = _parse_score_file(content, filename)
+    except HTTPException:
+        # Try legacy CSV parse with simple email/status columns
+        import io, csv
+        rdr = csv.DictReader(io.StringIO(content.decode("utf-8", errors="ignore")))
+        imported = 0
+        for row in rdr:
+            email = (row.get("email") or row.get("EMAIL") or "").strip().lower()
+            status = row.get("status") or row.get("STATUS") or "On hold"
+            if email:
+                await _db.bb_applicant_updates.update_one(
+                    {"email": email},
+                    {"$set": {"email": email, "status": status,
+                              "updated_at": datetime.now(timezone.utc).isoformat()}},
+                    upsert=True,
+                )
+                imported += 1
+        return {"success": True, "imported": imported}
+    # Delegate to confirm path
+    fixed = ["Name", "Schedule Date", "College", "Degree", "Course",
+             "Year of Graduation", "Email", "Phone", "Job Role", "Status"]
+    round_cols = [h for h in headers if h not in fixed]
+    parsed_rows = []
+    for row in rows:
+        email = str(row.get("Email", "") or "").strip().lower()
+        if not email:
+            continue
+        scores = []
+        for r in round_cols:
+            v = str(row.get(r, "") or "").strip()
+            if v in ("", "-"):
+                continue
+            try:
+                scores.append({"round_name": r, "score": float(v)})
+            except (TypeError, ValueError):
+                pass
+        parsed_rows.append({
+            "name": str(row.get("Name", "") or "").strip(),
+            "schedule_date": str(row.get("Schedule Date", "") or "").strip(),
+            "email": email,
+            "phone": str(row.get("Phone", "") or "").strip(),
+            "job_role": str(row.get("Job Role", "") or "").strip(),
+            "status": str(row.get("Status", "") or "On hold").strip() or "On hold",
+            "scores": scores,
+        })
+    return await import_scores_confirm({"rows": parsed_rows}, request)
+
+
+@bb_router.get("/export-scores")
+async def export_scores(
+    request: Request,
+    format: str = Query("xlsx", regex="^(xlsx|csv)$"),
+    startDate: str = Query(None),
+    endDate: str = Query(None),
+):
+    """Export Update Scores list as CSV/XLSX. Same column layout as Import.
+    Columns: Name, Schedule Date, College, Degree, Course, Year of Graduation,
+             Email, Phone, Job Role, Status, <round columns alphabetical>.
+    """
+    await _require_auth(request)
+
+    # Same source as /attended-for-scores (HR pipeline_data)
+    match = {"isTest": {"$ne": True},
+             "otp_verified": {"$nin": [None, ""], "$exists": True},
+             "schedule_date": {"$nin": [None, ""], "$exists": True}}
+    if startDate:
+        match["schedule_date"] = {**match.get("schedule_date", {}), "$gte": startDate}
+    if endDate:
+        match["schedule_date"] = {**match.get("schedule_date", {}), "$lte": endDate}
+
+    docs = await _db.pipeline_data.find(match, {
+        "_id": 0, "email": 1, "phone": 1, "name": 1,
+        "schedule_date": 1, "job_role": 1, "job_title": 1,
+        "result_status": 1, "college": 1, "degree": 1, "course": 1,
+        "year_of_graduation": 1,
+    }).to_list(None)
+
+    # Override with bb_applicant_updates (status + scores)
+    update_emails = [(d.get("email") or "").strip().lower() for d in docs if d.get("email")]
+    updates = await _db.bb_applicant_updates.find(
+        {"email": {"$in": update_emails}}, {"_id": 0}
+    ).to_list(None) if update_emails else []
+    update_map = {u["email"]: u for u in updates if u.get("email")}
+
+    # Page-scoped scores from score_sheet
+    score_records = await _db.score_sheet.find(
+        {"email": {"$in": update_emails}} if update_emails else {"_id": None}, {"_id": 0}
+    ).to_list(None) if update_emails else []
+    score_by_email = {}
+    for sr in score_records:
+        se = (sr.get("email") or "").strip().lower()
+        if se:
+            score_by_email.setdefault(se, []).append(sr)
+
+    # Discover all round columns present in this dataset; sort alphabetical
+    all_rounds = set()
+    for u in updates:
+        for s in (u.get("scores") or []):
+            if s.get("round_name"):
+                all_rounds.add(str(s["round_name"]).strip())
+    for sr in score_records:
+        rn = (sr.get("round_name") or "").strip()
+        if rn:
+            all_rounds.add(rn)
+    round_cols = sorted(all_rounds)
+
+    fixed = ["Name", "Schedule Date", "College", "Degree", "Course",
+             "Year of Graduation", "Email", "Phone", "Job Role", "Status"]
+    headers = fixed + round_cols
+
+    rows_out = []
+    for d in docs:
+        email = (d.get("email") or "").strip().lower()
+        upd = update_map.get(email, {})
+        scores_map = {}
+        # Priority: bb_applicant_updates.scores > score_sheet
+        if upd.get("scores"):
+            for s in upd["scores"]:
+                if s.get("round_name"):
+                    scores_map[str(s["round_name"]).strip()] = s.get("score")
+        else:
+            for sr in score_by_email.get(email, []):
+                rn = (sr.get("round_name") or "").strip()
+                if rn:
+                    scores_map[rn] = sr.get("score")
+
+        row = {
+            "Name": d.get("name") or "",
+            "Schedule Date": d.get("schedule_date") or "",
+            "College": d.get("college") or "",
+            "Degree": d.get("degree") or "",
+            "Course": d.get("course") or "",
+            "Year of Graduation": d.get("year_of_graduation") or "",
+            "Email": email,
+            "Phone": d.get("phone") or "",
+            "Job Role": d.get("job_role") or d.get("job_title") or "",
+            "Status": upd.get("status") or d.get("result_status") or "On hold",
+        }
+        for r in round_cols:
+            v = scores_map.get(r)
+            row[r] = "" if v is None else v
+        rows_out.append(row)
+
+    from fastapi.responses import StreamingResponse
+    import io
+    if format == "csv":
+        import csv
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=headers)
+        writer.writeheader()
+        for r in rows_out:
+            writer.writerow(r)
+        data = buf.getvalue().encode("utf-8")
+        return StreamingResponse(
+            io.BytesIO(data),
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="applicant_scores.csv"'},
+        )
+    else:  # xlsx
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Scores"
+        ws.append(headers)
+        for r in rows_out:
+            ws.append([r.get(h, "") for h in headers])
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return StreamingResponse(
+            buf,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": 'attachment; filename="applicant_scores.xlsx"'},
+        )
+
+
+def _parse_score_file(content: bytes, filename: str) -> tuple:
+    """Parse uploaded CSV/XLSX. Returns (rows[list[dict]], headers[list[str]]).
+    Used by both /import-scores/preview and the legacy /import-scores."""
+    import io
+    if filename.endswith(".xlsx") or filename.endswith(".xls"):
+        from openpyxl import load_workbook
+        wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        ws = wb.active
+        all_rows = list(ws.iter_rows(values_only=True))
+        if not all_rows:
+            raise HTTPException(status_code=400, detail="Empty file")
+        headers = [str(h or "").strip() for h in all_rows[0]]
+        rows = [dict(zip(headers, [
+            "" if v is None else (v.strftime("%Y-%m-%d") if hasattr(v, "strftime") else str(v))
+            for v in r
+        ])) for r in all_rows[1:] if any(v is not None and str(v).strip() != "" for v in r)]
+        return rows, headers
+    # CSV / fallback
+    import csv
     text = content.decode("utf-8", errors="ignore")
     reader = csv.DictReader(io.StringIO(text))
-    imported = 0
-    for row in reader:
-        email = (row.get("email") or row.get("EMAIL") or "").strip().lower()
-        status = row.get("status") or row.get("STATUS") or "On hold"
-        if email:
-            await _db.bb_applicant_updates.update_one(
-                {"email": email},
-                {"$set": {"email": email, "status": status, "updated_at": datetime.now(timezone.utc).isoformat()}},
-                upsert=True
-            )
-            imported += 1
-    return {"success": True, "imported": imported}
+    headers = list(reader.fieldnames or [])
+    rows = list(reader)
+    if not headers:
+        raise HTTPException(status_code=400, detail="Empty or invalid CSV")
+    return rows, headers
 
 
 # ============ HOLIDAYS ============

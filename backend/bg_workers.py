@@ -47,6 +47,7 @@ async def start_all_workers():
     asyncio.create_task(_worker_24h_reminder())
     asyncio.create_task(_worker_otp_expiry())
     asyncio.create_task(_worker_missed_interview())
+    asyncio.create_task(_worker_import_rejection_mailer())
 
 
 # ============ WORKER A: OTP Generator (every 30s) ============
@@ -389,3 +390,71 @@ async def _worker_missed_interview():
             _logger.error(f"[Missed Interview Worker] Error: {e}")
 
         await asyncio.sleep(120)  # 2 minutes
+
+
+async def _worker_import_rejection_mailer():
+    """[NEW Iter33] Daily 7 PM rejection mailer for IMPORTED applicants ONLY.
+
+    Scope:
+      - Sends Email + WhatsApp to applicants with `status='Rejected'`
+      - Restricted to docs in `bb_applicant_updates` where `isImported=True`
+        AND `import_rejection_notified != True`
+      - Never touches legacy DB records (no `isImported` flag = pre-import data)
+
+    Trigger: between 19:00 and 19:30 UTC each day.
+    Idempotent: marks `import_rejection_notified=True` after a successful send.
+    """
+    _logger.info("Import-rejection mailer worker started")
+    while _running:
+        try:
+            now = datetime.now(timezone.utc)
+            # Run only between 19:00 and 19:30 UTC; sleep otherwise
+            if not (now.hour == 19 and now.minute < 30):
+                # Sleep until 19:00
+                target = now.replace(hour=19, minute=0, second=0, microsecond=0)
+                if now >= target:
+                    target = target + timedelta(days=1)
+                wait_s = max(60, int((target - now).total_seconds()))
+                # Cap to 1 hour to not block the loop forever; supervisor restart safety
+                await asyncio.sleep(min(wait_s, 3600))
+                continue
+
+            cursor = _db.bb_applicant_updates.find({
+                "isImported": True,
+                "status": "Rejected",
+                "import_rejection_notified": {"$ne": True},
+            })
+
+            sent = 0
+            async for doc in cursor:
+                email = (doc.get("email") or "").strip()
+                phone = (doc.get("phone") or "").strip()
+                name = doc.get("name") or "Candidate"
+                job_role = doc.get("job_role") or "the role"
+                if not email and not phone:
+                    continue
+
+                try:
+                    from messaging import notify_rejected
+                    ok = await notify_rejected(name, phone, email)
+                    await _db.bb_applicant_updates.update_one(
+                        {"_id": doc["_id"]},
+                        {"$set": {
+                            "import_rejection_notified": True,
+                            "import_rejection_notified_at": now.isoformat(),
+                            "import_rejection_send_ok": bool(ok),
+                        }},
+                    )
+                    sent += 1
+                    _logger.info(f"[ImportReject 7PM] Sent rejection to {email} (batch={doc.get('import_batch_id')})")
+                except Exception as send_err:
+                    _logger.error(f"[ImportReject 7PM] Send failed for {email}: {send_err}")
+
+            if sent:
+                _logger.info(f"[ImportReject 7PM] Batch complete — {sent} rejection notifications sent")
+
+        except Exception as e:
+            _logger.error(f"[Import Rejection Worker] Error: {e}")
+
+        # Sleep 5 min between scans within the 19:00–19:30 window
+        await asyncio.sleep(300)
