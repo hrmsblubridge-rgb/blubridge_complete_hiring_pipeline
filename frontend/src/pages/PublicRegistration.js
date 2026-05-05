@@ -20,10 +20,18 @@ export default function PublicRegistration() {
     const [f, setF] = useState({ full_name:'', email:'', phone:'', age:'', current_location_state:'', preferred_location_city:'', year_of_graduation:'', degree:'', course:'', college:'', location_change:null, attend_in_person:null });
 
     useEffect(() => {
+        // eslint-disable-next-line no-console
+        console.log('[PublicRegistration] fetching form', { API, formId });
         axios.get(`${API}/api/pub/form/${formId}`).then(r => {
+            // eslint-disable-next-line no-console
+            console.log('[PublicRegistration] form loaded', r.data);
             setForm(r.data);
             setStep(r.data.job_description_attached && r.data.job_opening ? 'jd' : 'form');
-        }).catch(() => setError('Form not found')).finally(() => setLoading(false));
+        }).catch((err) => {
+            // eslint-disable-next-line no-console
+            console.error('[PublicRegistration] fetch failed', err);
+            setError('Form not found');
+        }).finally(() => setLoading(false));
     }, [formId]);
 
     const showLocationQuestions = () => {
