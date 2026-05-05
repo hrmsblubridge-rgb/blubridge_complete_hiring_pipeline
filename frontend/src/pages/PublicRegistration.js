@@ -17,7 +17,7 @@ export default function PublicRegistration() {
     const [step, setStep] = useState('jd');
     const [submitting, setSubmitting] = useState(false);
     const [result, setResult] = useState(null);
-    const [f, setF] = useState({ full_name:'', email:'', phone:'', age:'', current_location_state:'', preferred_location_city:'', year_of_graduation:'', degree:'', course:'', college:'', location_change:null, attend_in_person:null, q1:'', q2:'', q3:'', q4:'' });
+    const [f, setF] = useState({ full_name:'', email:'', phone:'', age:'', current_location_state:'', preferred_location_city:'', year_of_graduation:'', degree:'', course:'', college:'', location_change:null, attend_in_person:null });
 
     useEffect(() => {
         axios.get(`${API}/api/pub/form/${formId}`).then(r => {
@@ -157,8 +157,6 @@ export default function PublicRegistration() {
     }
 
     // Main Registration Form — exact clone of blubridge.ai reference
-    const isAIML = form?.job_role?.toLowerCase().includes('ai') && form?.job_role?.toLowerCase().includes('ml');
-
     return (
         <div className="min-h-screen bg-[#f0ebe3] flex flex-col" data-testid="registration-form-page">
             <header className="bg-[#f0ebe3] border-b border-gray-300 py-4 px-6 flex justify-center">
@@ -269,32 +267,6 @@ export default function PublicRegistration() {
                                     </select>
                                 </div>
                             </div>
-
-                            {/* Questionnaire section (for AI&ML role - matches reference exactly) */}
-                            {isAIML && (
-                                <div className="border-t border-gray-200 pt-6 mt-6 space-y-5">
-                                    <h3 className="text-lg font-bold text-gray-900">We'd like to know you better</h3>
-                                    <p className="text-sm text-gray-700 bg-yellow-50 border border-yellow-200 rounded p-3"><b>Note:</b> This role is strictly for candidates with strong C/C++ OR Java programming skills. Python-only ML profiles will not be considered.</p>
-                                    <div className="space-y-5">
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">1. What is your proficiency level in C/C++?</label>
-                                            <div className="flex flex-col gap-2 pl-1">{['Beginner','Intermediate','Advanced'].map(v => <label key={v} className="flex items-center gap-2 text-sm cursor-pointer"><input type="radio" name="q1" checked={f.q1===v} onChange={() => setF(p => ({...p, q1:v}))} className="accent-blue-600 w-4 h-4" />{v}</label>)}</div>
-                                        </div>
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">2. Have you worked with core concepts such as pointers/memory management in C/C++ and OOP/collections/error handling in Java?</label>
-                                            <div className="flex gap-6 pl-1">{['Yes','No'].map(v => <label key={v} className="flex items-center gap-2 text-sm cursor-pointer"><input type="radio" name="q2" checked={f.q2===v} onChange={() => setF(p => ({...p, q2:v}))} className="accent-blue-600 w-4 h-4" />{v}</label>)}</div>
-                                        </div>
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">3. Have you built any projects in Java or C/C++ (college, personal, or internship)?</label>
-                                            <div className="flex gap-6 pl-1">{['Yes','No'].map(v => <label key={v} className="flex items-center gap-2 text-sm cursor-pointer"><input type="radio" name="q3" checked={f.q3===v} onChange={() => setF(p => ({...p, q3:v}))} className="accent-blue-600 w-4 h-4" />{v}</label>)}</div>
-                                        </div>
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 mb-2">4. Are you comfortable taking an implementation-based technical test in Java or C/C++?</label>
-                                            <div className="flex gap-6 pl-1">{['Yes','No'].map(v => <label key={v} className="flex items-center gap-2 text-sm cursor-pointer"><input type="radio" name="q4" checked={f.q4===v} onChange={() => setF(p => ({...p, q4:v}))} className="accent-blue-600 w-4 h-4" />{v}</label>)}</div>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
 
                             {/* Declaration */}
                             <div className="mt-6 mb-6">
