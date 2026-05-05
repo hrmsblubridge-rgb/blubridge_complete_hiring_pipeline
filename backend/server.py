@@ -2079,6 +2079,11 @@ for _bt in BULK_TYPES_LIST:
 # ============ DB-DRIVEN BACKGROUND QUEUE WORKER ============
 
 _worker_running = False
+# Single-flight guard for deferred reprocess_matching. Prevents overlapping
+# `registered_candidates.drop()` + insert_many races when multiple drain
+# events happen in quick succession.
+_reprocess_lock = asyncio.Lock()
+_reprocess_pending = False
 
 
 async def _bg_queue_worker():
@@ -2127,15 +2132,28 @@ async def _bg_queue_worker():
                     # claim loop and can pick up new uploads while reprocess runs).
                     if drained_pending_match:
                         async def _deferred_reprocess():
-                            try:
-                                logger.info("Queue drained — deferred reprocess_matching() running in background")
-                                t0 = datetime.now(timezone.utc)
-                                await reprocess_matching()
-                                await _sync_job_titles_master()
-                                elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
-                                logger.info(f"Deferred reprocess_matching() completed in {elapsed:.1f}s")
-                            except Exception as e:
-                                logger.exception(f"Deferred reprocess_matching failed: {e}")
+                            global _reprocess_pending
+                            # Single-flight: if a reprocess is already running,
+                            # just request a re-run after it finishes.
+                            if _reprocess_lock.locked():
+                                _reprocess_pending = True
+                                logger.info("Reprocess already running — coalesced into single follow-up run")
+                                return
+                            async with _reprocess_lock:
+                                while True:
+                                    try:
+                                        logger.info("Queue drained — deferred reprocess_matching() running in background")
+                                        t0 = datetime.now(timezone.utc)
+                                        await reprocess_matching()
+                                        await _sync_job_titles_master()
+                                        elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
+                                        logger.info(f"Deferred reprocess_matching() completed in {elapsed:.1f}s")
+                                    except Exception as e:
+                                        logger.exception(f"Deferred reprocess_matching failed: {e}")
+                                    if _reprocess_pending:
+                                        _reprocess_pending = False
+                                        continue
+                                    break
                         asyncio.create_task(_deferred_reprocess())
                         drained_pending_match = False
                     await asyncio.sleep(3)
