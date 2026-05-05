@@ -37,6 +37,7 @@ def init_bb(database, auth_fn, college_lookup_fn, classify_fn):
 async def backfill_form_slugs():
     """Backfill `slug` for any hiring form missing it, and ensure unique index.
     Safe to call repeatedly. Should be invoked at app startup.
+    Also ensures the unique compound index on bb_college_schedules.
     """
     if _db is None:
         return
@@ -53,6 +54,17 @@ async def backfill_form_slugs():
             await _db.bb_hiring_forms.create_index("slug", unique=True, sparse=True)
         except Exception as e:
             _logger.warning(f"slug index creation skipped: {e}")
+        # College schedules: compound index on (college_name, job_role) — collation
+        # gives case-insensitive uniqueness so HR can't sneak in "IIT" + "Iit".
+        try:
+            await _db.bb_college_schedules.create_index(
+                [("college_name", 1), ("job_role", 1)],
+                name="college_role_unique",
+                unique=True,
+                collation={"locale": "en", "strength": 2},
+            )
+        except Exception as e:
+            _logger.warning(f"college_schedules index creation skipped: {e}")
     except Exception as e:
         _logger.error(f"backfill_form_slugs failed: {e}")
 
@@ -500,6 +512,262 @@ async def restore_round(round_id: str, request: Request):
          "$unset": {"deleted_at": ""}},
     )
     return {"success": True}
+
+
+# ============ COLLEGE SCHEDULES (HR-Configured Drives) ============
+
+class CollegeScheduleBody(BaseModel):
+    college_name: str
+    job_role: str
+    schedule_date: str   # ISO YYYY-MM-DD
+    schedule_time: str   # 24h HH:MM:SS or HH:MM
+    notes: Optional[str] = ""
+
+
+class CollegeScheduleUpdate(BaseModel):
+    college_name: Optional[str] = None
+    job_role: Optional[str] = None
+    schedule_date: Optional[str] = None
+    schedule_time: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@bb_router.get("/college-schedules")
+async def list_college_schedules(request: Request, includeInactive: bool = Query(False), college: Optional[str] = Query(None)):
+    """List HR-configured college schedules. Active-only by default."""
+    await _require_auth(request)
+    q = {} if includeInactive else {"active": {"$ne": False}}
+    if college:
+        q["college_name"] = {"$regex": f"^{re.escape(college.strip())}$", "$options": "i"}
+    docs = await _db.bb_college_schedules.find(q).sort([("college_name", 1), ("schedule_date", 1)]).to_list(None)
+    for d in docs:
+        d["id"] = str(d.pop("_id"))
+        if "active" not in d:
+            d["active"] = True
+    return {"schedules": docs}
+
+
+@bb_router.post("/college-schedules")
+async def create_college_schedule(data: CollegeScheduleBody, request: Request):
+    """Create a college+role+date+time mapping. Compound unique on (college, role)."""
+    await _require_auth(request)
+    college = (data.college_name or "").strip()
+    role = (data.job_role or "").strip()
+    date = (data.schedule_date or "").strip()
+    time = (data.schedule_time or "").strip()
+    if not (college and role and date and time):
+        raise HTTPException(status_code=400, detail="college_name, job_role, schedule_date and schedule_time are required")
+    # Uniqueness on (college, role) — case-insensitive on both
+    dup = await _db.bb_college_schedules.find_one({
+        "college_name": {"$regex": f"^{re.escape(college)}$", "$options": "i"},
+        "job_role": {"$regex": f"^{re.escape(role)}$", "$options": "i"},
+    }, {"_id": 1, "active": 1})
+    if dup:
+        if dup.get("active") is False:
+            raise HTTPException(status_code=409, detail="A schedule for this college+role already exists but is disabled. Edit and restore it instead.")
+        raise HTTPException(status_code=409, detail="A schedule for this college+role already exists. Edit it instead of creating a duplicate.")
+    doc = {
+        "college_name": college,
+        "job_role": role,
+        "schedule_date": date,
+        "schedule_time": time if len(time.split(":")) == 3 else (time + ":00"),
+        "notes": (data.notes or "").strip(),
+        "active": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    res = await _db.bb_college_schedules.insert_one(doc)
+    doc["id"] = str(res.inserted_id); doc.pop("_id", None)
+    return {"success": True, "schedule": doc}
+
+
+@bb_router.put("/college-schedules/{sched_id}")
+async def update_college_schedule(sched_id: str, data: CollegeScheduleUpdate, request: Request):
+    await _require_auth(request)
+    oid = _oid(sched_id)
+    cur = await _db.bb_college_schedules.find_one({"_id": oid})
+    if not cur:
+        raise HTTPException(status_code=404, detail="Not found")
+    updates = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    new_college = (data.college_name or cur.get("college_name") or "").strip()
+    new_role = (data.job_role or cur.get("job_role") or "").strip()
+    if data.college_name is not None:
+        updates["college_name"] = new_college
+    if data.job_role is not None:
+        updates["job_role"] = new_role
+    if data.schedule_date is not None:
+        updates["schedule_date"] = data.schedule_date.strip()
+    if data.schedule_time is not None:
+        t = data.schedule_time.strip()
+        updates["schedule_time"] = t if len(t.split(":")) == 3 else (t + ":00")
+    if data.notes is not None:
+        updates["notes"] = data.notes.strip()
+    # Re-check uniqueness if (college, role) changed
+    if data.college_name is not None or data.job_role is not None:
+        dup = await _db.bb_college_schedules.find_one({
+            "_id": {"$ne": oid},
+            "college_name": {"$regex": f"^{re.escape(new_college)}$", "$options": "i"},
+            "job_role": {"$regex": f"^{re.escape(new_role)}$", "$options": "i"},
+        }, {"_id": 1})
+        if dup:
+            raise HTTPException(status_code=409, detail="Another schedule with this college+role already exists.")
+    await _db.bb_college_schedules.update_one({"_id": oid}, {"$set": updates})
+    return {"success": True}
+
+
+@bb_router.delete("/college-schedules/{sched_id}")
+async def delete_college_schedule(sched_id: str, request: Request, hard: bool = Query(False)):
+    """Logical delete by default (sets active=false)."""
+    await _require_auth(request)
+    oid = _oid(sched_id)
+    cur = await _db.bb_college_schedules.find_one({"_id": oid})
+    if not cur:
+        raise HTTPException(status_code=404, detail="Not found")
+    if hard:
+        await _db.bb_college_schedules.delete_one({"_id": oid})
+        return {"success": True, "deleted": "hard"}
+    await _db.bb_college_schedules.update_one(
+        {"_id": oid},
+        {"$set": {"active": False, "deleted_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"success": True, "deleted": "logical"}
+
+
+@bb_router.post("/college-schedules/{sched_id}/restore")
+async def restore_college_schedule(sched_id: str, request: Request):
+    await _require_auth(request)
+    oid = _oid(sched_id)
+    cur = await _db.bb_college_schedules.find_one({"_id": oid})
+    if not cur:
+        raise HTTPException(status_code=404, detail="Not found")
+    # Block restore if collision with another active entry
+    dup = await _db.bb_college_schedules.find_one({
+        "_id": {"$ne": oid}, "active": {"$ne": False},
+        "college_name": {"$regex": f"^{re.escape(cur.get('college_name',''))}$", "$options": "i"},
+        "job_role": {"$regex": f"^{re.escape(cur.get('job_role',''))}$", "$options": "i"},
+    }, {"_id": 1})
+    if dup:
+        raise HTTPException(status_code=409, detail="Cannot restore: another active schedule with this college+role exists.")
+    await _db.bb_college_schedules.update_one(
+        {"_id": oid},
+        {"$set": {"active": True, "restored_at": datetime.now(timezone.utc).isoformat()},
+         "$unset": {"deleted_at": ""}},
+    )
+    return {"success": True}
+
+
+# ---- Public (candidate-side) endpoints — no auth required ----
+
+@pub_router.get("/college-form/colleges")
+async def pub_list_colleges():
+    """Distinct active colleges with at least one configured schedule."""
+    cols = await _db.bb_college_schedules.distinct("college_name", {"active": {"$ne": False}})
+    return {"colleges": sorted([c for c in cols if c])}
+
+
+@pub_router.get("/college-form/roles")
+async def pub_list_roles_for_college(college: str = Query(...)):
+    """Active roles available for the given college."""
+    roles = await _db.bb_college_schedules.distinct(
+        "job_role",
+        {"active": {"$ne": False}, "college_name": {"$regex": f"^{re.escape(college.strip())}$", "$options": "i"}},
+    )
+    return {"roles": sorted([r for r in roles if r])}
+
+
+class CollegeRegistrationBody(BaseModel):
+    full_name: str
+    email: str
+    phone: str
+    age: Optional[int] = None
+    gender: Optional[str] = ""
+    college: str          # college_name selected by candidate
+    job_role: str         # role selected by candidate
+    degree: Optional[str] = ""
+    course: Optional[str] = ""
+    year_of_graduation: Optional[int] = None
+    current_location_state: Optional[str] = ""
+    preferred_location_city: Optional[str] = ""
+
+
+@pub_router.post("/college-form/register")
+async def register_college_applicant(data: CollegeRegistrationBody):
+    """Public college-form registration. Auto-attaches HR-configured schedule
+    based on (college, role). Stores into the existing pipeline_data table.
+    422 if no schedule is configured for the combo.
+    """
+    college = (data.college or "").strip()
+    role = (data.job_role or "").strip()
+    if not (college and role):
+        raise HTTPException(status_code=400, detail="College and job role are required")
+    if not (data.full_name and data.email and data.phone):
+        raise HTTPException(status_code=400, detail="Name, email and phone are required")
+
+    sched = await _db.bb_college_schedules.find_one({
+        "active": {"$ne": False},
+        "college_name": {"$regex": f"^{re.escape(college)}$", "$options": "i"},
+        "job_role": {"$regex": f"^{re.escape(role)}$", "$options": "i"},
+    })
+    if not sched:
+        raise HTTPException(
+            status_code=422,
+            detail=f"No interview schedule has been configured for {college} – {role}. Please contact HR.",
+        )
+
+    schedule_date = sched.get("schedule_date", "")
+    schedule_time = sched.get("schedule_time", "")
+
+    # Phone normalize (mirror existing register_applicant logic loosely)
+    phone_normalized = "".join(c for c in (data.phone or "") if c.isdigit())[-10:]
+
+    # Classify college (NIRF / Non-NIRF) using existing helper
+    rank_lookup = await _build_college_rank_lookup_fn()
+    cc = _classify_college_fn({"ug_university": college, "pg_university": "", "college": college}, rank_lookup)
+    college_type = cc["college_status"] if cc["college_status"].startswith("NIRF - #") else "Non NIRF"
+    submitted_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    pipeline_doc_set = {
+        "name": data.full_name.strip(),
+        "email": data.email.strip().lower(),
+        "phone": phone_normalized,
+        "age": data.age,
+        "gender": (data.gender or "").strip(),
+        "college": college,
+        "college_type": college_type,
+        "degree": (data.degree or "").strip(),
+        "course": (data.course or "").strip(),
+        "location": (data.preferred_location_city or "").strip(),
+        "job_role": role,
+        "job_title": role,
+        "email_type": "shortlist",  # college candidates are pre-shortlisted by HR
+        "year_of_graduation": str(data.year_of_graduation) if data.year_of_graduation else "",
+        "submitted_at": submitted_at,
+        "schedule_date": schedule_date,
+        "schedule_time": schedule_time,
+        "otp_verified": "",
+        "result_status": "",
+        "source": "college_form",
+        # Persisted derived fields so HR pages immediately reflect this record
+        "_college_status": cc["college_status"],
+        "_nirf_category": "NIRF" if college_type.startswith("NIRF - #") else "Non NIRF",
+        "_college_resolved": cc.get("college") or college,
+        "_match_confidence": cc.get("match_confidence") or None,
+        "_normalized_job_role": role,
+    }
+    await _db.pipeline_data.update_one(
+        {"email": data.email.strip().lower()},
+        {"$set": pipeline_doc_set, "$setOnInsert": {"last_update": submitted_at}},
+        upsert=True,
+    )
+
+    _logger.info(f"[CollegeForm] registered email={data.email} college={college} role={role} → {schedule_date} {schedule_time}")
+    return {
+        "success": True,
+        "message": f"Registration successful! Your interview is scheduled for {schedule_date} at {schedule_time}.",
+        "schedule_date": schedule_date,
+        "schedule_time": schedule_time,
+        "college": college,
+        "job_role": role,
+    }
 
 
 # ============ JOB OPENINGS ============

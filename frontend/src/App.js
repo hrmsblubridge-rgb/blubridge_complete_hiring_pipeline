@@ -18,6 +18,8 @@ import SetHolidays from "./pages/SetHolidays";
 import VerifyOTP from "./pages/VerifyOTP";
 import PublicRegistration from "./pages/PublicRegistration";
 import InterviewSchedule from "./pages/InterviewSchedule";
+import CollegeSchedules from "./pages/CollegeSchedules";
+import CollegeRegistration from "./pages/CollegeRegistration";
 import { Toaster } from "./components/ui/sonner";
 
 function App() {
@@ -40,6 +42,8 @@ function App() {
                         <Route path="/job-openings" element={<ProtectedRoute><JobOpenings /></ProtectedRoute>} />
                         <Route path="/set-holidays" element={<ProtectedRoute><SetHolidays /></ProtectedRoute>} />
                         <Route path="/verify-otp" element={<ProtectedRoute><VerifyOTP /></ProtectedRoute>} />
+                        <Route path="/college-schedules" element={<ProtectedRoute><CollegeSchedules /></ProtectedRoute>} />
+                        <Route path="/register/college" element={<CollegeRegistration />} />
                         <Route path="/register/:formId" element={<PublicRegistration />} />
                         <Route path="/schedule-interview/:token" element={<InterviewSchedule />} />
                         <Route path="/" element={<Navigate to="/home" replace />} />
