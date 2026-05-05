@@ -25,6 +25,8 @@ export default function HiringForms() {
     const [jdAttached, setJdAttached] = useState(false);
     const [jdOpeningId, setJdOpeningId] = useState('');
     const [jobOpenings, setJobOpenings] = useState([]);
+    const [showInstructionPage, setShowInstructionPage] = useState(false);
+    const [instructionContent, setInstructionContent] = useState('');
 
     const fetchAll = useCallback(async () => {
         setLoading(true);
@@ -63,6 +65,7 @@ export default function HiringForms() {
         setEditFormId(null); setFormName(''); setFormTypeId(''); setFormJobRole('');
         setCond({ age_min: '', age_max: '', grad_year_min: '', grad_year_max: '', locations: [], location_change: 'NA', attend_in_person: 'NA', college_limit: 'Both' });
         setLocInput(''); setJdAttached(false); setJdOpeningId('');
+        setShowInstructionPage(false); setInstructionContent('');
     };
     const openAddForm = () => { resetFormModal(); setShowFormModal(true); };
     const openEditForm = (f) => {
@@ -71,6 +74,7 @@ export default function HiringForms() {
         setCond({ age_min: c.age_min ?? '', age_max: c.age_max ?? '', grad_year_min: c.grad_year_min ?? '', grad_year_max: c.grad_year_max ?? '',
             locations: c.locations || [], location_change: c.location_change || 'NA', attend_in_person: c.attend_in_person || 'NA', college_limit: c.college_limit || 'Both' });
         setLocInput(''); setJdAttached(f.job_description_attached || false); setJdOpeningId(f.job_opening_id || '');
+        setShowInstructionPage(f.show_instruction_page || false); setInstructionContent(f.instruction_content || '');
         setShowFormModal(true);
     };
     const addLocation = () => { const v = locInput.trim(); if (v && !cond.locations.includes(v)) setCond(p => ({ ...p, locations: [...p.locations, v] })); setLocInput(''); };
@@ -84,7 +88,7 @@ export default function HiringForms() {
             locations: cond.locations, location_change: cond.location_change, attend_in_person: cond.attend_in_person, college_limit: cond.college_limit,
         };
         try {
-            const body = { name: formName.trim(), form_type_id: formTypeId, job_role: formJobRole.trim(), conditions, job_description_attached: jdAttached, job_opening_id: jdAttached ? jdOpeningId : null };
+            const body = { name: formName.trim(), form_type_id: formTypeId, job_role: formJobRole.trim(), conditions, job_description_attached: jdAttached, job_opening_id: jdAttached ? jdOpeningId : null, show_instruction_page: showInstructionPage, instruction_content: showInstructionPage ? instructionContent : '' };
             if (editFormId) await axios.put(`${API}/api/bb/hiring-forms/${editFormId}`, body, { withCredentials: true });
             else await axios.post(`${API}/api/bb/hiring-forms`, body, { withCredentials: true });
             toast.success(editFormId ? 'Updated' : 'Created'); setShowFormModal(false); fetchAll();
@@ -242,6 +246,31 @@ export default function HiringForms() {
                                         <option value="">Select job opening</option>
                                         {jobOpenings.map(o => <option key={o.id} value={o.id}>{o.title}</option>)}
                                     </select>
+                                </div>
+                            )}
+                        </div>
+                        {/* Show Instruction Page */}
+                        <div className="border-t border-zinc-800 pt-4 space-y-3" data-testid="instruction-page-section">
+                            <h3 className="text-sm font-medium text-zinc-400">Show Instruction Page?</h3>
+                            <div className="flex gap-4">
+                                {[true, false].map(v => (
+                                    <label key={String(v)} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                                        <input type="radio" checked={showInstructionPage === v} onChange={() => setShowInstructionPage(v)} className="accent-emerald-500" data-testid={`instruction-page-radio-${v ? 'yes' : 'no'}`} />
+                                        {v ? 'Yes' : 'No'}
+                                    </label>
+                                ))}
+                            </div>
+                            {showInstructionPage && (
+                                <div className="space-y-1">
+                                    <label className="text-xs text-zinc-500">Instruction Content (HTML allowed)</label>
+                                    <textarea
+                                        value={instructionContent}
+                                        onChange={e => setInstructionContent(e.target.value)}
+                                        rows={6}
+                                        placeholder="Enter the instructions candidates will see after submitting the form. You can use basic HTML (e.g., <h2>, <p>, <ul>, <li>, <strong>, <a>)."
+                                        className="w-full bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500 font-mono"
+                                        data-testid="instruction-content-textarea"
+                                    />
                                 </div>
                             )}
                         </div>

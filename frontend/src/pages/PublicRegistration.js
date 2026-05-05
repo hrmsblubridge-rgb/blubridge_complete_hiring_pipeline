@@ -50,7 +50,9 @@ export default function PublicRegistration() {
             // For AI/ML role we still show the "What You Need to Know" interstitial,
             // then the result page. For all other forms go straight to result.
             const isShortlisted = r.data?.status === 'SHORTLISTED' || r.data?.is_shortlisted;
-            if (isShortlisted && form?.job_role?.toLowerCase().includes('ai') && form?.job_role?.toLowerCase().includes('ml')) {
+            if (form?.show_instruction_page && (form.instruction_content || '').trim()) {
+                setStep('instructions');
+            } else if (isShortlisted && form?.job_role?.toLowerCase().includes('ai') && form?.job_role?.toLowerCase().includes('ml')) {
                 setStep('aiml');
             } else {
                 setStep('result');
@@ -92,6 +94,44 @@ export default function PublicRegistration() {
                     </div>
                 </div>
                 <footer className="py-4 text-center text-sm text-gray-500">Copyright 2026 &copy; <b>Blubridge.com</b></footer>
+            </div>
+        );
+    }
+
+    // Custom Instruction Page (admin-controlled per form)
+    if (step === 'instructions') {
+        const isShortlisted = result?.status === 'SHORTLISTED' || result?.is_shortlisted;
+        const goNext = () => {
+            if (isShortlisted && form?.job_role?.toLowerCase().includes('ai') && form?.job_role?.toLowerCase().includes('ml')) {
+                setStep('aiml');
+            } else {
+                setStep('result');
+            }
+        };
+        return (
+            <div className="min-h-screen bg-[#f3f1e9] flex flex-col" data-testid="instruction-page">
+                <header className="bg-[#efede5] border-b border-gray-300 py-4 px-6 flex justify-center">
+                    <img src="/blubridge-logo.webp" alt="Blubridge" className="" />
+                </header>
+                <div className="flex-1 max-w-3xl w-full mx-auto px-6 py-10">
+                    <div className="bg-[#fffdf7] rounded-xl shadow-sm p-8 md:p-12 text-[#1a1a1a]">
+                        <h1 className="text-2xl md:text-3xl font-bold text-gray-900 mb-6" data-testid="instruction-page-title">Important Instructions</h1>
+                        <div
+                            className="prose prose-sm md:prose-base max-w-none text-gray-800"
+                            data-testid="instruction-page-content"
+                            dangerouslySetInnerHTML={{ __html: form?.instruction_content || '' }}
+                        />
+                        <div className="mt-10 flex justify-end">
+                            <button
+                                onClick={goNext}
+                                data-testid="instruction-page-continue-btn"
+                                className="px-6 py-3 bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium rounded transition-colors"
+                            >
+                                Continue
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
         );
     }

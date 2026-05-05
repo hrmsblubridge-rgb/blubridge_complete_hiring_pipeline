@@ -6,6 +6,10 @@ MESSAGING_CUTOFF_TS guard (May 2026):
   Records created BEFORE this timestamp (legacy / pre-deployment data) are NEVER
   contacted. Only NEW applicants registered after the cutoff trigger messages.
   See `_cutoff_filter()` below.
+
+LOCAL TIME (IST):
+  Schedule dates/times are entered by candidates in IST. Workers compare
+  using IST consistently. `_local_now()` returns the current IST time.
 """
 
 import asyncio
@@ -18,6 +22,14 @@ _logger = logging.getLogger("bg_workers")
 
 _db = None
 _running = False
+
+# Indian Standard Time (UTC+5:30) — system "local time" for all schedule comparisons
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _local_now() -> datetime:
+    """Current time in IST (system local time for scheduling)."""
+    return datetime.now(IST)
 
 # Cutoff: only contact applicants whose `registered_at` is >= this ISO timestamp.
 # If env var missing, default to far-future so we send NOTHING by accident.
@@ -53,11 +65,17 @@ async def start_all_workers():
 # ============ WORKER A: OTP Generator (every 30s) ============
 
 async def _worker_otp_generator():
-    """Send OTP within [schedule_time - 3h, schedule_time - 1min] window only."""
-    _logger.info("OTP Generator worker started")
+    """Send OTP within [schedule_time - 3h, schedule_time - 1min] window only.
+
+    Uses IST (system local) consistently for both `now` and the candidate's
+    `schedule_time` (which is stored as HH:MM:SS local). Polls every 30s so
+    short-notice scheduling (interview within the next 3 hours) gets an OTP
+    promptly while still respecting the >=1 minute pre-interview boundary.
+    """
+    _logger.info("OTP Generator worker started (IST-aware)")
     while True:
         try:
-            now = datetime.now(timezone.utc)
+            now = _local_now()
             today_str = now.strftime("%Y-%m-%d")
 
             # Query ONLY today's interviews where OTP not yet sent (NEW records only)
@@ -81,30 +99,29 @@ async def _worker_otp_generator():
                 except (ValueError, IndexError):
                     continue
 
-                # Build full interview datetime (UTC, same tz as now)
+                # Build full interview datetime in IST (same tz as now)
                 interview_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
                 window_start = interview_dt - timedelta(hours=3)
                 window_end = interview_dt - timedelta(minutes=1)
 
+                # Outside window? — skip. (Short-notice: if interview is within
+                # 3h, window_start is in the past so we send immediately.)
                 if now < window_start or now > window_end:
-                    continue  # Outside valid window — skip
+                    continue
 
-                # Inside window — generate and send OTP
+                # Inside window — generate and send OTP (exactly once via otp_sent flag)
                 otp = doc.get("otp") or str(random.randint(100000, 999999))
-
-                # Expiry = interview_time (1 min before is the last valid send,
-                # but OTP remains valid until the interview starts, bounded by
-                # the 8h fallback in _worker_otp_expiry).
                 otp_expiry_iso = interview_dt.isoformat()
+                now_iso = now.isoformat()
 
                 await _db.bb_registrations.update_one(
                     {"_id": doc["_id"]},
                     {"$set": {
                         "otp": otp,
                         "otp_sent": True,
-                        "otp_sent_at": now.isoformat(),
+                        "otp_sent_at": now_iso,
                         # camelCase aliases for external integrations
-                        "otpGeneratedAt": now.isoformat(),
+                        "otpGeneratedAt": now_iso,
                         "otpExpiry": otp_expiry_iso,
                     }}
                 )
@@ -114,7 +131,7 @@ async def _worker_otp_generator():
                     {"$set": {
                         "otp": otp,
                         "otp_send": "1",
-                        "otpGeneratedAt": now.isoformat(),
+                        "otpGeneratedAt": now_iso,
                         "otpExpiry": otp_expiry_iso,
                     }}
                 )
@@ -130,10 +147,10 @@ async def _worker_otp_generator():
                     schedule_time_str,
                     is_test=bool(doc.get("isTest")),
                 )
-                _logger.info(f"[OTP] Sent to {doc.get('email')}, otp={otp}, window={window_start.strftime('%H:%M')}-{window_end.strftime('%H:%M')}")
+                _logger.info(f"[OTP] Sent to {doc.get('email')}, otp={otp}, IST_now={now.strftime('%H:%M')}, window={window_start.strftime('%H:%M')}-{window_end.strftime('%H:%M')}, interview={interview_dt.strftime('%H:%M')}")
 
         except Exception as e:
-            _logger.error(f"[OTP Worker] Error: {e}")
+            _logger.exception(f"[OTP Worker] Error: {e}")
 
         await asyncio.sleep(30)
 
@@ -399,36 +416,27 @@ async def _worker_missed_interview():
 
 
 async def _worker_import_rejection_mailer():
-    """[NEW Iter33] Daily 7 PM rejection mailer for IMPORTED applicants ONLY.
+    """Continuously mail (Email + WhatsApp) any applicant whose status was set
+    to 'Rejected' AFTER `MESSAGING_CUTOFF_TS` and not yet notified.
 
     Scope:
-      - Sends Email + WhatsApp to applicants with `status='Rejected'`
-      - Restricted to docs in `bb_applicant_updates` where `isImported=True`
-        AND `import_rejection_notified != True`
-      - Never touches legacy DB records (no `isImported` flag = pre-import data)
-
-    Trigger: between 19:00 and 19:30 UTC each day.
-    Idempotent: marks `import_rejection_notified=True` after a successful send.
+      - Reads `bb_applicant_updates` (the canonical store updated by Update Scores
+        / bulk imports / admin UI).
+      - Cutoff-guarded: `updated_at >= MESSAGING_CUTOFF_TS` so historical data
+        never receives a bulk send.
+      - Idempotent: sets `rejection_notified=True` after a successful send.
+      - Never re-sends if `rejection_notified=True` (or legacy
+        `import_rejection_notified=True`).
+      - Polls every 60s so admins see prompt delivery.
     """
-    _logger.info("Import-rejection mailer worker started")
+    _logger.info("Rejection mailer worker started (continuous)")
     while _running:
         try:
-            now = datetime.now(timezone.utc)
-            # Run only between 19:00 and 19:30 UTC; sleep otherwise
-            if not (now.hour == 19 and now.minute < 30):
-                # Sleep until 19:00
-                target = now.replace(hour=19, minute=0, second=0, microsecond=0)
-                if now >= target:
-                    target = target + timedelta(days=1)
-                wait_s = max(60, int((target - now).total_seconds()))
-                # Cap to 1 hour to not block the loop forever; supervisor restart safety
-                await asyncio.sleep(min(wait_s, 3600))
-                continue
-
             cursor = _db.bb_applicant_updates.find({
-                "isImported": True,
                 "status": "Rejected",
+                "rejection_notified": {"$ne": True},
                 "import_rejection_notified": {"$ne": True},
+                "updated_at": {"$gte": MESSAGING_CUTOFF_TS},
             })
 
             sent = 0
@@ -436,7 +444,6 @@ async def _worker_import_rejection_mailer():
                 email = (doc.get("email") or "").strip()
                 phone = (doc.get("phone") or "").strip()
                 name = doc.get("name") or "Candidate"
-                job_role = doc.get("job_role") or "the role"
                 if not email and not phone:
                     continue
 
@@ -446,21 +453,20 @@ async def _worker_import_rejection_mailer():
                     await _db.bb_applicant_updates.update_one(
                         {"_id": doc["_id"]},
                         {"$set": {
-                            "import_rejection_notified": True,
-                            "import_rejection_notified_at": now.isoformat(),
-                            "import_rejection_send_ok": bool(ok),
+                            "rejection_notified": True,
+                            "rejection_notified_at": _local_now().isoformat(),
+                            "rejection_send_ok": bool(ok),
                         }},
                     )
                     sent += 1
-                    _logger.info(f"[ImportReject 7PM] Sent rejection to {email} (batch={doc.get('import_batch_id')})")
+                    _logger.info(f"[Reject:UI] Sent to {email} ok={ok}")
                 except Exception as send_err:
-                    _logger.error(f"[ImportReject 7PM] Send failed for {email}: {send_err}")
+                    _logger.error(f"[Reject:UI] Send failed for {email}: {send_err}")
 
             if sent:
-                _logger.info(f"[ImportReject 7PM] Batch complete — {sent} rejection notifications sent")
+                _logger.info(f"[Reject:UI] Batch complete — {sent} rejection notifications sent")
 
         except Exception as e:
-            _logger.error(f"[Import Rejection Worker] Error: {e}")
+            _logger.error(f"[Rejection Mailer Worker] Error: {e}")
 
-        # Sleep 5 min between scans within the 19:00–19:30 window
-        await asyncio.sleep(300)
+        await asyncio.sleep(60)

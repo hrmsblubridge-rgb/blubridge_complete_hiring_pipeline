@@ -1,0 +1,46 @@
+{
+  "summary": "Iteration 39 backend testing across 3 tasks: Bulk Upload (naukri/pipeline/score), Hiring Form 'Show Instruction Page?' field, and Messaging Workers (OTP IST + continuous Rejection Mailer + pipeline_data sync on OTP verify). Result: 10/14 passed. Hiring Form (3/3), OTP+IST worker, Rejection mailer, pipeline_data update on verify-otp, status shape, clear-failed, invalid type, and a single naukri/score upload immediately after backend restart all PASS. However, repeated bulk uploads (naukri/pipeline/score and the multi-file sequential queue) FAIL because a PHANTOM external worker is sniping freshly queued rows and stamping them with legacy fields {status:'failed', error:'Invalid upload_type', started_at:<ts>} BEFORE the in-process _bg_queue_worker can pick them up.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/bulk-upload/{naukri,pipeline,score}",
+        "issue": "Freshly inserted queue rows are being marked status='failed' with legacy schema fields (`error: 'Invalid upload_type'`, `started_at`) within ~1-2 seconds of insert. The current /app/backend/server.py never writes these field names — neither does bb_modules.py or bg_workers.py (verified via grep). After a fresh `supervisorctl restart backend`, the very first upload processes correctly; every subsequent upload gets sniped by the phantom worker. Net effect: end-to-end Upload→Process→Save flow is BROKEN in steady state — the exact symptom Task 1 was intended to fix. Hypothesis: a stale/duplicate uvicorn or asyncio task (possibly leftover from a prior reload) or a SECOND container instance connected to the same Atlas DB is running OLD bulk-worker code with legacy schema. Ps shows only one local backend (PID 52886/57778) so the phantom likely lives outside this pod or is a duplicated _bg_queue_worker task surviving WatchFiles reloads (the `_worker_running` guard is in-memory and lost across reloads — but a child process is killed on reload, so this should be impossible without external interference).",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration39_bulk_instruction_messaging.py",
+    "/app/test_reports/pytest/iter39.xml"
+  ],
+  "action_items": [
+    "URGENT: Track down the phantom writer that stamps freshly-queued bulk_upload_queue rows with status='failed', error='Invalid upload_type', started_at=<iso>. None of the in-repo backend code writes those fields — search for: (a) other deployed containers connected to the same Atlas cluster (mongodb+srv://cluster0.ek8almy), (b) Atlas Triggers/Functions, (c) leftover host-level python processes, (d) any pre-deploy worker script. Once that source is killed, all 4 bulk-upload tests in test_iteration39 should pass (verified: a single probe upload immediately after `supervisorctl restart backend` works end-to-end, but the second upload is already sniped).",
+    "OPTIONAL: Add a `version` or `worker_id` field to bulk_upload_queue updates so future writers leave a fingerprint and the source can be traced quickly.",
+    "OPTIONAL: Use a Mongo conditional update like update_one({'_id':id, 'status':'pending'}, {...}) inside _bg_queue_worker to claim a job atomically; current find_one+update_one race is exploitable by the phantom."
+  ],
+  "critical_code_review_comments": [
+    "The startup legacy-archival query at server.py:2677-2679 only matches `status='failed' AND error='Invalid upload_type'`. The phantom worker keeps producing these rows continuously, so this one-time cleanup is not sufficient — UI 'Failed' will always re-fill until the phantom is killed.",
+    "_bg_queue_worker reads pending with find_one+sort then separately update_one to 'processing' — this is NOT atomic. Replace with find_one_and_update to claim the row atomically and you avoid both the phantom-snipe and any future double-worker race.",
+    "bg_workers._local_now() correctly returns IST (+5:30) — verified.",
+    "verify-otp correctly updates pipeline_data (status='Attended', otp_verified='1') alongside bb_registrations — verified end-to-end in test_verify_otp_updates_pipeline_data.",
+    "show_instruction_page + instruction_content correctly persisted by create/update and surfaced by /api/pub/form/{slug} — verified."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration39_bulk_instruction_messaging.py (NEW)"
+  ],
+  "success_rate": {"backend": "71% (10/14 passed)", "frontend": "not tested (testing_type=backend only)"},
+  "test_credentials": "Admin User / Admin User (cookie-based)",
+  "seed_data_creation": "Test created and cleaned (in-fixture teardown): bb_registrations OTP seed, bb_applicant_updates Rejected seed, bb_registrations+pipeline_data verify-otp seed, bb_hiring_forms TEST_InstructionForm_*. Test bulk uploads remain in /app/uploads/<type>/ and processed_files/<type>/ as TEST_naukri_*/TEST_pipeline_*/TEST_score_*/TEST_seqQ_* — main agent may want to run /api/bulk-upload/<type>/clear-failed and prune disk after fix.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All 14 tests already exercise the right endpoints. Once the phantom Invalid-upload_type writer is eliminated, simply re-run: `pytest /app/backend/tests/test_iteration39_bulk_instruction_messaging.py -v`. Tests OTP+rejection sleep up to 70-100s for worker ticks (30s/60s) — keep timeouts. The MESSAGING_CUTOFF_TS=2026-05-04T18:07:51Z and isTest=True overrides recipients to TEST_PHONE/TEST_EMAIL so no real candidates were contacted.",
+  "rca_of_the_issue": {
+    "symptom": "POST /api/bulk-upload/<type> returns success but the row in bulk_upload_queue is updated within ~1.5s to status='failed', error='Invalid upload_type', started_at=<iso>, while updated_at remains unchanged from insert.",
+    "reproduction": "1) supervisorctl restart backend; 2) Upload a single CSV via /api/bulk-upload/naukri → succeeds (status=completed). 3) Upload a 2nd CSV → row appears in 'failed' with error='Invalid upload_type' within seconds, with NO 'Queue: processing' log line in /var/log/supervisor/backend.err.log for that file_name. The in-process worker never sees the row.",
+    "ruled_out": "(a) Code in /app/backend/* — `grep -rn \"started_at|Invalid upload_type\"` shows ONLY a startup archival comment in server.py and no writers. (b) Stale local processes — `ps -eo pid,etime,cmd | grep python` shows only the supervisor-managed backend (parent uvicorn 52886 + forked child) and the e1_monitor / plugins-venv unrelated tools. (c) Cached pyc — pyc strings match current source.",
+    "likely_root_cause": "Either an EXTERNAL container/process connected to the same Atlas cluster `cluster0.ek8almy.mongodb.net/hr_analytics` is running an older version of _bg_queue_worker (the legacy schema fields `started_at` + `error` + `upload_type` were used in a prior implementation), OR an Atlas Trigger/Function on bulk_upload_queue inserts is rewriting rows. Atlas triggers cannot be inspected from the pod — the main agent should check the Atlas project console for triggers on the `bulk_upload_queue` collection.",
+    "mitigation": "Short-term: locate and stop the phantom writer (Atlas trigger or duplicate deploy). Medium-term: in _bg_queue_worker, use db.bulk_upload_queue.find_one_and_update(filter={'status':'pending'}, update={'$set':{'status':'processing',...}}, sort=[('created_at',1)], return_document=ReturnDocument.AFTER) so the in-process worker atomically claims each row before any other writer can interfere. Add a unique sentinel field like worker_pid=os.getpid() on claim so duplicate writers become detectable in logs."
+  }
+}

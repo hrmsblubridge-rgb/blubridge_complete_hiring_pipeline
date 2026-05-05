@@ -2076,12 +2076,17 @@ async def _bg_queue_worker():
     """Persistent background worker: continuously polls bulk_upload_queue for pending jobs.
     Processes ONE file at a time, sequentially. Runs independent of UI/browser.
     Hardened against malformed legacy queue documents — never dies on a bad row.
+
+    POST-BATCH MATCHING: To keep per-file processing fast, the heavy
+    `reprocess_matching()` rebuild is deferred until after the queue is
+    drained (no more pending jobs). It runs ONCE per drained batch.
     """
     global _worker_running
     if _worker_running:
         return
     _worker_running = True
     logger.info("Background queue worker started")
+    drained_pending_match = False  # True when at least one naukri/pipeline file was processed since last reprocess
     try:
         while True:
             try:
@@ -2091,6 +2096,18 @@ async def _bg_queue_worker():
                     sort=[("created_at", 1)]
                 )
                 if not job:
+                    # Queue drained — run deferred reprocess_matching ONCE
+                    if drained_pending_match:
+                        try:
+                            logger.info("Queue drained — running deferred reprocess_matching()")
+                            t0 = datetime.now(timezone.utc)
+                            await reprocess_matching()
+                            await _sync_job_titles_master()
+                            elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
+                            logger.info(f"Deferred reprocess_matching() completed in {elapsed:.1f}s")
+                        except Exception as e:
+                            logger.exception(f"Deferred reprocess_matching failed: {e}")
+                        drained_pending_match = False
                     await asyncio.sleep(3)
                     continue
 
@@ -2120,7 +2137,7 @@ async def _bg_queue_worker():
                     {"_id": job_id},
                     {"$set": {"status": "processing", "updated_at": datetime.now(timezone.utc).isoformat()}}
                 )
-                logger.info(f"Queue: processing {file_type}/{file_name}")
+                logger.info(f"Queue: processing {file_type}/{file_name} (id={job_id})")
 
                 try:
                     path = Path(file_path)
@@ -2138,9 +2155,12 @@ async def _bg_queue_worker():
                                     content_blob = content_blob.encode("utf-8", errors="ignore")
                             path.write_bytes(content_blob)
                         else:
-                            raise FileNotFoundError(f"File not found: {file_path}")
+                            raise FileNotFoundError(f"File not found on disk: {file_path}")
 
                     content = path.read_bytes()
+                    if not content:
+                        raise ValueError("File is empty")
+                    logger.info(f"Queue: parsed {file_type}/{file_name} ({len(content)} bytes)")
                     process_fn = _PROCESS_FN.get(file_type)
                     if not process_fn:
                         raise ValueError(f"Unknown file type: {file_type}")
@@ -2162,7 +2182,10 @@ async def _bg_queue_worker():
                                 "updated_at": datetime.now(timezone.utc).isoformat()
                             }}
                         )
-                        logger.info(f"Queue: completed {file_type}/{file_name}")
+                        logger.info(f"Queue: completed {file_type}/{file_name} → {result}")
+                        # Mark for deferred reprocess (only naukri/pipeline affect matching)
+                        if file_type in ("naukri", "pipeline"):
+                            drained_pending_match = True
                     else:
                         await db.bulk_upload_queue.update_one(
                             {"_id": job_id},
@@ -2252,13 +2275,13 @@ async def bulk_upload_status(user: str = Depends(get_current_user)):
                 "result": j.get("result"),
             })
 
-        # Failed from DB
+        # Failed from DB (read both new error_message and legacy error fields)
         failed_docs = await db.bulk_upload_queue.find(
             {"file_type": utype, "status": "failed"},
-            {"_id": 1, "file_name": 1, "error_message": 1, "updated_at": 1}
+            {"_id": 1, "file_name": 1, "error_message": 1, "error": 1, "updated_at": 1}
         ).sort("updated_at", -1).to_list(None)
         failed = [{"id": str(j["_id"]), "name": j["file_name"],
-                    "error": j.get("error_message", "Unknown error")} for j in failed_docs]
+                    "error": j.get("error_message") or j.get("error") or "Unknown error"} for j in failed_docs]
 
         result[utype] = {"pending": pending, "processed": processed, "failed": failed}
     return result
@@ -2282,27 +2305,57 @@ async def bulk_upload_files(
     if upload_type not in BULK_TYPES_LIST:
         raise HTTPException(status_code=400, detail=f"Invalid type: {upload_type}. Must be naukri, pipeline, or score")
     upload_dir = UPLOAD_BASE / upload_type
+    upload_dir.mkdir(parents=True, exist_ok=True)
     saved = []
+    skipped = []
     for f in files:
         if not f.filename.lower().endswith(('.csv', '.xlsx')):
+            skipped.append({"name": f.filename, "reason": "Only .csv or .xlsx allowed"})
+            logger.warning(f"BulkUpload: skipped {f.filename} (invalid extension)")
             continue
         content = await f.read()
+        if not content:
+            skipped.append({"name": f.filename, "reason": "Empty file"})
+            logger.warning(f"BulkUpload: skipped {f.filename} (empty)")
+            continue
         safe_name = f"{int(datetime.now(timezone.utc).timestamp())}_{f.filename}"
         dest = upload_dir / safe_name
-        dest.write_bytes(content)
-        # Insert into DB queue
-        await db.bulk_upload_queue.insert_one({
-            "file_name": f.filename,
-            "file_path": str(dest),
-            "file_type": upload_type,
-            "status": "pending",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "error_message": None,
-            "result": None,
-        })
-        saved.append(safe_name)
-    return {"success": True, "saved": saved, "count": len(saved)}
+        try:
+            dest.write_bytes(content)
+        except Exception as e:
+            logger.exception(f"BulkUpload: disk write failed for {f.filename}: {e}")
+            skipped.append({"name": f.filename, "reason": f"Disk write failed: {e}"})
+            continue
+        try:
+            await db.bulk_upload_queue.insert_one({
+                "file_name": f.filename,
+                "file_path": str(dest),
+                "file_type": upload_type,
+                "file_size": len(content),
+                "status": "pending",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "error_message": None,
+                "result": None,
+            })
+            saved.append(safe_name)
+            logger.info(f"BulkUpload: queued {upload_type}/{f.filename} ({len(content)} bytes)")
+        except Exception as e:
+            logger.exception(f"BulkUpload: DB enqueue failed for {f.filename}: {e}")
+            skipped.append({"name": f.filename, "reason": f"DB enqueue failed: {e}"})
+    return {"success": True, "saved": saved, "skipped": skipped, "count": len(saved)}
+
+
+@api_router.post("/bulk-upload/{upload_type}/clear-failed")
+async def clear_failed_uploads(upload_type: str, user: str = Depends(get_current_user)):
+    """Archive all `failed` queue rows for a given upload_type so the UI is clean."""
+    if upload_type not in BULK_TYPES_LIST:
+        raise HTTPException(status_code=400, detail=f"Invalid type: {upload_type}")
+    res = await db.bulk_upload_queue.update_many(
+        {"file_type": upload_type, "status": "failed"},
+        {"$set": {"status": "archived", "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"success": True, "archived": res.modified_count}
 
 
 @api_router.delete("/bulk-upload/{upload_type}/{queue_id}")
@@ -2375,8 +2428,8 @@ async def _process_naukri_file(content: bytes, filename: str) -> dict:
                 inserted += 1
         except Exception:
             pass
-    await reprocess_matching()
-    await _sync_job_titles_master()
+    # NOTE: reprocess_matching() / _sync_job_titles_master() are now deferred
+    # to the queue worker (run ONCE after batch drains) for performance.
     return {"success": True, "inserted": inserted, "updated": updated}
 
 
@@ -2434,7 +2487,7 @@ async def _process_pipeline_file(content: bytes, filename: str) -> dict:
                 inserted += 1
         except Exception:
             pass
-    await reprocess_matching()
+    # NOTE: reprocess_matching() is deferred to queue worker post-batch.
     return {"success": True, "inserted": inserted, "updated": updated}
 
 
@@ -2617,6 +2670,16 @@ async def startup_event():
     )
     if stuck.modified_count > 0:
         logger.info(f"Reset {stuck.modified_count} stuck processing jobs to pending")
+
+    # One-time cleanup: archive legacy phantom records (pre-fix queue rows that
+    # had `error: 'Invalid upload_type'` and a stray `started_at` field). They
+    # are not actionable and clutter the UI's "failed" list.
+    legacy = await db.bulk_upload_queue.update_many(
+        {"status": "failed", "error": "Invalid upload_type"},
+        {"$set": {"status": "archived", "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    if legacy.modified_count > 0:
+        logger.info(f"Archived {legacy.modified_count} legacy phantom failed records")
 
     # Write test credentials
     try:

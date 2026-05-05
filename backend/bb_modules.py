@@ -268,6 +268,8 @@ class HiringFormCreate(BaseModel):
     conditions: Optional[ConditionsBody] = None
     job_description_attached: Optional[bool] = False
     job_opening_id: Optional[str] = None
+    show_instruction_page: Optional[bool] = False
+    instruction_content: Optional[str] = ""
 
 class HiringFormUpdate(BaseModel):
     name: Optional[str] = None
@@ -276,6 +278,8 @@ class HiringFormUpdate(BaseModel):
     conditions: Optional[ConditionsBody] = None
     job_description_attached: Optional[bool] = None
     job_opening_id: Optional[str] = None
+    show_instruction_page: Optional[bool] = None
+    instruction_content: Optional[str] = None
 
 @bb_router.get("/hiring-forms")
 async def list_hiring_forms(request: Request):
@@ -309,6 +313,8 @@ async def create_hiring_form(data: HiringFormCreate, request: Request):
         "conditions": cond,
         "job_description_attached": data.job_description_attached or False,
         "job_opening_id": data.job_opening_id or None,
+        "show_instruction_page": data.show_instruction_page or False,
+        "instruction_content": (data.instruction_content or "").strip(),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -344,6 +350,10 @@ async def update_hiring_form(form_id: str, data: HiringFormUpdate, request: Requ
         updates["job_description_attached"] = data.job_description_attached
     if data.job_opening_id is not None:
         updates["job_opening_id"] = data.job_opening_id
+    if data.show_instruction_page is not None:
+        updates["show_instruction_page"] = data.show_instruction_page
+    if data.instruction_content is not None:
+        updates["instruction_content"] = data.instruction_content.strip()
     result = await _db.bb_hiring_forms.update_one({"_id": oid}, {"$set": updates})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
@@ -1825,6 +1835,12 @@ async def verify_applicant_otp(data: OTPVerifyBody, request: Request):
         {"$or": [{"phone": phone}, {"email": applicant.get("email", "")}]},
         {"$set": {"otp_verified": "1"}}
     )
+    # Source-of-truth update: pipeline_data drives "View Attended Applicants" + summary counts
+    await _db.pipeline_data.update_many(
+        {"$or": [{"phone": phone}, {"email": applicant.get("email", "")}]},
+        {"$set": {"otp_verified": "1", "status": "Attended",
+                  "last_update": datetime.now(timezone.utc).isoformat()}}
+    )
     return {"success": True, "message": "Applicant Successfully Verified !"}
 
 
@@ -1877,6 +1893,8 @@ async def get_public_form(form_id: str):
         "conditions": form.get("conditions", {}),
         "job_description_attached": form.get("job_description_attached", False),
         "job_opening_id": form.get("job_opening_id"),
+        "show_instruction_page": form.get("show_instruction_page", False),
+        "instruction_content": form.get("instruction_content", ""),
     }
     # If job description attached, fetch the job opening
     if result["job_description_attached"] and result.get("job_opening_id"):
