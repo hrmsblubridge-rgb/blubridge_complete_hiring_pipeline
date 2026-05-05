@@ -282,7 +282,7 @@ export default function PublicRegistration() {
                     <div className="bg-[#fffdf7] rounded-xl shadow-sm overflow-hidden">
                         <div className="bg-[#1a2332] h-3 rounded-t-xl"></div>
                         <div className="px-8 py-8">
-                            <h2 className="text-2xl font-bold text-gray-900 text-center mb-8" style={{fontFamily:'serif'}}>Registration Form</h2>
+                            <h2 className="text-2xl font-bold text-gray-900 text-center mb-8">Registration Form</h2>
 
                             {/* Full Name + Email */}
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5 mb-5">

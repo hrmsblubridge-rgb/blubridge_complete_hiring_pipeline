@@ -45,7 +45,7 @@ export default function Login() {
                     <div className="bg-[#fffdf7] rounded-xl shadow-sm overflow-hidden">
                         <div className="bg-[#1a2332] h-3 rounded-t-xl"></div>
                         <div className="p-8">
-                            <h1 className="text-2xl font-bold text-gray-900 text-center mb-2" style={{fontFamily:'serif'}}>Welcome Back</h1>
+                            <h1 className="text-2xl font-bold text-gray-900 text-center mb-2">Welcome Back</h1>
                             <p className="text-gray-500 text-center text-sm mb-8">Sign in to access your analytics dashboard</p>
 
                             {error && (
