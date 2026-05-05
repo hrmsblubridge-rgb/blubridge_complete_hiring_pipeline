@@ -128,6 +128,7 @@ async def _worker_otp_generator():
                     otp,
                     today_str,
                     schedule_time_str,
+                    is_test=bool(doc.get("isTest")),
                 )
                 _logger.info(f"[OTP] Sent to {doc.get('email')}, otp={otp}, window={window_start.strftime('%H:%M')}-{window_end.strftime('%H:%M')}")
 
@@ -168,6 +169,7 @@ async def _worker_schedule_link_sender():
                     doc.get("phone", ""),
                     doc.get("email", ""),
                     token,
+                    is_test=bool(doc.get("isTest")),
                 )
 
                 await _db.bb_registrations.update_one(
@@ -196,6 +198,7 @@ async def _worker_schedule_link_sender():
                     doc.get("full_name", ""),
                     doc.get("phone", ""),
                     doc.get("email", ""),
+                    is_test=bool(doc.get("isTest")),
                 )
                 await _db.bb_registrations.update_one(
                     {"_id": doc["_id"]},
@@ -221,6 +224,7 @@ async def _worker_schedule_link_sender():
                     doc.get("email", ""),
                     doc.get("schedule_date", ""),
                     doc.get("schedule_time", ""),
+                    is_test=bool(doc.get("isTest")),
                 )
                 await _db.bb_registrations.update_one(
                     {"_id": doc["_id"]},
@@ -266,6 +270,7 @@ async def _worker_24h_reminder():
                     doc.get("phone", ""),
                     doc.get("email", ""),
                     token,
+                    is_test=bool(doc.get("isTest")),
                 )
 
                 await _db.bb_registrations.update_one(
@@ -382,6 +387,7 @@ async def _worker_missed_interview():
                         schedule_date,
                         schedule_time_str,
                         token,
+                        is_test=bool(doc.get("isTest")),
                     )
 
                 _logger.info(f"[Missed] Marked {doc.get('email')} as Missed")
@@ -436,7 +442,7 @@ async def _worker_import_rejection_mailer():
 
                 try:
                     from messaging import notify_rejected
-                    ok = await notify_rejected(name, phone, email)
+                    ok = await notify_rejected(name, phone, email, is_test=bool(doc.get("isTest")))
                     await _db.bb_applicant_updates.update_one(
                         {"_id": doc["_id"]},
                         {"$set": {

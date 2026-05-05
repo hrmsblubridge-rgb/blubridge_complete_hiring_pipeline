@@ -1,0 +1,81 @@
+{
+  "summary": "Iteration 34 — Multi-issue fix bundle validated. Backend: 14/14 pytest PASS in ~52s. Frontend: dd-mm-yyyy date + 12h AM/PM time formatting verified across /roles, /interview-reports, /update-scores. BulkUploadModal toggles (Pending/Failed/Processed) render with correct data-testids and toggle expand/collapse correctly. Live SMTP + AiSensy WhatsApp confirmed working — '[Email] SENT' + 'campaign=Schedule Detail status=200' both observed in backend log within 2s of POST /api/pub/schedule/<token>. is_test=True correctly re-routes to rishi.nayak@blubridge.com / 9443109903; TEST_MODE env is now NO-OP as designed; real applicants get their own credentials. Time normalisation tested for 6 inputs (1:00 PM→13:00:00, 9:30 AM→09:30:00, 12:00 PM→12:00:00, 12:00 AM→00:00:00, 11 PM→23:00:00, 13:45→13:45:00). Registration → pipeline_data upsert verified end-to-end with college_type, _normalized_job_role, _nirf_category, submitted_at(yyyy-mm-dd HH:mm:ss), source='registration_form'. Backwards-compat: GET /api/summary returns total_registered=100798 exactly, /api/applicants and /api/data/classification both 200.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/pub/schedule/{token}", "issue": "bb_modules.py lines 1348-1351 contain TWO consecutive `except Exception as e:` blocks for the same try. Python accepts this syntactically but the second except is unreachable dead code. Drop one. Not a functional issue."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_tests": {
+    "messaging_routing": [
+      "messaging._resolve_recipient(real, real, is_test=False) → passthrough (verified)",
+      "messaging._resolve_recipient(real, real, is_test=True) → ('9443109903','rishi.nayak@blubridge.com')",
+      "TEST_MODE=true env var is NO-OP (verified — real recipient passthrough even with env set)"
+    ],
+    "schedule_time_normalization": [
+      "POST /api/pub/schedule/<token> {'time':'1:00 PM'} → bb_registrations.schedule_time='13:00:00' AND pipeline_data.schedule_time='13:00:00'",
+      "9:30 AM→09:30:00, 12:00 PM→12:00:00 (noon), 12:00 AM→00:00:00 (midnight), 11 PM→23:00:00, 13:45→13:45:00 all verified"
+    ],
+    "registration_pipeline": [
+      "POST /api/pub/register creates pipeline_data row with name, email, phone, age, college, college_type ('Non NIRF' or 'NIRF - #N'), degree, course, location, submitted_at (yyyy-mm-dd HH:mm:ss), source='registration_form', _normalized_job_role, _nirf_category"
+    ],
+    "schedule_confirmation_fires_unconditionally": [
+      "Backend log shows '[TEST_ROUTE] Overriding' → '[WhatsApp] campaign=Schedule Detail status=200' → '[Email] SENT to=rishi.nayak@blubridge.com' within 2s of schedule POST. Fires regardless of shortlist_mail_sent state. interview_mail_sent flag set to True after success."
+    ],
+    "back_compat": [
+      "GET /api/summary → 200, total_registered=100798 (matches expected ~100798)",
+      "GET /api/applicants → 200, returns paginated list",
+      "GET /api/data/classification → 200"
+    ],
+    "frontend": [
+      "/roles: schedule_date='21-11-2025' (dd-mm-yyyy), schedule_time='11:00 AM' (12h AM/PM), registered_date='13-08-2025' (dd-mm-yyyy)",
+      "/interview-reports: dates dd-mm-yyyy ('02-07-2185','13-11-2026','27-08-2026'), times 12h AM/PM ('12:30 PM','3:00 AM','11:00 AM','11:30 AM')",
+      "/update-scores: date_of_interview='06-05-2026','27-04-2026' etc (dd-mm-yyyy)",
+      "BulkUploadModal opens via 'Bulk' button next to 'Upload Naukri Applies Dataset' on /dashboard. Modal has data-testid='bulk-modal'.",
+      "toggle-pending-btn PRESENT, default expanded (pending content visible). Click → collapses. Re-click → expands. CONFIRMED.",
+      "toggle-processed-btn PRESENT, default collapsed (no processed content visible). Click → expands. CONFIRMED.",
+      "toggle-failed-btn correctly NOT rendered when failed.length===0 (matches spec)"
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration34_messaging_pipeline.py",
+    "/app/test_reports/pytest/pytest_iter34.xml"
+  ],
+  "action_items": [
+    "[MINOR] /app/backend/bb_modules.py lines 1348-1351: drop the duplicate `except Exception as e:` block (second one is unreachable). Not blocking.",
+    "[OBSERVATION] TEST_MODE=true is still set in /app/backend/.env even though it is now a no-op. Consider removing to avoid confusion."
+  ],
+  "critical_code_review_comments": [
+    "bb_modules.py is now 1354 lines — exceeds 700-line guideline (also flagged in iter33). Recommend splitting into bb_imports.py / bb_pub.py / bb_otp.py.",
+    "register_applicant (~line 1180) does NOT tag pipeline_data with isTest; if main agent ever adds a 'test registration' path, the routing flag would not propagate. Currently only bb_registrations carries isTest.",
+    "schedule_interview catches a broad `except Exception` after notify_schedule_confirmation but DOES NOT log full traceback (only str(e)). For SMTP/AiSensy debugging in prod, log via _logger.exception() instead of _logger.error(f'... {e}').",
+    "bg_workers.py line ~412: per iter33 review, the 7-PM rejection-mail worker can be late by up to 1h after 19:00 UTC if early in the day. Acceptable but worth noting.",
+    "messaging.py SMTP_PASSWORD default in code ('zfdb buxc ehyq gctr') is leftover from previous credentials — remove the hardcoded fallback so .env is the only source of truth (defense-in-depth)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration34_messaging_pipeline.py"
+  ],
+  "success_rate": {
+    "backend": "100% (14/14 pytest passed in ~52s)",
+    "frontend": "100% (formatters verified on 3 pages; BulkUploadModal toggles all working)"
+  },
+  "test_credentials": {
+    "username": "Admin User",
+    "password": "Admin User",
+    "test_recipients": "rishi.nayak@blubridge.com / 9443109903 (live, when isTest:true)"
+  },
+  "seed_data_creation": "Created 7 docs in bb_registrations (test_iter34_*) and 2 docs in pipeline_data (test_iter34_*) during testing. ALL CLEANED UP via module-scope teardown fixture which delete_many({'email':{'$regex':'test_iter34_'}}) on both collections. Verified post-test counts return to baseline.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iter34 confirmed live SMTP + AiSensy WhatsApp end-to-end (different from iter33 where SMTP was 535-failing). _resolve_recipient now ONLY routes on per-record is_test flag (or FORCE_TEST_MODE env emergency switch) — TEST_MODE env is no-op. POST /api/pub/schedule/<token> normalizes 12h AM/PM to 24h HH:MM:SS and unconditionally fires notify_schedule_confirmation if registered_at >= MESSAGING_CUTOFF_TS (currently 2026-05-04). POST /api/pub/register upserts to pipeline_data with derived fields. Frontend formatters in /app/frontend/src/utils/dateFormat.js (formatDateDDMMYYYY, formatTime12H) applied on Roles, AttendedDrillDown, InterviewReports, UpdateScores. BulkUploadModal data-testids: bulk-modal, toggle-pending-btn, toggle-failed-btn (only when failed.length>0), toggle-processed-btn. To run: `export REACT_APP_BACKEND_URL=https://applicant-details.preview.emergentagent.com && export $(grep -v '^#' /app/backend/.env | xargs) && pytest backend/tests/test_iteration34_messaging_pipeline.py -v`. Cleanup automatic.",
+  "mocked_apis": {
+    "WhatsApp AiSensy": "LIVE — returns 200 with submitted_message_id (verified in backend log)",
+    "SMTP Gmail": "LIVE — '[Email] SENT to=rishi.nayak@blubridge.com' verified (credentials apparently refreshed since iter33)"
+  },
+  "rca_of_the_issue": "N/A — all features in scope verified working. No bugs RCA required."
+}

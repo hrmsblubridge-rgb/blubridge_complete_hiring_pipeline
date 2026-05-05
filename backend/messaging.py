@@ -29,25 +29,35 @@ def _is_enabled(flag: str) -> bool:
     return os.environ.get(flag, "false").lower() == "true"
 
 
-def _resolve_recipient(phone: str, email: str) -> tuple:
-    """Central TEST_MODE guard — overrides ALL recipients."""
-    if _is_enabled("TEST_MODE"):
+def _resolve_recipient(phone: str, email: str, is_test: bool = False) -> tuple:
+    """Resolve real vs test recipient.
+
+    Test override triggers ONLY when:
+      - the record/caller passes `is_test=True`, OR
+      - env FORCE_TEST_MODE=true (emergency kill-switch).
+
+    Previously TEST_MODE=true re-routed ALL messages — causing real applicants
+    to never receive their own communications. That behaviour is now opt-in
+    per-record only.
+    """
+    if is_test or _is_enabled("FORCE_TEST_MODE"):
         test_phone = os.environ.get("TEST_PHONE", "9443109903")
         test_email = os.environ.get("TEST_EMAIL", "rishi.nayak@blubridge.com")
-        _logger.info(f"[TEST_MODE] Overriding recipient: phone={phone}->{test_phone}, email={email}->{test_email}")
+        _logger.info(f"[TEST_ROUTE] Overriding: phone={phone}->{test_phone}, email={email}->{test_email}")
         return test_phone, test_email
     return phone, email
 
 
 # ============ WHATSAPP (AiSensy) ============
 
-async def send_whatsapp(campaign_name: str, phone: str, email: str, template_params: list):
-    """Send WhatsApp via AiSensy API. Returns True on success."""
+async def send_whatsapp(campaign_name: str, phone: str, email: str, template_params: list, is_test: bool = False):
+    """Send WhatsApp via AiSensy API. Returns True on success.
+    `is_test=True` re-routes the message to TEST_PHONE (dev/test records only)."""
     if not _is_enabled("ENABLE_WHATSAPP"):
         _logger.info(f"[SKIP] WhatsApp disabled: campaign={campaign_name}")
         return False
 
-    safe_phone, _ = _resolve_recipient(phone, email)
+    safe_phone, _ = _resolve_recipient(phone, email, is_test=is_test)
     # Ensure 91 prefix for Indian numbers
     if len(safe_phone) == 10:
         safe_phone = "91" + safe_phone
@@ -79,13 +89,14 @@ async def send_whatsapp(campaign_name: str, phone: str, email: str, template_par
 
 # ============ EMAIL (SMTP) ============
 
-async def send_email(to_email: str, phone: str, subject: str, html_body: str):
-    """Send email via SMTP SSL. Returns True on success."""
+async def send_email(to_email: str, phone: str, subject: str, html_body: str, is_test: bool = False):
+    """Send email via SMTP SSL. Returns True on success.
+    `is_test=True` re-routes the message to TEST_EMAIL (dev/test records only)."""
     if not _is_enabled("ENABLE_EMAIL"):
         _logger.info(f"[SKIP] Email disabled: to={to_email}, subject={subject}")
         return False
 
-    _, safe_email = _resolve_recipient(phone, to_email)
+    _, safe_email = _resolve_recipient(phone, to_email, is_test=is_test)
 
     try:
         msg = MIMEMultipart("alternative")
@@ -110,12 +121,12 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str):
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://applicant-details.preview.emergentagent.com")
 
 
-async def notify_shortlisted(name: str, phone: str, email: str, schedule_token: str):
+async def notify_shortlisted(name: str, phone: str, email: str, schedule_token: str, is_test: bool = False):
     """Send shortlist notification with schedule link via WhatsApp + Email."""
     schedule_link = f"{FRONTEND_URL}/schedule-interview/{schedule_token}"
 
     # WhatsApp: ShortList campaign
-    await send_whatsapp("ShortList", phone, email, [name, schedule_link])
+    await send_whatsapp("ShortList", phone, email, [name, schedule_link], is_test=is_test)
 
     # Email
     html = f"""
@@ -126,15 +137,12 @@ async def notify_shortlisted(name: str, phone: str, email: str, schedule_token: 
     <p>We look forward to our discussion and exploring how you can contribute to our team's research efforts.</p>
     <p>Best regards,<br>Blubridge Technologies</p>
     """
-    await send_email(email, phone, "You're Shortlisted! Schedule Your Interview - Blubridge", html)
+    await send_email(email, phone, "You're Shortlisted! Schedule Your Interview - Blubridge", html, is_test=is_test)
 
 
-async def notify_rejected(name: str, phone: str, email: str):
+async def notify_rejected(name: str, phone: str, email: str, is_test: bool = False):
     """Send rejection notification via WhatsApp + Email. Returns True if at least one channel succeeded."""
-    # WhatsApp: Reject campaign
-    wa_ok = await send_whatsapp("Reject", phone, email, [])
-
-    # Email
+    wa_ok = await send_whatsapp("Reject", phone, email, [], is_test=is_test)
     html = f"""
     <p>Dear {name},</p>
     <p>Thank you for your time and effort in completing our registration form.</p>
@@ -143,16 +151,13 @@ async def notify_rejected(name: str, phone: str, email: str):
     <p>Wishing you the best in your future endeavours!</p>
     <p>Warm regards,<br>Blubridge Technologies</p>
     """
-    em_ok = await send_email(email, phone, "Application Update - Blubridge Technologies", html)
+    em_ok = await send_email(email, phone, "Application Update - Blubridge Technologies", html, is_test=is_test)
     return bool(wa_ok or em_ok)
 
 
-async def notify_schedule_confirmation(name: str, phone: str, email: str, date: str, time: str):
+async def notify_schedule_confirmation(name: str, phone: str, email: str, date: str, time: str, is_test: bool = False):
     """Send schedule confirmation via WhatsApp + Email."""
-    # WhatsApp: Schedule Detail campaign
-    await send_whatsapp("Schedule Detail", phone, email, [name, date, time, OFFICE_LOCATION])
-
-    # Email
+    await send_whatsapp("Schedule Detail", phone, email, [name, date, time, OFFICE_LOCATION], is_test=is_test)
     html = f"""
     <p>Hi {name},</p>
     <p>Thank you for scheduling your interview with Blubridge Technologies. Your interview details are confirmed as follows:</p>
@@ -160,15 +165,12 @@ async def notify_schedule_confirmation(name: str, phone: str, email: str, date: 
     <p>We look forward to meeting you.</p>
     <p>Best regards,<br>Blubridge Technologies</p>
     """
-    await send_email(email, phone, "Interview Scheduled - Blubridge Technologies", html)
+    await send_email(email, phone, "Interview Scheduled - Blubridge Technologies", html, is_test=is_test)
 
 
-async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str, date: str, time: str):
+async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str, date: str, time: str, is_test: bool = False):
     """Send OTP notification via WhatsApp + Email."""
-    # WhatsApp: OTP With Job campaign
-    await send_whatsapp("OTP With Job", phone, email, [name, job_role, otp, phone, date, time, OFFICE_LOCATION])
-
-    # Email
+    await send_whatsapp("OTP With Job", phone, email, [name, job_role, otp, phone, date, time, OFFICE_LOCATION], is_test=is_test)
     html = f"""
     <p>Hi {name},</p>
     <p>Your One-Time Password (OTP) to confirm your interview attendance at Blubridge Technologies is:</p>
@@ -180,17 +182,13 @@ async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str,
     <p>Looking forward to seeing you soon!</p>
     <p>Best regards,<br>Blubridge Recruitment Team</p>
     """
-    await send_email(email, phone, f"Your Interview OTP - Blubridge Technologies", html)
+    await send_email(email, phone, f"Your Interview OTP - Blubridge Technologies", html, is_test=is_test)
 
 
-async def notify_missed_reminder(name: str, phone: str, email: str, role: str, date: str, time: str, schedule_token: str):
+async def notify_missed_reminder(name: str, phone: str, email: str, role: str, date: str, time: str, schedule_token: str, is_test: bool = False):
     """Send missed interview reminder with reschedule link."""
     schedule_link = f"{FRONTEND_URL}/schedule-interview/{schedule_token}"
-
-    # WhatsApp: Candidate FollowUp campaign
-    await send_whatsapp("Candidate FollowUp", phone, email, [name, role, date, time])
-
-    # Email
+    await send_whatsapp("Candidate FollowUp", phone, email, [name, role, date, time], is_test=is_test)
     html = f"""
     <p>Hi {name},</p>
     <p>We noticed you missed your scheduled interview at Blubridge. We understand unexpected situations may occur, so we'd like to offer you one final opportunity to reschedule.</p>
@@ -200,17 +198,13 @@ async def notify_missed_reminder(name: str, phone: str, email: str, role: str, d
     <p>Rescheduling is subject to available slots.</p>
     <p>Warm regards,<br>Blubridge Recruitment Team</p>
     """
-    await send_email(email, phone, "Missed Interview - Reschedule Opportunity - Blubridge", html)
+    await send_email(email, phone, "Missed Interview - Reschedule Opportunity - Blubridge", html, is_test=is_test)
 
 
-async def notify_schedule_reminder(name: str, phone: str, email: str, schedule_token: str):
+async def notify_schedule_reminder(name: str, phone: str, email: str, schedule_token: str, is_test: bool = False):
     """Send 24h reminder to schedule interview."""
     schedule_link = f"{FRONTEND_URL}/schedule-interview/{schedule_token}"
-
-    # WhatsApp: ShortList campaign (re-send schedule link)
-    await send_whatsapp("ShortList", phone, email, [name, schedule_link])
-
-    # Email
+    await send_whatsapp("ShortList", phone, email, [name, schedule_link], is_test=is_test)
     html = f"""
     <p>Dear {name},</p>
     <p>This is a reminder that you have been shortlisted for an interview at Blubridge Technologies, but you haven't scheduled your interview yet.</p>
@@ -218,4 +212,4 @@ async def notify_schedule_reminder(name: str, phone: str, email: str, schedule_t
     <p><a href="{schedule_link}">{schedule_link}</a></p>
     <p>Best regards,<br>Blubridge Technologies</p>
     """
-    await send_email(email, phone, "Reminder: Schedule Your Interview - Blubridge", html)
+    await send_email(email, phone, "Reminder: Schedule Your Interview - Blubridge", html, is_test=is_test)

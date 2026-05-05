@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
+import { formatDateDDMMYYYY, formatTime12H } from '../utils/dateFormat';
 import { ArrowLeft, FunnelSimple, ArrowCounterClockwise, Export } from '@phosphor-icons/react';
 import Pagination from '../components/Pagination';
 
@@ -137,8 +138,8 @@ export default function InterviewReports() {
                                 <tr key={i} className="border-b border-zinc-800/50 hover:bg-zinc-900/50" data-testid={`report-row-${i}`}>
                                     <td className="px-4 py-3 font-medium whitespace-nowrap">{r.name}</td>
                                     <td className="px-4 py-3 text-zinc-400 whitespace-nowrap">{r.email}</td>
-                                    <td className="px-4 py-3 text-zinc-400 whitespace-nowrap">{r.date}</td>
-                                    <td className="px-4 py-3 text-zinc-400 whitespace-nowrap">{r.time}</td>
+                                    <td className="px-4 py-3 text-zinc-400 whitespace-nowrap">{formatDateDDMMYYYY(r.date)}</td>
+                                    <td className="px-4 py-3 text-zinc-400 whitespace-nowrap">{formatTime12H(r.time)}</td>
                                     <td className="px-4 py-3 text-zinc-400 whitespace-nowrap">{r.job_role}</td>
                                     <td className="px-4 py-3 whitespace-nowrap"><span className={`px-2 py-0.5 text-xs rounded ${r.college_type?.includes('Non') ? 'bg-zinc-800 text-zinc-400' : 'bg-cyan-900/40 text-cyan-400'}`}>{r.college_type}</span></td>
                                     <td className="px-4 py-3 whitespace-nowrap"><span className={`px-2 py-0.5 text-xs rounded ${r.attendance === 'Attended' ? 'bg-emerald-900/40 text-emerald-400' : 'bg-orange-900/40 text-orange-400'}`}>{r.attendance}</span></td>

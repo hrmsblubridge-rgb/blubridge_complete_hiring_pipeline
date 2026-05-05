@@ -4,6 +4,7 @@ import axios from 'axios';
 import { toast } from 'sonner';
 import { ArrowLeft, FunnelSimple, PencilSimple, X, Plus, Trash, FloppyDisk, Export, UploadSimple } from '@phosphor-icons/react';
 import Pagination from '../components/Pagination';
+import { formatDateDDMMYYYY } from '../utils/dateFormat';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -176,7 +177,7 @@ export default function UpdateScores() {
                             applicants.map((a, i) => (
                                 <tr key={i} className="border-b border-zinc-800/50 hover:bg-zinc-900/50" data-testid={`score-row-${i}`}>
                                     <td className="px-4 py-3 font-medium whitespace-nowrap">{a.name}</td>
-                                    <td className="px-4 py-3 text-zinc-400">{a.date_of_interview}</td>
+                                    <td className="px-4 py-3 text-zinc-400">{formatDateDDMMYYYY(a.date_of_interview)}</td>
                                     <td className="px-4 py-3 text-zinc-400">{a.job_role}</td>
                                     <td className="px-4 py-3"><span className={`px-2 py-0.5 text-xs rounded ${a.status === 'Selected' ? 'bg-emerald-900/40 text-emerald-400' : a.status === 'Rejected' ? 'bg-red-900/40 text-red-400' : 'bg-zinc-800 text-zinc-400'}`}>{a.status}</span></td>
                                     <td className="px-4 py-3"><button onClick={() => openUpdate(a)} data-testid={`update-btn-${i}`} className="px-3 py-1 bg-emerald-700 hover:bg-emerald-600 text-xs font-medium">Update</button></td>

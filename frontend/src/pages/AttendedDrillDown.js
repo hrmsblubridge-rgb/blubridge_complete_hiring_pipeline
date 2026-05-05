@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { ArrowLeft, FunnelSimple, ArrowCounterClockwise, SpinnerGap, CaretLeft, CaretRight, CaretDoubleLeft, CaretDoubleRight, MagnifyingGlass } from '@phosphor-icons/react';
+import { formatDateDDMMYYYY } from '../utils/dateFormat';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 const PAGE_SIZE = 100;
@@ -175,7 +176,7 @@ export default function AttendedDrillDown() {
                                                             'text-zinc-400'
                                                         }`}>{row[col.key] ?? '-'}</span>
                                                     ) : (
-                                                        <span className={col.key === 'name' ? 'font-medium' : 'text-zinc-400'}>{row[col.key] ?? '-'}</span>
+                                                        <span className={col.key === 'name' ? 'font-medium' : 'text-zinc-400'}>{col.key === 'schedule_date' ? formatDateDDMMYYYY(row[col.key]) : (row[col.key] ?? '-')}</span>
                                                     )}
                                                 </td>
                                             ))}

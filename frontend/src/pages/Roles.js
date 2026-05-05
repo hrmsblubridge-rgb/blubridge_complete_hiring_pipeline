@@ -4,6 +4,7 @@ import axios from 'axios';
 import dayjs from 'dayjs';
 import { toast } from 'sonner';
 import { ArrowLeft, FunnelSimple, ArrowCounterClockwise, SpinnerGap, CaretLeft, CaretRight, CaretDoubleLeft, CaretDoubleRight, MagnifyingGlass } from '@phosphor-icons/react';
+import { formatTime12H } from '../utils/dateFormat';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 const PAGE_SIZES = [10, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500];
@@ -222,7 +223,7 @@ export default function Applicants() {
                                                         <span className="inline-block px-2 py-0.5 text-xs font-medium rounded bg-zinc-800/60 text-zinc-400 border border-zinc-700/50">{row[col.key]}</span>
                                                     ) : (
                                                         <span className={col.key === 'name' ? 'font-medium' : 'text-zinc-400'}>
-                                                            {DATE_COLS.includes(col.key) ? fmtDate(row[col.key]) : (row[col.key] ?? '-')}
+                                                            {DATE_COLS.includes(col.key) ? fmtDate(row[col.key]) : col.key === 'schedule_time' ? formatTime12H(row[col.key]) : (row[col.key] ?? '-')}
                                                         </span>
                                                     )}
                                                 </td>

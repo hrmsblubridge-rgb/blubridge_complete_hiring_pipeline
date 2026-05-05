@@ -1173,28 +1173,50 @@ async def register_applicant(data: RegistrationBody):
     }
     await _db.bb_registrations.insert_one(reg_doc)
 
-    # Also insert into registered_candidates for Analytics Dashboard integration
-    rc_doc = {
+    # Also insert into pipeline_data (HR internal dataset — May 2026 source of truth).
+    # This is the live dataset that drives Summary/View/Attended endpoints. Non-destructive:
+    # uses upsert by email so a re-submission updates instead of duplicating.
+    rank_lookup = await _build_college_rank_lookup_fn()
+    from bb_modules import _classify_college_fn
+    cc = _classify_college_fn({"ug_university": (data.college or "").strip(),
+                                 "pg_university": "", "college": (data.college or "").strip()},
+                                rank_lookup)
+    college_type = cc["college_status"] if cc["college_status"].startswith("NIRF - #") else "Non NIRF"
+    submitted_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    pipeline_doc_set = {
         "name": data.full_name.strip(),
         "email": data.email.strip().lower(),
         "phone": phone_normalized,
-        "job_title": job_role,
-        "job_role": job_role,
-        "email_type": "shortlist" if is_shortlisted else "reject",
+        "age": data.age,
+        "college": (data.college or "").strip(),
+        "college_type": college_type,
         "degree": (data.degree or "").strip(),
         "course": (data.course or "").strip(),
-        "ug_university": (data.college or "").strip(),
-        "pg_university": "",
+        "location": (data.preferred_location_city or "").strip(),
+        "job_role": job_role,
+        "job_title": job_role,
+        "email_type": "shortlist" if is_shortlisted else "reject",
         "year_of_graduation": str(data.year_of_graduation) if data.year_of_graduation else "",
-        "date_of_application": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        "last_update": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "submitted_at": submitted_at,
         "schedule_date": "",
         "schedule_time": "",
         "otp_verified": "",
         "result_status": "",
         "source": "registration_form",
+        # Persisted derived fields so filter endpoints work immediately
+        "_college_status": cc["college_status"],
+        "_nirf_category": "NIRF" if college_type.startswith("NIRF - #") else "Non NIRF",
+        "_college_resolved": cc.get("college") or "-",
+        "_match_confidence": cc.get("match_confidence") or None,
+        "_normalized_job_role": job_role,
     }
-    await _db.registered_candidates.insert_one(rc_doc)
+    await _db.pipeline_data.update_one(
+        {"email": data.email.strip().lower()},
+        {"$set": pipeline_doc_set,
+         "$setOnInsert": {"last_update": submitted_at}},
+        upsert=True,
+    )
 
     # Messaging handled by background workers (schedule_link_sender)
     return {
@@ -1234,7 +1256,12 @@ class ScheduleBody(BaseModel):
 
 @pub_router.post("/schedule/{token}")
 async def schedule_interview(token: str, data: ScheduleBody):
-    """Schedule or reschedule interview (public, via unique token)."""
+    """Schedule or reschedule interview (public, via unique token).
+
+    Time input may arrive as '1:00 PM', '13:00', '01:00 PM', '1 PM' etc. We
+    normalize to 24-hour 'HH:MM:SS' before persisting + messaging, so the OTP
+    worker (which parses HH:MM) gets the correct hour.
+    """
     reg = await _db.bb_registrations.find_one({"schedule_token": token})
     if not reg:
         raise HTTPException(status_code=404, detail="Invalid or expired link")
@@ -1242,9 +1269,34 @@ async def schedule_interview(token: str, data: ScheduleBody):
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     is_reschedule = bool(reg.get("schedule_date"))
 
+    # ---- TIME NORMALISATION (12h AM/PM → 24h HH:MM:SS) ----
+    def _to_24h(t: str) -> str:
+        t = (t or "").strip().upper().replace(".", "")
+        if not t:
+            return ""
+        # Try common AM/PM formats first
+        for fmt in ("%I:%M %p", "%I:%M%p", "%I %p", "%I%p",
+                    "%H:%M", "%H:%M:%S"):
+            try:
+                parsed = datetime.strptime(t, fmt)
+                return parsed.strftime("%H:%M:%S")
+            except ValueError:
+                continue
+        # Last-resort: if colon present, assume already 24h-ish — pad seconds
+        if ":" in t:
+            parts = t.split(":")
+            try:
+                h = int(parts[0]); m = int(parts[1]) if len(parts) > 1 else 0
+                return f"{h:02d}:{m:02d}:00"
+            except ValueError:
+                pass
+        return t  # give up; store raw
+
+    time_24 = _to_24h(data.time)
+
     updates = {
         "schedule_date": data.date.strip(),
-        "schedule_time": data.time.strip(),
+        "schedule_time": time_24,
         "status": "Interview Scheduled",
         "last_update": now_str,
     }
@@ -1257,42 +1309,44 @@ async def schedule_interview(token: str, data: ScheduleBody):
 
     await _db.bb_registrations.update_one({"_id": reg["_id"]}, {"$set": updates})
 
-    # Update registered_candidates for Analytics Dashboard integration
+    # Update HR pipeline_data (source of truth for Summary/View/Attended)
     email = reg.get("email", "")
     phone = reg.get("phone", "")
-    # Convert time to 24h format for storage
-    time_24 = data.time.strip()
-    await _db.registered_candidates.update_many(
-        {"$or": [{"email": email}, {"phone": phone}]},
+    await _db.pipeline_data.update_one(
+        {"email": email},
         {"$set": {
             "schedule_date": data.date.strip(),
             "schedule_time": time_24,
             "last_update": now_str,
             "email_type": "shortlist",
-        }}
+        }},
     )
 
-    # Send schedule confirmation ONLY if shortlist mail was already sent (sequencing rule)
-    # Cutoff guard (May 2026): never message records registered before MESSAGING_CUTOFF_TS.
+    # Send schedule confirmation (WhatsApp + Email) — was previously gated on
+    # `shortlist_mail_sent` which meant the WhatsApp rarely fired for new
+    # registrations scheduling immediately. Now fires every time, cutoff-guarded.
+    is_test_record = bool(reg.get("isTest"))
     import os as _os
     _cutoff = _os.environ.get("MESSAGING_CUTOFF_TS", "9999-12-31T23:59:59+00:00")
     _is_new_record = (reg.get("registered_at") or "0000") >= _cutoff
     try:
-        if reg.get("shortlist_mail_sent") and _is_new_record:
+        if _is_new_record:
             from messaging import notify_schedule_confirmation
             await notify_schedule_confirmation(
-                reg.get("full_name", ""), reg.get("phone", ""), reg.get("email", ""),
-                data.date.strip(), time_24,
+                reg.get("full_name", ""), phone, email,
+                data.date.strip(), time_24, is_test=is_test_record,
             )
             await _db.bb_registrations.update_one(
                 {"_id": reg["_id"]},
-                {"$set": {"interview_mail_sent": True, "interview_mail_sent_at": datetime.now(timezone.utc).isoformat()}}
+                {"$set": {
+                    "interview_mail_sent": True,
+                    "interview_mail_sent_at": datetime.now(timezone.utc).isoformat(),
+                }},
             )
-        elif not _is_new_record:
-            _logger.info(f"[CutoffGuard] Skipped messaging for legacy record {reg.get('email')} (registered_at < cutoff)")
         else:
-            # Shortlist mail not yet sent — interview mail will be sent by worker after shortlist mail
-            _logger.info(f"[Sequencing] Interview mail deferred for {reg.get('email')} — awaiting shortlist mail first")
+            _logger.info(f"[CutoffGuard] Skipped scheduling msg for legacy record {email}")
+    except Exception as e:
+        _logger.error(f"Schedule confirmation send failed: {e}")
     except Exception as e:
         _logger.error(f"Schedule confirmation send failed: {e}")
 

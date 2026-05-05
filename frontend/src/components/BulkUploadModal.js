@@ -12,6 +12,8 @@ export default function BulkUploadModal({ type, onClose }) {
     const [processed, setProcessed] = useState([]);
     const [failed, setFailed] = useState([]);
     const [uploading, setUploading] = useState(false);
+    const [showPending, setShowPending] = useState(true);   // expanded by default
+    const [showFailed, setShowFailed] = useState(true);     // expanded by default when present
     const [showProcessed, setShowProcessed] = useState(false);
     const fileRef = useRef(null);
 
@@ -110,15 +112,17 @@ export default function BulkUploadModal({ type, onClose }) {
 
                 {/* Content */}
                 <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
-                    {/* Pending / Processing Files */}
+                    {/* Pending / Processing Files (expand/collapse) */}
                     <div>
-                        <h3 className="text-sm font-medium text-zinc-400 uppercase tracking-wider mb-3">
+                        <button onClick={() => setShowPending(p => !p)} data-testid="toggle-pending-btn"
+                            className="flex items-center gap-2 text-sm font-medium text-zinc-400 uppercase tracking-wider hover:text-zinc-200 transition-colors w-full text-left mb-3">
+                            {showPending ? <FolderOpen size={18} /> : <Folder size={18} />}
                             Pending / Processing ({pending.length})
-                        </h3>
-                        {pending.length === 0 ? (
-                            <p className="text-sm text-zinc-600" data-testid="no-pending">No pending files. Upload files above to start processing.</p>
+                        </button>
+                        {showPending && (pending.length === 0 ? (
+                            <p className="text-sm text-zinc-600 pl-6" data-testid="no-pending">No pending files. Upload files above to start processing.</p>
                         ) : (
-                            <div className="space-y-2" data-testid="pending-list">
+                            <div className="space-y-2 pl-2" data-testid="pending-list">
                                 {pending.map(f => (
                                     <div key={f.id} className="flex items-center gap-3 px-4 py-2.5 bg-zinc-800/50 border border-zinc-800" data-testid={`pending-file-${f.id}`}>
                                         {statusIcon(f.status)}
@@ -134,26 +138,30 @@ export default function BulkUploadModal({ type, onClose }) {
                                     </div>
                                 ))}
                             </div>
-                        )}
+                        ))}
                     </div>
 
-                    {/* Failed Files */}
+                    {/* Failed Files (expand/collapse) */}
                     {failed.length > 0 && (
                         <div>
-                            <h3 className="text-sm font-medium text-red-400/80 uppercase tracking-wider mb-3">
+                            <button onClick={() => setShowFailed(p => !p)} data-testid="toggle-failed-btn"
+                                className="flex items-center gap-2 text-sm font-medium text-red-400/80 uppercase tracking-wider hover:text-red-300 transition-colors w-full text-left mb-3">
+                                {showFailed ? <FolderOpen size={18} /> : <Folder size={18} />}
                                 Failed ({failed.length})
-                            </h3>
-                            <div className="space-y-2" data-testid="failed-list">
-                                {failed.map(f => (
-                                    <div key={f.id} className="px-4 py-2.5 bg-red-950/20 border border-red-900/30" data-testid={`failed-file-${f.id}`}>
-                                        <div className="flex items-center gap-3">
-                                            <WarningCircle size={16} className="text-red-400 shrink-0" />
-                                            <span className="text-sm truncate flex-1 text-red-300">{f.name}</span>
+                            </button>
+                            {showFailed && (
+                                <div className="space-y-2 pl-2" data-testid="failed-list">
+                                    {failed.map(f => (
+                                        <div key={f.id} className="px-4 py-2.5 bg-red-950/20 border border-red-900/30" data-testid={`failed-file-${f.id}`}>
+                                            <div className="flex items-center gap-3">
+                                                <WarningCircle size={16} className="text-red-400 shrink-0" />
+                                                <span className="text-sm truncate flex-1 text-red-300">{f.name}</span>
+                                            </div>
+                                            {f.error && <p className="text-xs text-red-400/70 mt-1 pl-7">{f.error}</p>}
                                         </div>
-                                        {f.error && <p className="text-xs text-red-400/70 mt-1 pl-7">{f.error}</p>}
-                                    </div>
-                                ))}
-                            </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     )}
 
