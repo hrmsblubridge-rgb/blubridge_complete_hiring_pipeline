@@ -800,13 +800,14 @@ async def export_scores(
     await _require_auth(request)
 
     # Same source as /attended-for-scores (HR pipeline_data)
+    schedule_date_filter = {"$nin": [None, ""], "$exists": True}
+    if startDate:
+        schedule_date_filter["$gte"] = startDate
+    if endDate:
+        schedule_date_filter["$lte"] = endDate
     match = {"isTest": {"$ne": True},
              "otp_verified": {"$nin": [None, ""], "$exists": True},
-             "schedule_date": {"$nin": [None, ""], "$exists": True}}
-    if startDate:
-        match["schedule_date"] = {**match.get("schedule_date", {}), "$gte": startDate}
-    if endDate:
-        match["schedule_date"] = {**match.get("schedule_date", {}), "$lte": endDate}
+             "schedule_date": schedule_date_filter}
 
     docs = await _db.pipeline_data.find(match, {
         "_id": 0, "email": 1, "phone": 1, "name": 1,
