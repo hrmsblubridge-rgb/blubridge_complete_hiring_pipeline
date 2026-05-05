@@ -3,17 +3,18 @@ import { useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { ArrowLeft, FunnelSimple, ArrowCounterClockwise, SpinnerGap, CaretLeft, CaretRight, CaretDoubleLeft, CaretDoubleRight, MagnifyingGlass } from '@phosphor-icons/react';
+import SortableHeader from '../components/SortableHeader';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 const PAGE_SIZE = 100;
 
 const COLUMNS = [
-    { key: 'name', label: 'Name' },
-    { key: 'email', label: 'Email' },
-    { key: 'phone', label: 'Phone' },
-    { key: 'gender', label: 'Gender' },
-    { key: 'date_of_birth', label: 'Date of Birth' },
-    { key: 'date_of_application', label: 'Date of Application' },
+    { key: 'name', label: 'Name', sortable: true },
+    { key: 'email', label: 'Email', sortable: true },
+    { key: 'phone', label: 'Phone', sortable: true },
+    { key: 'gender', label: 'Gender', sortable: true },
+    { key: 'date_of_birth', label: 'Date of Birth', sortable: true },
+    { key: 'date_of_application', label: 'Date of Application', sortable: true },
     { key: 'status', label: 'Status' },
 ];
 
@@ -37,14 +38,16 @@ export default function RoleDrillDown() {
     const [endDate, setEndDate] = useState('');
     const [search, setSearch] = useState('');
     const [goToPage, setGoToPage] = useState('');
+    const [sort, setSort] = useState(null);
 
-    const fetchData = useCallback(async (filters = {}, pg = 1) => {
+    const fetchData = useCallback(async (filters = {}, pg = 1, sortState = null) => {
         setLoading(true);
         try {
             const params = { jobRole: decodedRole, page: pg, limit: PAGE_SIZE };
             if (filters.startDate) params.startDate = filters.startDate;
             if (filters.endDate) params.endDate = filters.endDate;
             if (filters.search) params.search = filters.search;
+            if (sortState?.by) { params.sort_by = sortState.by; params.sort_dir = sortState.dir; }
             const res = await axios.get(`${API}/api/role`, { params, withCredentials: true });
             setData(res.data.data);
             setTotal(res.data.total);
@@ -55,24 +58,30 @@ export default function RoleDrillDown() {
         }
     }, [decodedRole]);
 
-    useEffect(() => { fetchData({}, 1); }, [fetchData]);
+    useEffect(() => { fetchData({}, 1, null); }, [fetchData]);
 
     const totalPages = Math.ceil(total / PAGE_SIZE) || 1;
 
     const applyFilters = (pg = 1) => {
         setPage(pg);
-        fetchData({ startDate, endDate, search }, pg);
+        fetchData({ startDate, endDate, search }, pg, sort);
     };
 
     const handleReset = () => {
-        setStartDate(''); setEndDate(''); setSearch(''); setPage(1);
-        fetchData({}, 1);
+        setStartDate(''); setEndDate(''); setSearch(''); setPage(1); setSort(null);
+        fetchData({}, 1, null);
+    };
+
+    const handleSortChange = (next) => {
+        setSort(next);
+        setPage(1);
+        fetchData({ startDate, endDate, search }, 1, next);
     };
 
     const navigatePage = (pg) => {
         if (pg < 1 || pg > totalPages) return;
         setPage(pg);
-        fetchData({ startDate, endDate, search }, pg);
+        fetchData({ startDate, endDate, search }, pg, sort);
     };
 
     const handleGoToPage = () => {
@@ -146,7 +155,11 @@ export default function RoleDrillDown() {
                                 <thead>
                                     <tr className="bg-zinc-900 border-b border-zinc-800">
                                         {COLUMNS.map(col => (
-                                            <th key={col.key} className="text-left px-4 py-3 font-medium text-zinc-400 text-xs uppercase tracking-wider whitespace-nowrap">{col.label}</th>
+                                            <th key={col.key} className="text-left px-4 py-3 font-medium text-zinc-400 text-xs uppercase tracking-wider whitespace-nowrap">
+                                                {col.sortable ? (
+                                                    <SortableHeader label={col.label} sortKey={col.key} sort={sort} onSortChange={handleSortChange} />
+                                                ) : col.label}
+                                            </th>
                                         ))}
                                     </tr>
                                 </thead>

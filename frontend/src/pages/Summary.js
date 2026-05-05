@@ -1,22 +1,23 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { ArrowLeft, MagnifyingGlass, FunnelSimple, ArrowCounterClockwise, SpinnerGap } from '@phosphor-icons/react';
+import SortableHeader from '../components/SortableHeader';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
 const COLUMNS = [
-    { key: 'job_role', label: 'Job Role' },
-    { key: 'total_naukri', label: 'Total Naukri Applicants' },
-    { key: 'total_registered', label: 'Total Registered Applicants' },
-    { key: 'total_unregistered', label: 'Total Unregistered Applicants' },
-    { key: 'shortlisted', label: 'Shortlisted' },
-    { key: 'rejected', label: 'Rejected' },
-    { key: 'scheduled', label: 'Interview Scheduled' },
-    { key: 'not_scheduled', label: 'Interview Not Scheduled' },
-    { key: 'attended', label: 'Attended' },
-    { key: 'not_attended', label: 'Not Attended' },
+    { key: 'job_role', label: 'Job Role', sortable: true },
+    { key: 'total_naukri', label: 'Total Naukri Applicants', sortable: true },
+    { key: 'total_registered', label: 'Total Registered Applicants', sortable: true },
+    { key: 'total_unregistered', label: 'Total Unregistered Applicants', sortable: true },
+    { key: 'shortlisted', label: 'Shortlisted', sortable: true },
+    { key: 'rejected', label: 'Rejected', sortable: true },
+    { key: 'scheduled', label: 'Interview Scheduled', sortable: true },
+    { key: 'not_scheduled', label: 'Interview Not Scheduled', sortable: true },
+    { key: 'attended', label: 'Attended', sortable: true },
+    { key: 'not_attended', label: 'Not Attended', sortable: true },
 ];
 
 export default function Summary() {
@@ -28,6 +29,17 @@ export default function Summary() {
     const [endDate, setEndDate] = useState('');
     const [search, setSearch] = useState('');
     const [activeFilters, setActiveFilters] = useState({ startDate: '', endDate: '', search: '' });
+    const [sort, setSort] = useState(null);
+
+    const sortedData = useMemo(() => {
+        if (!sort?.by) return data;
+        const dir = sort.dir === 'desc' ? -1 : 1;
+        return [...data].sort((a, b) => {
+            const av = a?.[sort.by]; const bv = b?.[sort.by];
+            if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+            return String(av ?? '').localeCompare(String(bv ?? ''), undefined, { numeric: true }) * dir;
+        });
+    }, [data, sort]);
 
     const fetchData = useCallback(async (filters = {}) => {
         setLoading(true);
@@ -139,7 +151,9 @@ export default function Summary() {
                                 <tr className="bg-zinc-900 border-b border-zinc-800">
                                     {COLUMNS.map(col => (
                                         <th key={col.key} className="text-left px-4 py-3 font-medium text-zinc-400 text-xs uppercase tracking-wider whitespace-nowrap">
-                                            {col.label}
+                                            {col.sortable ? (
+                                                <SortableHeader label={col.label} sortKey={col.key} sort={sort} onSortChange={setSort} />
+                                            ) : col.label}
                                         </th>
                                     ))}
                                 </tr>
@@ -153,7 +167,7 @@ export default function Summary() {
                                     </tr>
                                 ) : (
                                     <>
-                                        {data.map((row, i) => (
+                                        {sortedData.map((row, i) => (
                                             <tr key={i} className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors"
                                                 data-testid={`summary-row-${i}`}>
                                                 {COLUMNS.map(col => (

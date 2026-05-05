@@ -5,8 +5,17 @@ import { toast } from 'sonner';
 import { ArrowLeft, FunnelSimple, PencilSimple, X, Plus, Trash, FloppyDisk, Export, UploadSimple } from '@phosphor-icons/react';
 import Pagination from '../components/Pagination';
 import { formatDateDDMMYYYY } from '../utils/dateFormat';
+import SortableHeader from '../components/SortableHeader';
 
 const API = process.env.REACT_APP_BACKEND_URL;
+
+const COLUMNS = [
+    { key: 'name', label: 'NAME', sortable: true },
+    { key: 'schedule_date', label: 'DATE OF INTERVIEW', sortable: true },
+    { key: 'job_role', label: 'JOB ROLE', sortable: true },
+    { key: 'result_status', label: 'STATUS', sortable: true },
+    { key: '_action', label: '' },
+];
 
 export default function UpdateScores() {
     const navigate = useNavigate();
@@ -24,17 +33,19 @@ export default function UpdateScores() {
     const [showRounds, setShowRounds] = useState(false);
     const [roundName, setRoundName] = useState('');
     const [editRoundId, setEditRoundId] = useState(null);
+    const [sort, setSort] = useState(null);
 
     const fetchRounds = useCallback(async () => {
         try { const r = await axios.get(`${API}/api/bb/rounds`, { withCredentials: true }); setRounds(r.data.rounds || []); } catch {}
     }, []);
 
-    const fetchApplicants = useCallback(async (pg = 1, sz = 100) => {
+    const fetchApplicants = useCallback(async (pg = 1, sz = 100, sortState = null) => {
         setLoading(true);
         try {
             const params = { page: pg, limit: sz };
             if (startDate) params.startDate = startDate;
             if (endDate) params.endDate = endDate;
+            if (sortState?.by) { params.sort_by = sortState.by; params.sort_dir = sortState.dir; }
             const r = await axios.get(`${API}/api/bb/attended-for-scores`, { params, withCredentials: true });
             setApplicants(r.data.data || []);
             setTotal(r.data.total || 0);
@@ -43,11 +54,12 @@ export default function UpdateScores() {
     }, [startDate, endDate]);
 
     useEffect(() => { fetchRounds(); }, [fetchRounds]);
-    useEffect(() => { fetchApplicants(1, pageSize); setPage(1); }, [fetchApplicants, pageSize]);
+    useEffect(() => { fetchApplicants(1, pageSize, sort); setPage(1); }, [fetchApplicants, pageSize, sort]);
 
-    const applyFilter = () => { setPage(1); fetchApplicants(1, pageSize); };
+    const applyFilter = () => { setPage(1); fetchApplicants(1, pageSize, sort); };
+    const handleSortChange = (next) => { setSort(next); setPage(1); };
     const totalPages = Math.ceil(total / pageSize) || 1;
-    const navPage = (pg) => { if (pg >= 1 && pg <= totalPages) { setPage(pg); fetchApplicants(pg, pageSize); } };
+    const navPage = (pg) => { if (pg >= 1 && pg <= totalPages) { setPage(pg); fetchApplicants(pg, pageSize, sort); } };
 
     const openUpdate = (app) => {
         setShowUpdate(app);
@@ -170,7 +182,13 @@ export default function UpdateScores() {
                 <div className="overflow-x-auto border border-zinc-800" data-testid="scores-table">
                     <table className="w-full text-sm">
                         <thead><tr className="bg-zinc-900 border-b border-zinc-800">
-                            {['NAME', 'DATE OF INTERVIEW', 'JOB ROLE', 'STATUS', ''].map(h => <th key={h} className="text-left px-4 py-3 font-medium text-zinc-400 text-xs uppercase tracking-wider whitespace-nowrap">{h}</th>)}
+                            {COLUMNS.map(c => (
+                                <th key={c.key} className="text-left px-4 py-3 font-medium text-zinc-400 text-xs uppercase tracking-wider whitespace-nowrap">
+                                    {c.sortable ? (
+                                        <SortableHeader label={c.label} sortKey={c.key} sort={sort} onSortChange={handleSortChange} />
+                                    ) : c.label}
+                                </th>
+                            ))}
                         </tr></thead>
                         <tbody>
                             {applicants.length === 0 ? <tr><td colSpan={5} className="px-4 py-16 text-center text-zinc-500">No attended applicants found.</td></tr> :

@@ -144,6 +144,19 @@ def _build_ui_message(reason: str, grad_min=None, grad_max=None) -> str:
     return msg
 
 
+def _build_sort(sort_by, sort_dir, allowed: dict, default: dict) -> dict:
+    """Whitelist-based sort spec builder. Returns Mongo $sort dict.
+    `allowed` maps API field → DB field. Falls back to `default` on unknown input.
+    """
+    if not sort_by:
+        return default
+    db_field = allowed.get(sort_by)
+    if not db_field:
+        return default
+    direction = -1 if (sort_dir or "").lower() == "desc" else 1
+    return {db_field: direction}
+
+
 # ============ JOB ROLES ============
 
 class JobRoleBody(BaseModel):
@@ -455,6 +468,8 @@ async def get_interview_reports(
     jobRole: str = Query(None), attendance: str = Query(None),
     collegeType: str = Query(None),
     page: int = Query(1, ge=1), limit: int = Query(100, ge=1, le=500),
+    sort_by: Optional[str] = Query(None),
+    sort_dir: Optional[str] = Query(None),
 ):
     """Interview Schedule Reports — OPTIMIZED (May 2026).
     Filters and summary counts are computed at the DB level using the persisted
@@ -506,7 +521,14 @@ async def get_interview_reports(
     skip = (page - 1) * limit
     pipeline = [
         {"$match": match},
-        {"$sort": {"schedule_date": -1, "schedule_time": -1}},
+        {"$sort": _build_sort(sort_by, sort_dir, allowed={
+            "name": "name", "email": "email",
+            "date": "schedule_date", "time": "schedule_time",
+            "schedule_date": "schedule_date", "schedule_time": "schedule_time",
+            "job_role": "_normalized_job_role",
+            "college_type": "_nirf_category",
+            "attendance": "otp_verified",
+        }, default={"schedule_date": -1, "schedule_time": -1})},
         {"$skip": skip},
         {"$limit": limit},
         {"$project": {
@@ -607,6 +629,8 @@ async def get_attended_for_scores(
     endDate: str = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(100, ge=1, le=500),
+    sort_by: Optional[str] = Query(None),
+    sort_dir: Optional[str] = Query(None),
 ):
     """Update Applicants Scores — with pagination (May 2026).
     Returns {data, total, page, limit, totalPages, available_rounds}.
@@ -625,7 +649,12 @@ async def get_attended_for_scores(
     skip = (page - 1) * limit
     pipeline = [
         {"$match": match},
-        {"$sort": {"schedule_date": -1}},
+        {"$sort": _build_sort(sort_by, sort_dir, allowed={
+            "name": "name", "email": "email", "phone": "phone",
+            "schedule_date": "schedule_date",
+            "job_role": "_normalized_job_role",
+            "result_status": "result_status",
+        }, default={"schedule_date": -1})},
         {"$skip": skip},
         {"$limit": limit},
         {"$project": {

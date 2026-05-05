@@ -5,22 +5,23 @@ import dayjs from 'dayjs';
 import { toast } from 'sonner';
 import { ArrowLeft, FunnelSimple, ArrowCounterClockwise, SpinnerGap, CaretLeft, CaretRight, CaretDoubleLeft, CaretDoubleRight, MagnifyingGlass } from '@phosphor-icons/react';
 import { formatTime12H } from '../utils/dateFormat';
+import SortableHeader from '../components/SortableHeader';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 const PAGE_SIZES = [10, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500];
 
 const COLUMNS = [
-    { key: 'name', label: 'Name' },
-    { key: 'email', label: 'Email' },
-    { key: 'phone', label: 'Phone' },
-    { key: 'college_status', label: 'College Status' },
-    { key: 'college', label: 'College' },
-    { key: 'degree', label: 'Degree' },
-    { key: 'job_role', label: 'Job Role' },
+    { key: 'name', label: 'Name', sortable: true },
+    { key: 'email', label: 'Email', sortable: true },
+    { key: 'phone', label: 'Phone', sortable: true },
+    { key: 'college_status', label: 'College Status', sortable: true },
+    { key: 'college', label: 'College', sortable: true },
+    { key: 'degree', label: 'Degree', sortable: true },
+    { key: 'job_role', label: 'Job Role', sortable: true },
     { key: 'registered_status', label: 'Registered Status' },
-    { key: 'registered_date', label: 'Registered Date' },
-    { key: 'schedule_date', label: 'Schedule Date' },
-    { key: 'schedule_time', label: 'Schedule Time' },
+    { key: 'registered_date', label: 'Registered Date', sortable: true },
+    { key: 'schedule_date', label: 'Schedule Date', sortable: true },
+    { key: 'schedule_time', label: 'Schedule Time', sortable: true },
     { key: 'attended_or_not', label: 'Attended Or Not' },
     { key: 'result_status', label: 'Result Status' },
 ];
@@ -50,6 +51,7 @@ export default function Applicants() {
     const [search, setSearch] = useState('');
     const [collegeStatus, setCollegeStatus] = useState('');
     const [goToPage, setGoToPage] = useState('');
+    const [sort, setSort] = useState(null);
 
     useEffect(() => {
         (async () => {
@@ -60,7 +62,7 @@ export default function Applicants() {
         })();
     }, []);
 
-    const fetchData = useCallback(async (filters = {}, pg = 1, size = 100) => {
+    const fetchData = useCallback(async (filters = {}, pg = 1, size = 100, sortState = null) => {
         setLoading(true);
         try {
             const params = { page: pg, limit: size };
@@ -70,6 +72,7 @@ export default function Applicants() {
             if (filters.endDate) params.endDate = filters.endDate;
             if (filters.search) params.search = filters.search;
             if (filters.collegeStatus) params.collegeStatus = filters.collegeStatus;
+            if (sortState?.by) { params.sort_by = sortState.by; params.sort_dir = sortState.dir; }
             const res = await axios.get(`${API}/api/applicants`, { params, withCredentials: true });
             setData(res.data.data);
             setTotal(res.data.total);
@@ -80,30 +83,36 @@ export default function Applicants() {
         }
     }, []);
 
-    useEffect(() => { fetchData({}, 1, 100); }, [fetchData]);
+    useEffect(() => { fetchData({}, 1, 100, null); }, [fetchData]);
 
     const totalPages = Math.ceil(total / pageSize) || 1;
 
     const applyFilters = (pg = 1) => {
         setPage(pg);
-        fetchData({ jobRole, dateType, startDate, endDate, search, collegeStatus }, pg, pageSize);
+        fetchData({ jobRole, dateType, startDate, endDate, search, collegeStatus }, pg, pageSize, sort);
     };
 
     const handleReset = () => {
-        setJobRole(''); setDateType('Registered'); setStartDate(''); setEndDate(''); setSearch(''); setCollegeStatus(''); setPage(1); setPageSize(100);
-        fetchData({}, 1, 100);
+        setJobRole(''); setDateType('Registered'); setStartDate(''); setEndDate(''); setSearch(''); setCollegeStatus(''); setPage(1); setPageSize(100); setSort(null);
+        fetchData({}, 1, 100, null);
+    };
+
+    const handleSortChange = (next) => {
+        setSort(next);
+        fetchData({ jobRole, dateType, startDate, endDate, search, collegeStatus }, 1, pageSize, next);
+        setPage(1);
     };
 
     const navigatePage = (pg) => {
         if (pg < 1 || pg > totalPages) return;
         setPage(pg);
-        fetchData({ jobRole, dateType, startDate, endDate, search, collegeStatus }, pg, pageSize);
+        fetchData({ jobRole, dateType, startDate, endDate, search, collegeStatus }, pg, pageSize, sort);
     };
 
     const handlePageSizeChange = (newSize) => {
         setPageSize(newSize);
         setPage(1);
-        fetchData({ jobRole, dateType, startDate, endDate, search, collegeStatus }, 1, newSize);
+        fetchData({ jobRole, dateType, startDate, endDate, search, collegeStatus }, 1, newSize, sort);
     };
 
     const handleGoToPage = () => {
@@ -189,7 +198,11 @@ export default function Applicants() {
                                 <thead>
                                     <tr className="bg-zinc-900 border-b border-zinc-800">
                                         {COLUMNS.map(col => (
-                                            <th key={col.key} className="text-left px-4 py-3 font-medium text-zinc-400 text-xs uppercase tracking-wider whitespace-nowrap">{col.label}</th>
+                                            <th key={col.key} className="text-left px-4 py-3 font-medium text-zinc-400 text-xs uppercase tracking-wider whitespace-nowrap">
+                                                {col.sortable ? (
+                                                    <SortableHeader label={col.label} sortKey={col.key} sort={sort} onSortChange={handleSortChange} />
+                                                ) : col.label}
+                                            </th>
                                         ))}
                                     </tr>
                                 </thead>

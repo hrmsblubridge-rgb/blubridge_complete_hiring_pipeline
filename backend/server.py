@@ -144,6 +144,22 @@ def clean_value(val):
         return val.strftime("%I:%M %p") if hasattr(val, 'strftime') else str(val)
     return val
 
+
+def build_sort(sort_by: Optional[str], sort_dir: Optional[str], allowed: dict, default: dict) -> dict:
+    """Translate API-facing sort_by/sort_dir into a Mongo $sort dict.
+    `allowed` maps the public field name to its concrete DB field path.
+    Falls back to `default` when input is empty or not whitelisted.
+    sort_dir: 'asc' (default) or 'desc'.
+    """
+    if not sort_by:
+        return default
+    db_field = allowed.get(sort_by)
+    if not db_field:
+        return default
+    direction = -1 if (sort_dir or "").lower() == "desc" else 1
+    return {db_field: direction}
+
+
 def parse_file(file_content: bytes, filename: str) -> pd.DataFrame:
     if filename.lower().endswith('.csv'):
         for encoding in ['utf-8', 'latin-1', 'cp1252']:
@@ -1321,6 +1337,8 @@ async def get_role_applicants(
     search: str = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(100, ge=1, le=500),
+    sort_by: Optional[str] = Query(None),
+    sort_dir: Optional[str] = Query(None),
     user: str = Depends(get_current_user)
 ):
     """Lightweight applicant table — no score fetching. Supports search by name/email/phone."""
@@ -1339,12 +1357,16 @@ async def get_role_applicants(
 
     total = await db.registered_candidates.count_documents(match)
     skip = (page - 1) * limit
+    sort_spec = build_sort(sort_by, sort_dir, allowed={
+        "name": "name", "email": "email", "phone": "phone", "gender": "gender",
+        "date_of_birth": "date_of_birth", "date_of_application": "date_of_application",
+    }, default={"name": 1})
     cursor = db.registered_candidates.find(match, {
         "_id": 0, "name": 1, "email": 1, "phone": 1, "gender": 1,
         "date_of_birth": 1, "date_of_application": 1,
         "email_type": 1, "otp_verified": 1,
         "schedule_date": 1, "schedule_time": 1
-    }).skip(skip).limit(limit)
+    }).sort(list(sort_spec.items())).skip(skip).limit(limit)
     docs = await cursor.to_list(None)
 
     applicants = [{
@@ -1378,6 +1400,8 @@ async def get_global_applicants(
     collegeStatus: str = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(100, ge=1, le=500),
+    sort_by: Optional[str] = Query(None),
+    sort_dir: Optional[str] = Query(None),
     user: str = Depends(get_current_user)
 ):
     """Global registered applicants table (HR-internal source, May 2026 rule).
@@ -1429,7 +1453,13 @@ async def get_global_applicants(
 
     pipeline = [
         {"$match": match},
-        {"$sort": {"name": 1}},
+        {"$sort": build_sort(sort_by, sort_dir, allowed={
+            "name": "name", "email": "email", "phone": "phone",
+            "college_status": "_college_status", "college": "_college_resolved",
+            "degree": "degree", "job_role": "_normalized_job_role",
+            "registered_date": "last_update", "schedule_date": "schedule_date",
+            "schedule_time": "schedule_time",
+        }, default={"name": 1})},
         {"$skip": skip},
         {"$limit": limit},
         {"$project": projection},
@@ -1524,6 +1554,8 @@ async def get_attended_applicants(
     collegeStatus: str = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(100, ge=1, le=500),
+    sort_by: Optional[str] = Query(None),
+    sort_dir: Optional[str] = Query(None),
     user: str = Depends(get_current_user)
 ):
     """Global attended applicants table (HR-internal pipeline_data) with scores.
@@ -1591,7 +1623,15 @@ async def get_attended_applicants(
 
     pipeline = [
         {"$match": match},
-        {"$sort": {"name": 1}},
+        {"$sort": build_sort(sort_by, sort_dir, allowed={
+            "name": "name", "email": "email", "phone": "phone",
+            "college_status": "_college_status", "college": "_college_resolved",
+            "degree": "degree", "course": "course",
+            "year_of_graduation": "year_of_graduation",
+            "job_role": "_normalized_job_role",
+            "schedule_date": "schedule_date", "schedule_time": "schedule_time",
+            "result_status": "result_status",
+        }, default={"name": 1})},
         {"$skip": skip},
         {"$limit": limit},
     ]

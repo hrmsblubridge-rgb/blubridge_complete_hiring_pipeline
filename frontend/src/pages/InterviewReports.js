@@ -6,8 +6,19 @@ import dayjs from 'dayjs';
 import { formatDateDDMMYYYY, formatTime12H } from '../utils/dateFormat';
 import { ArrowLeft, FunnelSimple, ArrowCounterClockwise, Export } from '@phosphor-icons/react';
 import Pagination from '../components/Pagination';
+import SortableHeader from '../components/SortableHeader';
 
 const API = process.env.REACT_APP_BACKEND_URL;
+
+const COLUMNS = [
+    { key: 'name', label: 'NAME', sortable: true },
+    { key: 'email', label: 'EMAIL', sortable: true },
+    { key: 'date', label: 'DATE', sortable: true },
+    { key: 'time', label: 'TIME', sortable: true },
+    { key: 'job_role', label: 'JOB ROLE', sortable: true },
+    { key: 'college_type', label: 'COLLEGE TYPE', sortable: true },
+    { key: 'attendance', label: 'ATTENDANCE', sortable: true },
+];
 
 export default function InterviewReports() {
     const navigate = useNavigate();
@@ -24,12 +35,13 @@ export default function InterviewReports() {
     const [collegeType, setCollegeType] = useState('');
     const [bbRoles, setBbRoles] = useState([]);
     const [showAllRoles, setShowAllRoles] = useState(false);
+    const [sort, setSort] = useState(null);
 
     useEffect(() => {
         axios.get(`${API}/api/bb/job-roles`, { withCredentials: true }).then(r => setBbRoles(r.data.roles || [])).catch(() => {});
     }, []);
 
-    const fetchData = useCallback(async (pg = 1, sz = 100) => {
+    const fetchData = useCallback(async (pg = 1, sz = 100, sortState = null) => {
         setLoading(true);
         try {
             const params = { page: pg, limit: sz };
@@ -38,6 +50,7 @@ export default function InterviewReports() {
             if (jobRole) params.jobRole = jobRole;
             if (attendance) params.attendance = attendance;
             if (collegeType) params.collegeType = collegeType;
+            if (sortState?.by) { params.sort_by = sortState.by; params.sort_dir = sortState.dir; }
             const res = await axios.get(`${API}/api/bb/interview-reports`, { params, withCredentials: true });
             setData(res.data.data || []);
             setTotal(res.data.total || 0);
@@ -46,12 +59,13 @@ export default function InterviewReports() {
         finally { setLoading(false); }
     }, [startDate, endDate, jobRole, attendance, collegeType]);
 
-    useEffect(() => { fetchData(1, pageSize); }, [fetchData, pageSize]);
+    useEffect(() => { fetchData(1, pageSize, sort); }, [fetchData, pageSize, sort]);
 
-    const applyFilters = () => { setPage(1); fetchData(1, pageSize); };
-    const resetFilters = () => { setStartDate(''); setEndDate(''); setJobRole(''); setAttendance(''); setCollegeType(''); setPage(1); };
+    const applyFilters = () => { setPage(1); fetchData(1, pageSize, sort); };
+    const resetFilters = () => { setStartDate(''); setEndDate(''); setJobRole(''); setAttendance(''); setCollegeType(''); setPage(1); setSort(null); };
+    const handleSortChange = (next) => { setSort(next); setPage(1); };
     const totalPages = Math.ceil(total / pageSize) || 1;
-    const navPage = (pg) => { if (pg >= 1 && pg <= totalPages) { setPage(pg); fetchData(pg, pageSize); } };
+    const navPage = (pg) => { if (pg >= 1 && pg <= totalPages) { setPage(pg); fetchData(pg, pageSize, sort); } };
 
     const handleExport = () => {
         const headers = ['NAME', 'EMAIL', 'DATE', 'TIME', 'JOB ROLE', 'COLLEGE TYPE', 'ATTENDANCE'];
@@ -109,7 +123,7 @@ export default function InterviewReports() {
                             <span className="text-xs text-zinc-500 uppercase tracking-wider mr-2">Roles:</span>
                             <span className="px-2 py-0.5 bg-cyan-900/40 text-cyan-400 text-xs rounded">All ({total})</span>
                             {visibleRoles.map(([r, c]) => (
-                                <button key={r} onClick={() => { setJobRole(r); setPage(1); fetchData(1, pageSize); }}
+                                <button key={r} onClick={() => { setJobRole(r); setPage(1); fetchData(1, pageSize, sort); }}
                                     className={`px-2 py-0.5 text-xs rounded transition-colors ${jobRole === r ? 'bg-cyan-700 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}>{r} ({c})</button>
                             ))}
                             {roleEntries.length > 5 && <button onClick={() => setShowAllRoles(p => !p)} className="text-xs text-cyan-500 hover:text-cyan-400">{showAllRoles ? 'SHOW LESS' : 'SHOW ALL'}</button>}
@@ -130,7 +144,13 @@ export default function InterviewReports() {
                 <div className="overflow-x-auto border border-zinc-800" data-testid="reports-table">
                     <table className="w-full text-sm">
                         <thead><tr className="bg-zinc-900 border-b border-zinc-800">
-                            {['NAME', 'EMAIL', 'DATE', 'TIME', 'JOB ROLE', 'COLLEGE TYPE', 'ATTENDANCE'].map(h => <th key={h} className="text-left px-4 py-3 font-medium text-zinc-400 text-xs uppercase tracking-wider whitespace-nowrap">{h}</th>)}
+                            {COLUMNS.map(c => (
+                                <th key={c.key} className="text-left px-4 py-3 font-medium text-zinc-400 text-xs uppercase tracking-wider whitespace-nowrap">
+                                    {c.sortable ? (
+                                        <SortableHeader label={c.label} sortKey={c.key} sort={sort} onSortChange={handleSortChange} />
+                                    ) : c.label}
+                                </th>
+                            ))}
                         </tr></thead>
                         <tbody>
                             {data.length === 0 ? <tr><td colSpan={7} className="px-4 py-16 text-center text-zinc-500">No records found.</td></tr> :

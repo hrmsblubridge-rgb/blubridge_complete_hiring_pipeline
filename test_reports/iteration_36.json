@@ -1,0 +1,60 @@
+{
+  "summary": "Iteration 36 — Global column sorting verified end-to-end. Backend pytest 11/11 PASS in 22s covering /api/applicants (name asc/desc, email desc, invalid sort_by fallback to default), /api/attended (schedule_date asc/desc), /api/role (name desc), /api/bb/interview-reports (name asc + invalid fallback), /api/bb/attended-for-scores (schedule_date asc, name desc), and pagination-with-sort regression. Frontend Playwright on REACT_APP_BACKEND_URL: Roles page (/roles) verified — default first row='01fe22bca174', after Name asc-click='01fe22bca174', after second click (desc)='ꜱᴀʀᴀᴠᴀɴᴀ ᴋᴜᴍᴀʀ', third click resets to default — all asserts pass; SortableHeader gets cyan-400 active class + svg caret; Email asc=' -revanthkumar36143322@gmail.com' / desc='zzmahil06@gmail.com'. Summary page (/summary) confirmed CLIENT-SIDE: 0 /api/* requests fired during 2 sort clicks. AttendedRoles, InterviewReports, UpdateScores all load and sort headers fire — InterviewReports and UpdateScores tables are EMPTY in current dataset so visual asc/desc cell diff isn't observable, but backend pytest covers those endpoints. RoleDrillDown / AttendedDrillDown route NOT WIRED in App.js — see issue below.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "App.js routing", "issue": "RoleDrillDown.js and AttendedDrillDown.js exist in /app/frontend/src/pages/ with sort wired, but App.js has NO Route for /role/:role or /attended-role/:role. Visiting /role/<x> or /attended-role/<x> falls through the * wildcard and redirects to /home. Either dead code or missing route registration.", "selector": "n/a", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_tests": {
+    "backend_pytest": [
+      "TestApplicantsSort::test_sort_by_name_asc",
+      "TestApplicantsSort::test_sort_by_name_desc — first row differs between asc/desc",
+      "TestApplicantsSort::test_sort_by_email_desc",
+      "TestApplicantsSort::test_invalid_sort_by_falls_back — sort_by='__hack__; DROP' returns 200 with default (name asc) order",
+      "TestAttendedSort::test_sort_by_schedule_date_desc",
+      "TestRoleSort::test_sort_by_name_desc",
+      "TestBBInterviewReportsSort::test_sort_by_name_asc",
+      "TestBBInterviewReportsSort::test_invalid_sort_by_falls_back",
+      "TestBBAttendedForScoresSort::test_sort_by_schedule_date_asc",
+      "TestBBAttendedForScoresSort::test_sort_by_name_desc",
+      "TestRegressionWithSort::test_pagination_with_sort — last(p1) <= first(p2) under name asc"
+    ],
+    "frontend_e2e": [
+      "/roles Name header: default→asc→desc→none cycle confirmed; first-row name changes between asc and desc; 3rd click returns to default order",
+      "/roles Email header asc/desc differs",
+      "SortableHeader active state: text-cyan-400 class applied + svg caret rendered; inactive state shows CaretUpDown icon",
+      "/summary client-side sort: 0 /api requests fired across 2 sort clicks (verified via page.on request listener)"
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration36_sorting.py",
+    "/app/test_reports/pytest/pytest_iter36.xml"
+  ],
+  "action_items": [
+    "Add Route entries in /app/frontend/src/App.js for /role/:role → RoleDrillDown and /attended-role/:role → AttendedDrillDown (or delete the unused files if drill-down was intentionally removed). Currently both URLs redirect to /home via the wildcard.",
+    "Verify whether the testing request's claim 'drill-down from Roles' implies a different route (e.g., a sub-view inside Roles.js with state-based job role filter) that already exists — if so, remove the orphaned RoleDrillDown.js / AttendedDrillDown.js to avoid confusion."
+  ],
+  "critical_code_review_comments": [
+    "/app/backend/server.py is now 2603 lines — well over the 700-line guideline. build_sort() helper is fine but server.py should be split (auth, applicants, attended, role, dashboard).",
+    "/app/backend/bb_modules.py is 1540+ lines (also flagged in iter33–35). _build_sort() duplicates server.py build_sort() — extract a shared helper into a common utils module.",
+    "build_sort silently falls back to default on invalid sort_by — user-friendly but masks frontend bugs (e.g., a typo in sortKey would never surface). Consider logging a warning when sort_by is provided but not whitelisted.",
+    "SortableHeader.jsx click handler does NOT call onSortChange when onSortChange is undefined (no defensive guard) — minor; all current callers pass it.",
+    "Mongo .sort() does not specify a collation, so sorts are byte-level case-sensitive (uppercase < lowercase). Names like 'aaron' come AFTER 'Zara'. If user expects case-insensitive sort, add `.collation({locale: 'en', strength: 2})` to the cursor / aggregate.",
+    "RoleDrillDown.js + AttendedDrillDown.js are imported nowhere — orphan files (see action_items)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration36_sorting.py"],
+  "success_rate": {
+    "backend": "100% (11/11 pytest passed in 22s)",
+    "frontend": "85% — Roles + Summary fully verified; AttendedRoles sort header clicks register; InterviewReports + UpdateScores tables empty so visual asc/desc cell diff not observable (covered by backend tests); RoleDrillDown/AttendedDrillDown routes missing in App.js"
+  },
+  "test_credentials": {"username": "Admin User", "password": "Admin User"},
+  "seed_data_creation": "None — read-only sort tests against existing dataset (~100,816 applicants).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter36 covered the new global column sorting feature. Backend test file: /app/backend/tests/test_iteration36_sorting.py — uses requests.Session with cookie-based auth via POST /api/login. Mongo's default sort is byte-level case-sensitive (uppercase letters sort BEFORE lowercase) — tests preserve raw case. SortableHeader cycle is asc→desc→none (3rd click clears sort). Summary page is client-side only (verified by listening for /api/* network calls). RoleDrillDown.js + AttendedDrillDown.js are present but not routed in App.js — flagged for main agent.",
+  "mocked_apis": {"none": "n/a"},
+  "rca_of_the_issue": "N/A — sorting feature works correctly. Only finding: drill-down components exist but are not routed."
+}

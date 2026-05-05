@@ -4,28 +4,29 @@ import axios from 'axios';
 import { toast } from 'sonner';
 import { ArrowLeft, FunnelSimple, ArrowCounterClockwise, SpinnerGap, CaretLeft, CaretRight, CaretDoubleLeft, CaretDoubleRight, MagnifyingGlass } from '@phosphor-icons/react';
 import { formatDateDDMMYYYY } from '../utils/dateFormat';
+import SortableHeader from '../components/SortableHeader';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 const PAGE_SIZE = 100;
 
 const SCORE_COLS = ['ZA', 'C++', 'Java', 'BA', 'LA', 'Mensa Org', 'Accounts2', 'Accounts1', 'BE', 'Mensa', 'BP'];
 const BASE_COLS = [
-    { key: 'name', label: 'Name' },
-    { key: 'email', label: 'Email' },
-    { key: 'phone', label: 'Phone' },
+    { key: 'name', label: 'Name', sortable: true },
+    { key: 'email', label: 'Email', sortable: true },
+    { key: 'phone', label: 'Phone', sortable: true },
     { key: 'age', label: 'Age' },
     { key: 'gender', label: 'Gender' },
-    { key: 'college', label: 'College' },
-    { key: 'degree', label: 'Degree' },
-    { key: 'course', label: 'Course' },
-    { key: 'year_of_graduation', label: 'Year of Graduation' },
-    { key: 'job_role', label: 'Job Role' },
-    { key: 'schedule_date', label: 'Schedule Date' },
+    { key: 'college', label: 'College', sortable: true },
+    { key: 'degree', label: 'Degree', sortable: true },
+    { key: 'course', label: 'Course', sortable: true },
+    { key: 'year_of_graduation', label: 'Year of Graduation', sortable: true },
+    { key: 'job_role', label: 'Job Role', sortable: true },
+    { key: 'schedule_date', label: 'Schedule Date', sortable: true },
 ];
 const ALL_COLS = [
     ...BASE_COLS,
     ...SCORE_COLS.map(c => ({ key: c, label: c })),
-    { key: 'result_status', label: 'Result Status' },
+    { key: 'result_status', label: 'Result Status', sortable: true },
 ];
 
 export default function AttendedDrillDown() {
@@ -41,8 +42,9 @@ export default function AttendedDrillDown() {
     const [search, setSearch] = useState('');
     const [round, setRound] = useState('');
     const [goToPage, setGoToPage] = useState('');
+    const [sort, setSort] = useState(null);
 
-    const fetchData = useCallback(async (filters = {}, pg = 1) => {
+    const fetchData = useCallback(async (filters = {}, pg = 1, sortState = null) => {
         setLoading(true);
         try {
             const params = { jobRole: decodedRole, page: pg, limit: PAGE_SIZE };
@@ -50,6 +52,7 @@ export default function AttendedDrillDown() {
             if (filters.endDate) params.endDate = filters.endDate;
             if (filters.search) params.search = filters.search;
             if (filters.round) params.round = filters.round;
+            if (sortState?.by) { params.sort_by = sortState.by; params.sort_dir = sortState.dir; }
             const res = await axios.get(`${API}/api/attended`, { params, withCredentials: true });
             setData(res.data.data);
             setTotal(res.data.total);
@@ -60,24 +63,30 @@ export default function AttendedDrillDown() {
         }
     }, [decodedRole]);
 
-    useEffect(() => { fetchData({}, 1); }, [fetchData]);
+    useEffect(() => { fetchData({}, 1, null); }, [fetchData]);
 
     const totalPages = Math.ceil(total / PAGE_SIZE) || 1;
 
     const applyFilters = (pg = 1) => {
         setPage(pg);
-        fetchData({ startDate, endDate, search, round }, pg);
+        fetchData({ startDate, endDate, search, round }, pg, sort);
     };
 
     const handleReset = () => {
-        setStartDate(''); setEndDate(''); setSearch(''); setRound(''); setPage(1);
-        fetchData({}, 1);
+        setStartDate(''); setEndDate(''); setSearch(''); setRound(''); setPage(1); setSort(null);
+        fetchData({}, 1, null);
+    };
+
+    const handleSortChange = (next) => {
+        setSort(next);
+        setPage(1);
+        fetchData({ startDate, endDate, search, round }, 1, next);
     };
 
     const navigatePage = (pg) => {
         if (pg < 1 || pg > totalPages) return;
         setPage(pg);
-        fetchData({ startDate, endDate, search, round }, pg);
+        fetchData({ startDate, endDate, search, round }, pg, sort);
     };
 
     const handleGoToPage = () => {
@@ -158,7 +167,11 @@ export default function AttendedDrillDown() {
                                 <thead>
                                     <tr className="bg-zinc-900 border-b border-zinc-800">
                                         {ALL_COLS.map(col => (
-                                            <th key={col.key} className="text-left px-4 py-3 font-medium text-zinc-400 text-xs uppercase tracking-wider whitespace-nowrap">{col.label}</th>
+                                            <th key={col.key} className="text-left px-4 py-3 font-medium text-zinc-400 text-xs uppercase tracking-wider whitespace-nowrap">
+                                                {col.sortable ? (
+                                                    <SortableHeader label={col.label} sortKey={col.key} sort={sort} onSortChange={handleSortChange} />
+                                                ) : col.label}
+                                            </th>
                                         ))}
                                     </tr>
                                 </thead>
