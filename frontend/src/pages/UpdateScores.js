@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { ArrowLeft, FunnelSimple, PencilSimple, X, Plus, Trash, FloppyDisk, Export, UploadSimple } from '@phosphor-icons/react';
+import { ArrowLeft, FunnelSimple, PencilSimple, X, Plus, Trash, FloppyDisk, Export, UploadSimple, ArrowCounterClockwise } from '@phosphor-icons/react';
 import Pagination from '../components/Pagination';
 import { formatDateDDMMYYYY } from '../utils/dateFormat';
 import SortableHeader from '../components/SortableHeader';
@@ -33,11 +33,18 @@ export default function UpdateScores() {
     const [showRounds, setShowRounds] = useState(false);
     const [roundName, setRoundName] = useState('');
     const [editRoundId, setEditRoundId] = useState(null);
+    const [showInactive, setShowInactive] = useState(false);
     const [sort, setSort] = useState(null);
 
-    const fetchRounds = useCallback(async () => {
-        try { const r = await axios.get(`${API}/api/bb/rounds`, { withCredentials: true }); setRounds(r.data.rounds || []); } catch {}
+    const fetchRounds = useCallback(async (includeInactive = false) => {
+        try {
+            const r = await axios.get(`${API}/api/bb/rounds`, { params: includeInactive ? { includeInactive: true } : {}, withCredentials: true });
+            setRounds(r.data.rounds || []);
+        } catch {}
     }, []);
+
+    // Active-only list for the score-row dropdown
+    const activeRounds = rounds.filter(r => r.active !== false);
 
     const fetchApplicants = useCallback(async (pg = 1, sz = 100, sortState = null) => {
         setLoading(true);
@@ -90,11 +97,27 @@ export default function UpdateScores() {
         try {
             if (editRoundId) await axios.put(`${API}/api/bb/rounds/${editRoundId}`, { name: roundName.trim() }, { withCredentials: true });
             else await axios.post(`${API}/api/bb/rounds`, { name: roundName.trim() }, { withCredentials: true });
-            toast.success(editRoundId ? 'Updated' : 'Created'); setRoundName(''); setEditRoundId(null); fetchRounds();
+            toast.success(editRoundId ? 'Updated' : 'Created'); setRoundName(''); setEditRoundId(null); fetchRounds(showInactive);
         } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
     };
     const deleteRound = async (id) => {
-        try { await axios.delete(`${API}/api/bb/rounds/${id}`, { withCredentials: true }); toast.success('Deleted'); fetchRounds(); } catch { toast.error('Failed'); }
+        // Logical delete by default
+        if (!window.confirm('Disable this round? Historical scores will be preserved and the round can be restored later.')) return;
+        try {
+            await axios.delete(`${API}/api/bb/rounds/${id}`, { withCredentials: true });
+            toast.success('Round disabled'); fetchRounds(showInactive);
+        } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+    };
+    const restoreRound = async (id) => {
+        try {
+            await axios.post(`${API}/api/bb/rounds/${id}/restore`, {}, { withCredentials: true });
+            toast.success('Round restored'); fetchRounds(showInactive);
+        } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+    };
+    const toggleShowInactive = () => {
+        const next = !showInactive;
+        setShowInactive(next);
+        fetchRounds(next);
     };
 
     // Used rounds for current update (prevent duplicate selection)
@@ -233,7 +256,10 @@ export default function UpdateScores() {
                                 <div key={i} className="flex gap-2 items-center">
                                     <select value={s.round_name} onChange={e => setScoreField(i, 'round_name', e.target.value)} data-testid={`round-select-${i}`} className="flex-1 bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500">
                                         <option value="">Select round</option>
-                                        {rounds.filter(r => !usedRounds.has(r.name) || r.name === s.round_name).map(r => <option key={r.id} value={r.name}>{r.name}</option>)}
+                                        {activeRounds.filter(r => !usedRounds.has(r.name) || r.name === s.round_name).map(r => <option key={r.id} value={r.name}>{r.name}</option>)}
+                                        {s.round_name && !activeRounds.find(r => r.name === s.round_name) && (
+                                            <option value={s.round_name}>{s.round_name} (inactive)</option>
+                                        )}
                                     </select>
                                     <input type="number" value={s.score} onChange={e => setScoreField(i, 'score', e.target.value)} placeholder="Score" data-testid={`score-input-${i}`}
                                         className="w-24 bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
@@ -253,17 +279,42 @@ export default function UpdateScores() {
             {showRounds && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" data-testid="rounds-modal">
                     <div className="bg-zinc-900 border border-zinc-700 w-full max-w-md mx-4 p-6 space-y-4">
-                        <div className="flex items-center justify-between"><h2 className="text-lg font-semibold">Rounds</h2><button onClick={() => setShowRounds(false)} className="p-1 text-zinc-500 hover:text-white"><X size={20} /></button></div>
-                        <div className="space-y-2">
-                            {rounds.map(r => (
-                                <div key={r.id} className="bg-zinc-800 border border-zinc-700 px-4 py-3 flex items-center justify-between" data-testid={`round-${r.id}`}>
-                                    <span className="text-sm">{r.name}</span>
-                                    <div className="flex gap-2">
-                                        <button onClick={() => { setEditRoundId(r.id); setRoundName(r.name); }} className="p-1 text-zinc-500 hover:text-white"><PencilSimple size={14} /></button>
-                                        <button onClick={() => deleteRound(r.id)} className="p-1 text-zinc-500 hover:text-red-400"><Trash size={14} /></button>
+                        <div className="flex items-center justify-between">
+                            <h2 className="text-lg font-semibold">Rounds</h2>
+                            <button onClick={() => setShowRounds(false)} className="p-1 text-zinc-500 hover:text-white"><X size={20} /></button>
+                        </div>
+                        <div className="flex items-center justify-between text-xs">
+                            <span className="text-zinc-500">{rounds.filter(r => r.active !== false).length} active{showInactive ? ` · ${rounds.filter(r => r.active === false).length} inactive` : ''}</span>
+                            <button onClick={toggleShowInactive} data-testid="toggle-inactive-btn" className="text-cyan-400 hover:text-cyan-300">
+                                {showInactive ? 'Hide inactive' : 'Show inactive'}
+                            </button>
+                        </div>
+                        <div className="space-y-2 max-h-72 overflow-y-auto">
+                            {rounds.map(r => {
+                                const inactive = r.active === false;
+                                return (
+                                    <div key={r.id} className={`px-4 py-3 flex items-center justify-between border ${inactive ? 'bg-zinc-950 border-zinc-800 opacity-70' : 'bg-zinc-800 border-zinc-700'}`} data-testid={`round-${r.id}`}>
+                                        <div className="flex items-center gap-2">
+                                            <span className={`text-sm ${inactive ? 'text-zinc-400 line-through' : ''}`}>{r.name}</span>
+                                            <span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${inactive ? 'bg-zinc-800 text-zinc-500' : 'bg-emerald-900/40 text-emerald-300'}`}>
+                                                {inactive ? 'Inactive' : 'Active'}
+                                            </span>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            {inactive ? (
+                                                <button onClick={() => restoreRound(r.id)} data-testid={`restore-round-${r.id}`} className="p-1 text-zinc-400 hover:text-emerald-400" title="Restore">
+                                                    <ArrowCounterClockwise size={14} />
+                                                </button>
+                                            ) : (
+                                                <>
+                                                    <button onClick={() => { setEditRoundId(r.id); setRoundName(r.name); }} data-testid={`edit-round-${r.id}`} className="p-1 text-zinc-500 hover:text-white" title="Edit"><PencilSimple size={14} /></button>
+                                                    <button onClick={() => deleteRound(r.id)} data-testid={`delete-round-${r.id}`} className="p-1 text-zinc-500 hover:text-red-400" title="Disable (logical delete)"><Trash size={14} /></button>
+                                                </>
+                                            )}
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
+                                );
+                            })}
                             {rounds.length === 0 && <p className="text-sm text-zinc-600">No rounds yet.</p>}
                         </div>
                         <div className="border-t border-zinc-800 pt-3 space-y-2">
@@ -272,6 +323,7 @@ export default function UpdateScores() {
                                 <input type="text" value={roundName} onChange={e => setRoundName(e.target.value)} placeholder="Enter round name" data-testid="round-name-input"
                                     className="flex-1 bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" onKeyDown={e => e.key === 'Enter' && saveRound()} />
                                 <button onClick={saveRound} data-testid="save-round-btn" className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm font-medium">{editRoundId ? 'Update' : 'Create'}</button>
+                                {editRoundId && <button onClick={() => { setEditRoundId(null); setRoundName(''); }} data-testid="cancel-edit-round-btn" className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm">Cancel</button>}
                             </div>
                         </div>
                     </div>

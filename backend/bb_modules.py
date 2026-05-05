@@ -350,39 +350,155 @@ async def delete_hiring_form(form_id: str, request: Request):
 
 class RoundBody(BaseModel):
     name: str
+    order: Optional[int] = None
+
 
 @bb_router.get("/rounds")
-async def list_rounds(request: Request):
+async def list_rounds(request: Request, includeInactive: bool = Query(False)):
+    """List rounds. Active-only by default; pass includeInactive=true to see all."""
     await _require_auth(request)
-    rounds = await _db.bb_rounds.find({}).sort("name", 1).to_list(None)
+    q = {} if includeInactive else {"active": {"$ne": False}}
+    rounds = await _db.bb_rounds.find(q).sort([("order", 1), ("name", 1)]).to_list(None)
     for r in rounds:
         r["id"] = str(r.pop("_id"))
+        # Backfill defaults for legacy docs
+        if "active" not in r:
+            r["active"] = True
+        if "order" not in r:
+            r["order"] = 0
     return {"rounds": rounds}
+
+
+async def _round_in_use(name: str) -> bool:
+    """Return True if any score record references this round name."""
+    if not name:
+        return False
+    # bb_applicant_updates.scores[].round_name OR score_sheet.round_name
+    if await _db.score_sheet.find_one({"round_name": name}, {"_id": 1}):
+        return True
+    if await _db.bb_applicant_updates.find_one({"scores.round_name": name}, {"_id": 1}):
+        return True
+    return False
+
 
 @bb_router.post("/rounds")
 async def create_round(data: RoundBody, request: Request):
+    """Create a new round. Round name must be unique (case-insensitive)."""
     await _require_auth(request)
-    name = data.name.strip()
+    name = (data.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Name required")
-    doc = {"name": name, "created_at": datetime.now(timezone.utc).isoformat()}
+    # Uniqueness check (case-insensitive) across active+inactive
+    existing = await _db.bb_rounds.find_one(
+        {"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}},
+        {"_id": 1, "active": 1, "name": 1},
+    )
+    if existing:
+        if existing.get("active") is False:
+            raise HTTPException(status_code=409, detail=f"A round named '{existing['name']}' already exists but is inactive. Restore it instead.")
+        raise HTTPException(status_code=409, detail="Round name already exists")
+    doc = {
+        "name": name,
+        "active": True,
+        "order": int(data.order) if data.order is not None else 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
     result = await _db.bb_rounds.insert_one(doc)
-    return {"success": True, "id": str(result.inserted_id), "name": name}
+    return {"success": True, "id": str(result.inserted_id), "name": name, "active": True, "order": doc["order"]}
+
 
 @bb_router.put("/rounds/{round_id}")
 async def update_round(round_id: str, data: RoundBody, request: Request):
+    """Update a round's name and/or order. Renames cascade to all referenced
+    score records (score_sheet + bb_applicant_updates.scores[]) so historical
+    data stays linked. Name must remain unique."""
     await _require_auth(request)
-    result = await _db.bb_rounds.update_one({"_id": _oid(round_id)}, {"$set": {"name": data.name.strip()}})
-    if result.matched_count == 0:
+    oid = _oid(round_id)
+    current = await _db.bb_rounds.find_one({"_id": oid})
+    if not current:
         raise HTTPException(status_code=404, detail="Not found")
+    new_name = (data.name or "").strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="Name required")
+    # Uniqueness (excluding self)
+    dup = await _db.bb_rounds.find_one({
+        "_id": {"$ne": oid},
+        "name": {"$regex": f"^{re.escape(new_name)}$", "$options": "i"},
+    }, {"_id": 1})
+    if dup:
+        raise HTTPException(status_code=409, detail="Round name already exists")
+    updates = {"name": new_name, "updated_at": datetime.now(timezone.utc).isoformat()}
+    if data.order is not None:
+        updates["order"] = int(data.order)
+    await _db.bb_rounds.update_one({"_id": oid}, {"$set": updates})
+
+    # Cascade rename to historical score records — keeps mappings intact
+    old_name = current.get("name")
+    if old_name and old_name != new_name:
+        await _db.score_sheet.update_many(
+            {"round_name": old_name}, {"$set": {"round_name": new_name}},
+        )
+        await _db.bb_applicant_updates.update_many(
+            {"scores.round_name": old_name},
+            {"$set": {"scores.$[el].round_name": new_name}},
+            array_filters=[{"el.round_name": old_name}],
+        )
     return {"success": True}
 
+
 @bb_router.delete("/rounds/{round_id}")
-async def delete_round(round_id: str, request: Request):
+async def delete_round(round_id: str, request: Request, hard: bool = Query(False)):
+    """Logical delete by default — sets `active=false` so historical scores
+    remain queryable but the round is hidden from normal dropdowns. Hard delete
+    is BLOCKED if any score record references this round (data-safety guarantee).
+    """
     await _require_auth(request)
-    result = await _db.bb_rounds.delete_one({"_id": _oid(round_id)})
-    if result.deleted_count == 0:
+    oid = _oid(round_id)
+    current = await _db.bb_rounds.find_one({"_id": oid})
+    if not current:
         raise HTTPException(status_code=404, detail="Not found")
+    name = current.get("name")
+    in_use = await _round_in_use(name)
+
+    if hard:
+        if in_use:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot hard-delete: round is referenced by existing applicant scores. Use logical delete instead.",
+            )
+        await _db.bb_rounds.delete_one({"_id": oid})
+        return {"success": True, "deleted": "hard"}
+
+    # Logical delete (default)
+    await _db.bb_rounds.update_one(
+        {"_id": oid},
+        {"$set": {"active": False, "deleted_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"success": True, "deleted": "logical", "in_use": in_use}
+
+
+@bb_router.post("/rounds/{round_id}/restore")
+async def restore_round(round_id: str, request: Request):
+    """Re-enable a logically-deleted round."""
+    await _require_auth(request)
+    oid = _oid(round_id)
+    current = await _db.bb_rounds.find_one({"_id": oid})
+    if not current:
+        raise HTTPException(status_code=404, detail="Not found")
+    # Guard against name collision with another active round
+    name = current.get("name") or ""
+    dup = await _db.bb_rounds.find_one({
+        "_id": {"$ne": oid},
+        "active": {"$ne": False},
+        "name": {"$regex": f"^{re.escape(name)}$", "$options": "i"},
+    }, {"_id": 1})
+    if dup:
+        raise HTTPException(status_code=409, detail="Cannot restore: another active round with this name exists. Rename one of them first.")
+    await _db.bb_rounds.update_one(
+        {"_id": oid},
+        {"$set": {"active": True, "restored_at": datetime.now(timezone.utc).isoformat()},
+         "$unset": {"deleted_at": ""}},
+    )
     return {"success": True}
 
 
