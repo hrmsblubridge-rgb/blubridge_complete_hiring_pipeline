@@ -929,8 +929,14 @@ async def get_attended_for_scores(
     if endDate:
         match["schedule_date"] = {**match.get("schedule_date", {}), "$lte": endDate}
 
-    # Total + DB-level pagination
-    total = await _db.registered_candidates.count_documents(match)
+    # Source: pipeline_data first (live collection per May 2026 architecture),
+    # fallback to legacy registered_candidates for older environments.
+    src = _db.pipeline_data
+    total = await src.count_documents(match)
+    if total == 0:
+        src = _db.registered_candidates
+        total = await src.count_documents(match)
+
     skip = (page - 1) * limit
     pipeline = [
         {"$match": match},
@@ -948,7 +954,7 @@ async def get_attended_for_scores(
             "result_status": 1,
         }},
     ]
-    docs = await _db.registered_candidates.aggregate(pipeline, allowDiskUse=False).to_list(None)
+    docs = await src.aggregate(pipeline, allowDiskUse=False).to_list(None)
 
     # Page-scoped status overrides
     page_emails = [(d.get("email") or "").strip().lower() for d in docs if d.get("email")]
