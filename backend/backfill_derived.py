@@ -47,7 +47,8 @@ async def compute_and_persist(collection_name: str, batch_size: int = 1000):
     log(f"{collection_name}: {total} docs to backfill")
 
     cursor = coll.find({}, {
-        "_id": 1, "ug_university": 1, "pg_university": 1, "job_title": 1
+        "_id": 1, "ug_university": 1, "pg_university": 1,
+        "college": 1, "job_title": 1, "job_role": 1,
     })
 
     ops = []
@@ -56,9 +57,8 @@ async def compute_and_persist(collection_name: str, batch_size: int = 1000):
         cc = server._classify_college(doc, rank_lookup)
         cs = cc["college_status"]
         cat = "NIRF" if cs.startswith("NIRF - #") else "Non NIRF"
-        normalized_role = server._resolve_normalized_job_role(
-            doc.get("job_title") or "", mappings
-        )
+        raw_role = doc.get("job_title") or doc.get("job_role") or ""
+        normalized_role = server._resolve_normalized_job_role(raw_role, mappings)
         ops.append(UpdateOne(
             {"_id": doc["_id"]},
             {"$set": {
@@ -100,6 +100,7 @@ async def main():
 
     await compute_and_persist("registered_candidates")
     await compute_and_persist("naukri_applies")
+    await compute_and_persist("pipeline_data")
 
     # Sort indexes used by /api/applicants pagination
     await server.db.registered_candidates.create_index("name")

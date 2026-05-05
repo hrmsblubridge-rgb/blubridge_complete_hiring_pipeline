@@ -528,12 +528,17 @@ async def _persist_derived_fields(collection_name: str):
     mappings = await _get_job_keyword_mappings()
 
     ops = []
-    cursor = coll.find({}, {"_id": 1, "ug_university": 1, "pg_university": 1, "job_title": 1})
+    cursor = coll.find({}, {
+        "_id": 1, "ug_university": 1, "pg_university": 1,
+        "college": 1, "job_title": 1, "job_role": 1,
+    })
     async for doc in cursor:
         cc = _classify_college(doc, rank_lookup)
         cs = cc["college_status"]
         cat = "NIRF" if cs.startswith("NIRF - #") else "Non NIRF"
-        normalized_role = _resolve_normalized_job_role(doc.get("job_title") or "", mappings)
+        # Pipeline records use `job_role`; naukri uses `job_title`
+        raw_role = doc.get("job_title") or doc.get("job_role") or ""
+        normalized_role = _resolve_normalized_job_role(raw_role, mappings)
         ops.append(UpdateOne(
             {"_id": doc["_id"]},
             {"$set": {
@@ -1152,22 +1157,41 @@ async def get_summary(
 ):
     """Job role-wise funnel statistics split by NIRF / Non-NIRF.
 
-    OPTIMIZED: Uses MongoDB aggregation pipelines on persisted derived fields
-    (`_normalized_job_role`, `_nirf_category`) so all grouping happens inside
-    the DB. No 20K-doc in-memory scans.
+    NEW CLASSIFICATION (May 2026):
+      - Per-row `total_registered`  = pipeline_data rows in (role, NIRF cat)
+      - Per-row `total_naukri`      = naukri_applies rows in (role, NIRF cat)
+      - Per-row `total_unregistered`= naukri rows where `_is_registered != True`
+      - Funnel (shortlisted, rejected, scheduled, attended) computed from
+        pipeline_data (HR internal dataset) since it carries email_type,
+        schedule_date, schedule_time, otp_verified directly.
+
+    OPTIMIZED: All grouping done at DB level via aggregation on persisted
+    `_normalized_job_role` + `_nirf_category` fields.
     """
-    match = {}
+    match = {"isTest": {"$ne": True}}
     if startDate or endDate:
         date_filter = {}
         if startDate:
             date_filter["$gte"] = startDate
         if endDate:
             date_filter["$lte"] = endDate
-        match["date_of_application"] = date_filter
+        # pipeline_data uses `last_update`; naukri_applies uses `date_of_application`
+        # We apply each at its respective aggregation.
     if search:
         match["_normalized_job_role"] = {"$regex": re.escape(search), "$options": "i"}
 
-    # Helper expressions
+    pipe_match = dict(match)
+    naukri_match = dict(match)
+    if startDate or endDate:
+        date_filter = {}
+        if startDate:
+            date_filter["$gte"] = startDate
+        if endDate:
+            date_filter["$lte"] = endDate
+        pipe_match["last_update"] = date_filter
+        naukri_match["date_of_application"] = date_filter
+
+    # Helper expressions for funnel stages
     is_shortlisted = {"$regexMatch": {"input": {"$ifNull": ["$email_type", ""]}, "regex": "shortlist", "options": "i"}}
     is_rejected = {"$regexMatch": {"input": {"$ifNull": ["$email_type", ""]}, "regex": "^reject", "options": "i"}}
     has_schedule = {"$and": [
@@ -1176,14 +1200,15 @@ async def get_summary(
     ]}
     has_otp = {"$ne": [{"$ifNull": ["$otp_verified", ""]}, ""]}
 
-    reg_pipeline = [
-        {"$match": match},
+    # PIPELINE-FIRST: aggregate funnel + counts from pipeline_data
+    pipe_pipeline = [
+        {"$match": pipe_match},
         {"$group": {
             "_id": {
                 "role": {"$ifNull": ["$_normalized_job_role", "Unknown"]},
                 "cat": {"$ifNull": ["$_nirf_category", "Non NIRF"]},
             },
-            "total": {"$sum": 1},
+            "total_registered": {"$sum": 1},
             "shortlisted": {"$sum": {"$cond": [is_shortlisted, 1, 0]}},
             "rejected": {"$sum": {"$cond": [is_rejected, 1, 0]}},
             "scheduled": {"$sum": {"$cond": [{"$and": [is_shortlisted, has_schedule]}, 1, 0]}},
@@ -1192,72 +1217,55 @@ async def get_summary(
             "not_attended": {"$sum": {"$cond": [{"$and": [is_shortlisted, has_schedule, {"$not": has_otp}]}, 1, 0]}},
         }},
     ]
-    reg_results = await db.registered_candidates.aggregate(reg_pipeline, allowDiskUse=False).to_list(None)
-    buckets = {(r["_id"]["role"], r["_id"]["cat"]): r for r in reg_results}
+    pipe_results = await db.pipeline_data.aggregate(pipe_pipeline, allowDiskUse=False).to_list(None)
+    pipe_buckets = {(r["_id"]["role"], r["_id"]["cat"]): r for r in pipe_results}
 
-    # Naukri counts per (role, cat) — distinct on email/phone
-    naukri_match = {}
-    if startDate or endDate:
-        naukri_match["date_of_application"] = match["date_of_application"]
-    if search:
-        naukri_match["_normalized_job_role"] = match["_normalized_job_role"]
-
+    # Naukri counts per (role, cat) — total + matched (registered)
     naukri_pipeline = [
-        {"$match": naukri_match} if naukri_match else {"$match": {}},
+        {"$match": naukri_match},
         {"$group": {
             "_id": {
                 "role": {"$ifNull": ["$_normalized_job_role", "Unknown"]},
                 "cat": {"$ifNull": ["$_nirf_category", "Non NIRF"]},
-                "email": {"$ifNull": ["$email", ""]},
-                "phone": {"$ifNull": ["$phone", ""]},
             },
-        }},
-        {"$group": {
-            "_id": {"role": "$_id.role", "cat": "$_id.cat"},
-            "naukri_count": {"$sum": 1},
+            "naukri_total": {"$sum": 1},
+            "naukri_unregistered": {"$sum": {"$cond": [
+                {"$ne": [{"$ifNull": ["$_is_registered", False]}, True]}, 1, 0
+            ]}},
         }},
     ]
     naukri_results = await db.naukri_applies.aggregate(naukri_pipeline, allowDiskUse=False).to_list(None)
-    naukri_buckets = {(r["_id"]["role"], r["_id"]["cat"]): r["naukri_count"] for r in naukri_results}
+    naukri_buckets = {(r["_id"]["role"], r["_id"]["cat"]): r for r in naukri_results}
 
     # Combine
     results = []
-    all_keys = set(buckets.keys()) | set(naukri_buckets.keys())
+    all_keys = set(pipe_buckets.keys()) | set(naukri_buckets.keys())
     for (role, cat) in sorted(all_keys):
-        b = buckets.get((role, cat), {})
-        naukri_count = naukri_buckets.get((role, cat), 0)
-        total = b.get("total", 0)
+        p = pipe_buckets.get((role, cat), {})
+        n = naukri_buckets.get((role, cat), {})
         results.append({
             "job_role": f"{role} - {cat}",
-            "total_naukri": naukri_count,
-            "total_registered": total,
-            "total_unregistered": max(naukri_count - total, 0),
-            "shortlisted": b.get("shortlisted", 0),
-            "rejected": b.get("rejected", 0),
-            "scheduled": b.get("scheduled", 0),
-            "not_scheduled": b.get("not_scheduled", 0),
-            "attended": b.get("attended", 0),
-            "not_attended": b.get("not_attended", 0),
+            "total_naukri": n.get("naukri_total", 0),
+            "total_registered": p.get("total_registered", 0),
+            "total_unregistered": n.get("naukri_unregistered", 0),
+            "shortlisted": p.get("shortlisted", 0),
+            "rejected": p.get("rejected", 0),
+            "scheduled": p.get("scheduled", 0),
+            "not_scheduled": p.get("not_scheduled", 0),
+            "attended": p.get("attended", 0),
+            "not_attended": p.get("not_attended", 0),
         })
 
     total_registered = sum(r["total_registered"] for r in results)
-
-    # May 2026 classification rule: top-level counts come from raw collections.
-    # `total_registered_hr` = all pipeline_data (HR internal) rows.
-    # `total_unregistered` = naukri without a pipeline match.
-    exclude_test = {"isTest": {"$ne": True}}
-    total_registered_hr = await db.pipeline_data.count_documents(exclude_test)
-    total_unregistered_naukri = await db.naukri_applies.count_documents(
-        {**exclude_test, "_is_registered": {"$ne": True}}
-    )
+    total_naukri = sum(r["total_naukri"] for r in results)
+    total_unregistered = sum(r["total_unregistered"] for r in results)
 
     return {
         "data": results,
-        # `total_registered` retained for backward-compat (JOIN view count).
-        "total_registered": total_registered,
-        # New rule (May 2026):
-        "total_registered_hr": total_registered_hr,
-        "total_unregistered_naukri": total_unregistered_naukri,
+        "total_registered": total_registered,           # NEW RULE: pipeline count
+        "total_registered_hr": total_registered,        # alias kept for backward compat (iter28)
+        "total_naukri": total_naukri,
+        "total_unregistered_naukri": total_unregistered,
     }
 
 
@@ -1976,9 +1984,11 @@ def _match_college_entry(university_text: str, rank_lookup: dict) -> dict:
 
 def _classify_college(doc: dict, rank_lookup: dict) -> dict:
     """Classify a candidate's college using structured multi-criteria matching.
-    Returns: {college_status, college, match_confidence}"""
+    Returns: {college_status, college, match_confidence}.
+    Falls back to the pipeline-only `college` field when ug/pg universities are absent."""
     ug_text = (doc.get("ug_university") or "").strip()
     pg_text = (doc.get("pg_university") or "").strip()
+    fallback_text = (doc.get("college") or "").strip()  # pipeline-only docs use `college`
 
     ug_match = _match_college_entry(ug_text, rank_lookup)
     pg_match = _match_college_entry(pg_text, rank_lookup)
@@ -1996,8 +2006,17 @@ def _classify_college(doc: dict, rank_lookup: dict) -> dict:
     if ug_nirf:
         return {"college_status": f"NIRF - #{ug_match['rank']}", "college": ug_text or "-",
                 "match_confidence": ug_match["confidence"]}
-    # Neither NIRF: prefer UG if exists, else PG
-    return {"college_status": "Non NIRF", "college": ug_text or pg_text or "-",
+    # Neither UG nor PG NIRF: try pipeline-only `college` fallback before giving up
+    if not ug_text and not pg_text and fallback_text:
+        fb_match = _match_college_entry(fallback_text, rank_lookup)
+        fb_nirf = fb_match["rank"] is not None and fb_match["rank"] <= 100
+        if fb_nirf:
+            return {"college_status": f"NIRF - #{fb_match['rank']}", "college": fallback_text,
+                    "match_confidence": fb_match["confidence"]}
+        return {"college_status": "Non NIRF", "college": fallback_text,
+                "match_confidence": fb_match.get("confidence")}
+    # Neither NIRF: prefer UG if exists, else PG, else fallback
+    return {"college_status": "Non NIRF", "college": ug_text or pg_text or fallback_text or "-",
             "match_confidence": ug_match.get("confidence") or pg_match.get("confidence")}
 
 UPLOAD_BASE = Path("/app/uploads")
