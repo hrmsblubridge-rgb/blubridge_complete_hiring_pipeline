@@ -261,10 +261,9 @@ export default function PublicRegistration() {
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Course:</label>
-                                    <select value={f.course} onChange={e => setF(p => ({...p, course:e.target.value}))} data-testid="reg-course" required
-                                        className="w-full bg-white border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-400 appearance-none">
-                                        <option value="">Select a course</option>
-                                    </select>
+                                    <input type="text" value={f.course} onChange={e => setF(p => ({...p, course:e.target.value}))} data-testid="reg-course" required
+                                        placeholder="e.g. Computer Science, Mechanical, MBA Finance"
+                                        className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-400 focus:bg-white" />
                                 </div>
                             </div>
 
