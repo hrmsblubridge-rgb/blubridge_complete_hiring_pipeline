@@ -523,6 +523,114 @@ def _format_time_12h(s: str) -> str:
         return s
 
 
+# ============ EXPORT FIELD CATALOG (Schema-aware Dynamic Export) ============
+#
+# Each entry maps an API key → user-facing label, section, the underlying DB
+# fields it needs, and an extractor that produces a clean cell value.
+# To add a new exportable field: append one entry here. UI updates automatically.
+
+def _val(d, *keys, default=""):
+    """Return the first non-empty value from keys."""
+    for k in keys:
+        v = d.get(k)
+        if v not in (None, "", False):
+            return v
+    return default
+
+
+EXPORT_FIELD_CATALOG = [
+    # key, label, section, required_db_keys, extractor
+    ("name",                "Name",                "registration", ["name"],                                       lambda d: (d.get("name") or "").strip()),
+    ("email",               "Email",               "registration", ["email"],                                      lambda d: (d.get("email") or "").strip().lower()),
+    ("phone",               "Phone",               "registration", ["phone"],                                      lambda d: (d.get("phone") or "").strip()),
+    ("age",                 "Age",                 "registration", ["age"],                                        lambda d: d.get("age") or ""),
+    ("gender",              "Gender",              "registration", ["gender"],                                     lambda d: d.get("gender") or ""),
+    ("date_of_birth",       "Date of Birth",       "registration", ["date_of_birth"],                              lambda d: d.get("date_of_birth") or ""),
+    ("date_of_application", "Date of Application", "registration", ["date_of_application"],                        lambda d: _format_date_ddmmyyyy(d.get("date_of_application") or "")),
+    ("college",             "College",             "registration", ["college", "_college_resolved"],               lambda d: d.get("_college_resolved") or d.get("college") or ""),
+    ("college_status",      "College Status",      "registration", ["_college_status"],                            lambda d: d.get("_college_status") or ""),
+    ("degree",              "Degree",              "registration", ["degree"],                                     lambda d: d.get("degree") or ""),
+    ("course",              "Course",              "registration", ["course"],                                     lambda d: d.get("course") or ""),
+    ("year_of_graduation",  "Year of Graduation",  "registration", ["year_of_graduation"],                         lambda d: d.get("year_of_graduation") or ""),
+    ("current_location",    "Current Location",    "registration", ["current_location_state", "current_location_city"], lambda d: ", ".join([s for s in [d.get("current_location_city"), d.get("current_location_state")] if s])),
+    ("preferred_location",  "Preferred Location",  "registration", ["preferred_location_city"],                    lambda d: d.get("preferred_location_city") or ""),
+    # Interview section
+    ("job_role",            "Job Role",            "interview",    ["job_role", "_normalized_job_role"],           lambda d: d.get("_normalized_job_role") or d.get("job_role") or ""),
+    ("schedule_date",       "Schedule Date",       "interview",    ["schedule_date"],                              lambda d: _format_date_ddmmyyyy(d.get("schedule_date") or "")),
+    ("schedule_time",       "Schedule Time",       "interview",    ["schedule_time"],                              lambda d: _format_time_12h(d.get("schedule_time") or "")),
+    ("attendance",          "Attendance",          "interview",    ["otp_verified"],                               lambda d: "Attended" if (d.get("otp_verified") not in (None, "", False)) else "Not Attended"),
+    ("college_type",        "College Type",        "interview",    ["_nirf_category"],                             lambda d: "Premium" if d.get("_nirf_category") == "NIRF" else ("Non-Premium" if d.get("_nirf_category") == "Non NIRF" else "")),
+    ("result_status",       "Result Status",       "interview",    ["result_status"],                              lambda d: d.get("result_status") or ""),
+]
+
+EXPORT_FIELD_BY_KEY = {e[0]: e for e in EXPORT_FIELD_CATALOG}
+
+
+def _export_projection_for(field_keys):
+    """Build a Mongo $project dict including all DB keys required by selected fields."""
+    needed = {"_id": 0}
+    for fk in field_keys:
+        entry = EXPORT_FIELD_BY_KEY.get(fk)
+        if not entry:
+            continue
+        for db_key in entry[3]:
+            needed[db_key] = 1
+    # Always include keys we use for de-dupe / dedupe sentinel:
+    needed["email"] = 1
+    needed["schedule_date"] = 1
+    return needed
+
+
+@bb_router.get("/interview-reports/export-fields")
+async def get_interview_reports_export_fields(
+    request: Request,
+    startDate: str = Query(None), endDate: str = Query(None),
+    jobRole: str = Query(None), attendance: str = Query(None),
+    collegeType: str = Query(None),
+):
+    """Return the dynamic field catalog for the Export modal.
+
+    Hybrid mode: catalog provides labels + section + ordering; we INTERSECT it
+    with keys actually present in a sample of matching docs so missing fields
+    are silently skipped (per spec).
+    """
+    await _require_auth(request)
+    match = _build_interview_reports_match(startDate, endDate, jobRole, attendance, collegeType)
+
+    # Source: pipeline_data first (live), fallback to legacy join
+    src = _db.pipeline_data
+    cnt = await src.count_documents(match)
+    if cnt == 0:
+        src = _db.registered_candidates
+        cnt = await src.count_documents(match)
+
+    present_keys: set = set()
+    if cnt > 0:
+        # Sample 50 docs — enough to surface optional fields without scanning the full set.
+        sample = await src.aggregate([
+            {"$match": match}, {"$limit": 50},
+        ], allowDiskUse=False).to_list(None)
+        for d in sample:
+            present_keys.update(d.keys())
+
+    sections_map = {
+        "registration": {"id": "registration", "label": "Registration Fields", "fields": []},
+        "interview": {"id": "interview", "label": "Interview Fields", "fields": []},
+    }
+    for key, label, section, db_keys, _extractor in EXPORT_FIELD_CATALOG:
+        # Always include the field if catalog says so AND at least one underlying
+        # DB key is present in the sample. If the dataset is empty we still show
+        # the catalog so the modal doesn't appear broken — backend later returns 404.
+        if cnt > 0 and not any(k in present_keys for k in db_keys):
+            continue
+        sections_map[section]["fields"].append({"key": key, "label": label})
+
+    return {
+        "sections": [sections_map["registration"], sections_map["interview"]],
+        "total_matching": cnt,
+    }
+
+
 @bb_router.get("/interview-reports/export")
 async def export_interview_reports(
     request: Request,
@@ -530,28 +638,31 @@ async def export_interview_reports(
     jobRole: str = Query(None), attendance: str = Query(None),
     collegeType: str = Query(None),
     format: str = Query("xlsx", regex="^(xlsx|csv)$"),
+    fields: Optional[str] = Query(None, description="Comma-separated field keys; omit for all"),
 ):
-    """Export the FULL filtered Interview Schedule Reports dataset to XLSX/CSV.
-    Includes Name, Email, Phone, College, Job Role, Schedule Date, Schedule Time,
-    Attendance and College Type. De-dupes by (email, schedule_date)."""
+    """Export filtered Interview Schedule Reports to XLSX/CSV with user-selected
+    columns. `fields` accepts a CSV list of catalog keys; column order in the
+    output matches the order in the parameter. De-dupes by (email, schedule_date)."""
     await _require_auth(request)
 
     match = _build_interview_reports_match(startDate, endDate, jobRole, attendance, collegeType)
 
+    # Resolve selected fields from query (preserve order). Fall back to whole catalog.
+    if fields:
+        requested = [f.strip() for f in fields.split(",") if f.strip()]
+        selected = [k for k in requested if k in EXPORT_FIELD_BY_KEY]
+    else:
+        selected = [e[0] for e in EXPORT_FIELD_CATALOG]
+    if not selected:
+        raise HTTPException(status_code=400, detail="Please select at least one field")
+
+    headers = [EXPORT_FIELD_BY_KEY[k][1] for k in selected]
+    extractors = [(EXPORT_FIELD_BY_KEY[k][1], EXPORT_FIELD_BY_KEY[k][4]) for k in selected]
+
     pipeline = [
         {"$match": match},
         {"$sort": {"schedule_date": -1, "schedule_time": -1}},
-        {"$project": {
-            "_id": 0, "name": 1, "email": 1, "phone": 1,
-            "college": 1, "_college_resolved": 1,
-            "schedule_date": 1, "schedule_time": 1,
-            "job_role": 1, "_normalized_job_role": 1,
-            "_nirf_category": 1, "otp_verified": 1,
-        }},
-    ]
-    headers = [
-        "Name", "Email", "Phone", "College", "Job Role",
-        "Schedule Date", "Schedule Time", "Attendance", "College Type",
+        {"$project": _export_projection_for(selected)},
     ]
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -570,32 +681,20 @@ async def export_interview_reports(
         raise HTTPException(status_code=404, detail="No data available to export")
 
     def _row(d: dict) -> Optional[dict]:
+        # Skip rows missing identity essentials (name+email).
         name = (d.get("name") or "").strip()
         email = (d.get("email") or "").strip().lower()
-        phone = (d.get("phone") or "").strip()
         if not (name and email):
             return None
-        attended = "Attended" if (d.get("otp_verified") not in (None, "", False)) else "Not Attended"
-        nirf = d.get("_nirf_category") or ""
-        college_type = "Premium" if nirf == "NIRF" else ("Non-Premium" if nirf == "Non NIRF" else "")
-        return {
-            "Name": name, "Email": email, "Phone": phone,
-            "College": d.get("_college_resolved") or d.get("college") or "",
-            "Job Role": d.get("_normalized_job_role") or d.get("job_role") or "",
-            "Schedule Date": _format_date_ddmmyyyy(d.get("schedule_date") or ""),
-            "Schedule Time": _format_time_12h(d.get("schedule_time") or ""),
-            "Attendance": attended,
-            "College Type": college_type,
-        }
+        return {label: extract(d) for label, extract in extractors}
 
     if format == "csv":
-        # True streaming CSV with gzip compression — yields rows as they are fetched
-        # from Mongo. Gzip reduces wire bytes ~10x on text, comfortably fitting the
-        # K8s ingress 60s read-timeout for large datasets.
+        # True streaming CSV with gzip compression — keeps the K8s 60 s ingress
+        # alive on large datasets (~10x reduction in wire bytes).
         import gzip as _gzip
 
         async def _csv_rows():
-            yield (",".join(headers) + "\n").encode("utf-8")
+            yield (",".join(_csv_field(h) for h in headers) + "\n").encode("utf-8")
             buf = io.StringIO()
             writer = _csv.DictWriter(buf, fieldnames=headers)
             seen = set()
@@ -604,7 +703,7 @@ async def export_interview_reports(
                 row = _row(d)
                 if not row:
                     continue
-                key = (row["Email"], d.get("schedule_date") or "")
+                key = ((d.get("email") or "").strip().lower(), d.get("schedule_date") or "")
                 if key in seen:
                     continue
                 seen.add(key)
@@ -614,7 +713,8 @@ async def export_interview_reports(
                 yield data
 
         async def _gzip_stream():
-            comp = _gzip.GzipFile(fileobj=(out := io.BytesIO()), mode="wb", compresslevel=6)
+            out = io.BytesIO()
+            comp = _gzip.GzipFile(fileobj=out, mode="wb", compresslevel=6)
             async for chunk in _csv_rows():
                 comp.write(chunk)
                 comp.flush()
@@ -636,17 +736,15 @@ async def export_interview_reports(
             },
         )
 
-    # XLSX: build in-memory using openpyxl write_only mode.
-    # Since XLSX is a ZIP archive, the file can only be sent after wb.save() completes.
-    # On Atlas free-tier with very large datasets (>10k rows) the ingress 60s idle timeout
-    # may be hit. Recommend filtering or using ?format=csv for huge exports.
+    # XLSX: build in-memory (openpyxl write_only) — keeps memory low while still
+    # buffering the final ZIP to a single response (XLSX cannot be sent in chunks).
     docs = await src.aggregate(pipeline, allowDiskUse=True).to_list(None)
     seen = set(); rows = []
     for d in docs:
         row = _row(d)
         if not row:
             continue
-        key = (row["Email"], d.get("schedule_date") or "")
+        key = ((d.get("email") or "").strip().lower(), d.get("schedule_date") or "")
         if key in seen:
             continue
         seen.add(key)
@@ -655,7 +753,6 @@ async def export_interview_reports(
         raise HTTPException(status_code=404, detail="No data available to export")
 
     from openpyxl import Workbook
-    from openpyxl.writer.excel import ExcelWriter  # noqa: F401
     wb = Workbook(write_only=True)
     ws = wb.create_sheet(title="Interview Reports")
     ws.append(headers)
@@ -669,6 +766,14 @@ async def export_interview_reports(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename_base}.xlsx"'},
     )
+
+
+def _csv_field(s) -> str:
+    """Quote a CSV header cell."""
+    s = "" if s is None else str(s)
+    if any(ch in s for ch in [",", "\"", "\n"]):
+        return "\"" + s.replace("\"", "\"\"") + "\""
+    return s
 
 
 @bb_router.get("/interview-reports")

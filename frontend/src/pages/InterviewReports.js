@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
@@ -7,6 +7,7 @@ import { formatDateDDMMYYYY, formatTime12H } from '../utils/dateFormat';
 import { ArrowLeft, FunnelSimple, ArrowCounterClockwise, Export } from '@phosphor-icons/react';
 import Pagination from '../components/Pagination';
 import SortableHeader from '../components/SortableHeader';
+import ExportFieldsModal from '../components/ExportFieldsModal';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -68,18 +69,24 @@ export default function InterviewReports() {
     const navPage = (pg) => { if (pg >= 1 && pg <= totalPages) { setPage(pg); fetchData(pg, pageSize, sort); } };
 
     const [exporting, setExporting] = useState(false);
+    const [exportModalOpen, setExportModalOpen] = useState(false);
 
-    const handleExport = async () => {
+    const filterParams = useMemo(() => {
+        const p = {};
+        if (startDate) p.startDate = startDate;
+        if (endDate) p.endDate = endDate;
+        if (jobRole) p.jobRole = jobRole;
+        if (attendance) p.attendance = attendance;
+        if (collegeType) p.collegeType = collegeType;
+        return p;
+    }, [startDate, endDate, jobRole, attendance, collegeType]);
+
+    const handleDownload = async (fieldsCsv) => {
         setExporting(true);
         try {
-            const params = {};
-            if (startDate) params.startDate = startDate;
-            if (endDate) params.endDate = endDate;
-            if (jobRole) params.jobRole = jobRole;
-            if (attendance) params.attendance = attendance;
-            if (collegeType) params.collegeType = collegeType;
             const res = await axios.get(`${API}/api/bb/interview-reports/export`, {
-                params, withCredentials: true, responseType: 'blob',
+                params: { ...filterParams, fields: fieldsCsv },
+                withCredentials: true, responseType: 'blob',
             });
             const blob = new Blob([res.data], { type: res.headers['content-type'] });
             const url = URL.createObjectURL(blob);
@@ -92,9 +99,10 @@ export default function InterviewReports() {
             URL.revokeObjectURL(url);
             toast.success('Export downloaded');
         } catch (err) {
-            // Backend returns 404 with detail "No data available to export" when filtered set is empty
             if (err.response?.status === 404) {
                 toast.error('No data available to export');
+            } else if (err.response?.status === 400) {
+                toast.error('Please select at least one field');
             } else {
                 toast.error('Failed to export reports');
             }
@@ -137,7 +145,7 @@ export default function InterviewReports() {
                     </div>
                     <button onClick={applyFilters} data-testid="apply-btn" className="flex items-center gap-2 px-5 py-2 bg-cyan-700 hover:bg-cyan-600 text-sm font-medium"><FunnelSimple size={16} /> APPLY</button>
                     <button onClick={resetFilters} className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium"><ArrowCounterClockwise size={16} /> Reset</button>
-                    <button onClick={handleExport} disabled={exporting} data-testid="export-btn" className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-60 disabled:cursor-not-allowed text-sm font-medium"><Export size={16} /> {exporting ? 'Exporting…' : 'Export'}</button>
+                    <button onClick={() => setExportModalOpen(true)} disabled={exporting} data-testid="export-btn" className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-60 disabled:cursor-not-allowed text-sm font-medium"><Export size={16} /> {exporting ? 'Exporting…' : 'Export'}</button>
                 </div>
             </div>
 
@@ -204,6 +212,12 @@ export default function InterviewReports() {
                     onPageSizeChange={(s) => { setPageSize(s); setPage(1); }}
                 />
             </div>
+            <ExportFieldsModal
+                open={exportModalOpen}
+                onClose={() => setExportModalOpen(false)}
+                filterParams={filterParams}
+                onDownload={handleDownload}
+            />
         </div>
     );
 }
