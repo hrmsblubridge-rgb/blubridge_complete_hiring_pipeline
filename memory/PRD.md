@@ -45,6 +45,11 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter48)** — Score Import root-cause fix + Append-only merge + Score Sheet sync:
+  - **Root cause of import failure**: Excel CSV exports prepend a UTF-8 BOM (`\ufeff`) to the first column header, making `"\ufeffName"` ≠ `"Name"` in the header check → `Invalid file: missing columns ['Name']`. Fixed in `_parse_score_file` by decoding with `utf-8-sig` and stripping BOM/whitespace from every header. Header validation is now case-insensitive, so manually-edited files (`name`, `email`, …) also work. Empty trailing columns are dropped.
+  - **Import = APPEND-ONLY merge** (`/api/bb/import-scores/confirm`): existing applicant scores are now PRESERVED. New rounds are appended; existing (round_name) entries are kept (case-insensitive dedupe). Existing recruiter-set status is also preserved instead of being overwritten by the imported "On hold".
+  - **Score Sheet upload sync** (`/api/upload/scoresheet` and the bulk-queue worker): each row now also (a) appends to `bb_applicant_updates.scores[]` for the matched applicant (email primary, phone fallback, append-only), (b) registers the round_name into `bb_rounds` so it shows as a tab/card automatically. Visible on both *View Attended Applicants* and *Update Applicants Scores* without a separate import step.
+  - 19/19 regression tests pass (iter44 + iter45 + iter47 + 4 new iter48). No live data modified.
 - **Feb 2026 (iter47)** — Score Import Sync + WhatsApp Template + Domain-Agnostic URLs:
   - **Imported rounds → bb_rounds**: `POST /api/bb/import-scores/confirm` now upserts each distinct round name from the imported file into `bb_rounds` (case-insensitive dedupe; restores soft-deleted rounds; tags `source: "imported"`). Frontend tabs/cards UI surfaces them automatically alongside manually-created rounds. Zero / empty / non-numeric scores are skipped per spec.
   - **Update modal data source**: `/api/bb/attended-for-scores` already returns merged rounds — no change needed; modal now reflects manual + imported rounds correctly.

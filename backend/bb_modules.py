@@ -1883,15 +1883,29 @@ async def import_scores_preview(request: Request):
     rows, headers = _parse_score_file(content, filename)
     fixed = ["Name", "Schedule Date", "College", "Degree", "Course",
              "Year of Graduation", "Email", "Phone", "Job Role", "Status"]
-    missing = [h for h in fixed if h not in headers]
+    # Case-insensitive header lookup. We KEEP the original header strings the
+    # parser produced (they may differ in case) and re-key each row using the
+    # canonical name when needed.
+    headers_lc = {h.lower(): h for h in headers if h}
+    missing = [h for h in fixed if h.lower() not in headers_lc]
     if missing:
-        raise HTTPException(status_code=400, detail=f"Invalid file: missing columns {missing}")
-    round_cols = [h for h in headers if h not in fixed]
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file: missing columns {missing}. "
+                   f"Got headers: {headers}",
+        )
+    canonical_map = {h: headers_lc[h.lower()] for h in fixed}  # canon -> actual header
+    fixed_actual = list(canonical_map.values())
+    round_cols = [h for h in headers if h and h not in fixed_actual]
 
     parsed = []
     errors = []
     for idx, row in enumerate(rows, start=2):  # start=2 because row 1 is header
-        email = str(row.get("Email", "") or "").strip().lower()
+        # Helper to fetch a fixed-column value via the canonical name lookup
+        def _get(canon_name):
+            actual = canonical_map.get(canon_name)
+            return row.get(actual) if actual else None
+        email = str(_get("Email") or "").strip().lower()
         if not email:
             errors.append({"row": idx, "error": "Missing Email"})
             continue
@@ -1905,16 +1919,16 @@ async def import_scores_preview(request: Request):
             except (TypeError, ValueError):
                 errors.append({"row": idx, "error": f"Invalid score for {r}: '{v}'"})
         parsed.append({
-            "name": str(row.get("Name", "") or "").strip(),
-            "schedule_date": str(row.get("Schedule Date", "") or "").strip(),
-            "college": str(row.get("College", "") or "").strip(),
-            "degree": str(row.get("Degree", "") or "").strip(),
-            "course": str(row.get("Course", "") or "").strip(),
-            "year_of_graduation": str(row.get("Year of Graduation", "") or "").strip(),
+            "name": str(_get("Name") or "").strip(),
+            "schedule_date": str(_get("Schedule Date") or "").strip(),
+            "college": str(_get("College") or "").strip(),
+            "degree": str(_get("Degree") or "").strip(),
+            "course": str(_get("Course") or "").strip(),
+            "year_of_graduation": str(_get("Year of Graduation") or "").strip(),
             "email": email,
-            "phone": str(row.get("Phone", "") or "").strip(),
-            "job_role": str(row.get("Job Role", "") or "").strip(),
-            "status": str(row.get("Status", "") or "On hold").strip() or "On hold",
+            "phone": str(_get("Phone") or "").strip(),
+            "job_role": str(_get("Job Role") or "").strip(),
+            "status": str(_get("Status") or "On hold").strip() or "On hold",
             "scores": scores,
         })
 
@@ -1939,38 +1953,63 @@ async def import_scores_confirm(data: dict, request: Request):
     batch_id = str(uuid.uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()
     imported = 0
-    # Collect every distinct round name seen across this batch so we can
-    # upsert them into bb_rounds (Iter47 — scores+rounds sync). Frontend
-    # renders rounds as tabs/cards directly from bb_rounds, so this is the
-    # only step needed to surface "imported rounds" in the UI alongside
-    # manually-created ones.
+    # Iter47 — collect every distinct round name seen across this batch so we
+    # can upsert them into bb_rounds. Frontend renders rounds as tabs/cards
+    # directly from bb_rounds.
     batch_round_names: set = set()
     for r in rows:
         email = str(r.get("email", "") or "").strip().lower()
         if not email:
             continue
         scores_in = r.get("scores", []) or []
-        scores = []
+        new_scores = []
         for s in scores_in:
             rn = (s.get("round_name") or "").strip()
             if not rn:
                 continue
-            # Skip zero / empty / non-numeric-zero values per spec
             val = s.get("score")
             try:
                 num = float(val) if val not in (None, "", "-") else None
             except (TypeError, ValueError):
                 num = None
+            # Skip zero / empty / non-numeric per spec
             if num is None or num == 0:
                 continue
-            scores.append({"round_name": rn, "score": num})
+            new_scores.append({"round_name": rn, "score": num})
             batch_round_names.add(rn)
+
+        # ---- Iter48 — APPEND-ONLY MERGE ----
+        # Spec:
+        #   * If (round_name, score) NOT already present → ADD to scores
+        #   * Existing scores preserved
+        #   * No duplicate round entries per applicant
+        # → For each round we already have a score for, KEEP the existing
+        #   value; for net-new rounds, append. Existing data is never lost.
+        existing_doc = await _db.bb_applicant_updates.find_one(
+            {"email": email}, {"_id": 0, "scores": 1, "status": 1}
+        ) or {}
+        existing_scores = list(existing_doc.get("scores") or [])
+        existing_round_names = {
+            str(s.get("round_name") or "").strip().lower()
+            for s in existing_scores if s.get("round_name")
+        }
+        merged_scores = list(existing_scores)
+        for ns in new_scores:
+            if ns["round_name"].lower() not in existing_round_names:
+                merged_scores.append(ns)
+                existing_round_names.add(ns["round_name"].lower())
+
+        # Status: only set if the import explicitly carries a non-default value;
+        # otherwise preserve any pre-existing status the recruiter set.
+        incoming_status = (r.get("status") or "").strip() or "On hold"
+        final_status = existing_doc.get("status") or incoming_status
+
         await _db.bb_applicant_updates.update_one(
             {"email": email},
             {"$set": {
                 "email": email,
-                "status": r.get("status", "On hold"),
-                "scores": scores,
+                "status": final_status,
+                "scores": merged_scores,
                 "name": r.get("name", ""),
                 "phone": r.get("phone", ""),
                 "job_role": r.get("job_role", ""),
@@ -1995,7 +2034,6 @@ async def import_scores_confirm(data: dict, request: Request):
             {"_id": 1, "active": 1},
         )
         if existing:
-            # Re-activate if a recruiter had soft-deleted it previously.
             if existing.get("active") is False:
                 await _db.bb_rounds.update_one(
                     {"_id": existing["_id"]},
@@ -2210,8 +2248,25 @@ async def export_scores(
 
 def _parse_score_file(content: bytes, filename: str) -> tuple:
     """Parse uploaded CSV/XLSX. Returns (rows[list[dict]], headers[list[str]]).
-    Used by both /import-scores/preview and the legacy /import-scores."""
+    Used by both /import-scores/preview and the legacy /import-scores.
+
+    Iter48 — robustness fixes:
+        * Strip UTF-8 BOM that Excel adds to CSV first-column headers
+          (root cause of "Invalid file: missing columns ['Name']" errors).
+        * Whitespace-trim every header.
+        * Drop empty trailing columns.
+    """
     import io
+
+    def _clean_header(h):
+        if h is None:
+            return ""
+        s = str(h)
+        # Excel CSV exports inject a UTF-8 BOM (\ufeff) on the first cell
+        if s.startswith("\ufeff"):
+            s = s[1:]
+        return s.strip()
+
     if filename.endswith(".xlsx") or filename.endswith(".xls"):
         from openpyxl import load_workbook
         wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
@@ -2219,7 +2274,10 @@ def _parse_score_file(content: bytes, filename: str) -> tuple:
         all_rows = list(ws.iter_rows(values_only=True))
         if not all_rows:
             raise HTTPException(status_code=400, detail="Empty file")
-        headers = [str(h or "").strip() for h in all_rows[0]]
+        headers = [_clean_header(h) for h in all_rows[0]]
+        # Drop trailing blank columns Excel sometimes pads
+        while headers and headers[-1] == "":
+            headers.pop()
         rows = [dict(zip(headers, [
             "" if v is None else (v.strftime("%Y-%m-%d") if hasattr(v, "strftime") else str(v))
             for v in r
@@ -2227,12 +2285,16 @@ def _parse_score_file(content: bytes, filename: str) -> tuple:
         return rows, headers
     # CSV / fallback
     import csv
-    text = content.decode("utf-8", errors="ignore")
+    text = content.decode("utf-8-sig", errors="ignore")  # utf-8-sig auto-strips BOM
     reader = csv.DictReader(io.StringIO(text))
-    headers = list(reader.fieldnames or [])
-    rows = list(reader)
+    raw_headers = list(reader.fieldnames or [])
+    headers = [_clean_header(h) for h in raw_headers]
     if not headers:
         raise HTTPException(status_code=400, detail="Empty or invalid CSV")
+    # Re-key rows using cleaned headers (DictReader used the raw ones)
+    rows = []
+    for r in reader:
+        rows.append({_clean_header(k): (v if v is not None else "") for k, v in r.items()})
     return rows, headers
 
 

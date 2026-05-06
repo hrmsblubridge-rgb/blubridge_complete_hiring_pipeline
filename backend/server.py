@@ -1832,6 +1832,55 @@ async def upload_score_sheet(
                 )
                 updated += 1
 
+            # ---- Iter48: sync into bb_applicant_updates (append-only) ----
+            # Reuses the score-sheet match identity so the same upload makes
+            # the round visible on the "Update Applicants Scores" page.
+            sync_or = []
+            if email: sync_or.append({"email": email})
+            if phone: sync_or.append({"phone": phone})
+            au = await db.bb_applicant_updates.find_one(
+                {"$or": sync_or} if len(sync_or) > 1 else sync_or[0],
+                {"_id": 0, "email": 1, "scores": 1, "name": 1, "phone": 1},
+            )
+            au_scores = list((au or {}).get("scores") or [])
+            au_round_lc = {
+                str(s.get("round_name") or "").strip().lower()
+                for s in au_scores if s.get("round_name")
+            }
+            if canon_round.lower() not in au_round_lc:
+                au_scores.append({"round_name": raw_round or canon_round, "score": score})
+                target_email = (au or {}).get("email") or email or phone
+                await db.bb_applicant_updates.update_one(
+                    {"email": target_email},
+                    {"$set": {
+                        "email": target_email,
+                        "scores": au_scores,
+                        "name": name or (au or {}).get("name") or "",
+                        "phone": phone or (au or {}).get("phone") or "",
+                        "updated_at": now_iso,
+                    },
+                    "$setOnInsert": {"status": "On hold", "isImported": True}},
+                    upsert=True,
+                )
+
+            # ---- Iter48: register the round into bb_rounds ----
+            ex_round = await db.bb_rounds.find_one(
+                {"name": {"$regex": f"^{re.escape(raw_round or canon_round)}$",
+                          "$options": "i"}},
+                {"_id": 1, "active": 1},
+            )
+            if not ex_round:
+                await db.bb_rounds.insert_one({
+                    "name": raw_round or canon_round,
+                    "active": True, "order": 0,
+                    "source": "score_sheet",
+                    "created_at": now_iso,
+                })
+            elif ex_round.get("active") is False:
+                await db.bb_rounds.update_one(
+                    {"_id": ex_round["_id"]}, {"$set": {"active": True}}
+                )
+
         except Exception as e:
             errors.append(f"Row {idx + 2}: {str(e)}")
 
@@ -2634,7 +2683,15 @@ async def _process_pipeline_file(content: bytes, filename: str, progress_cb=None
 
 
 async def _process_score_file(content: bytes, filename: str, progress_cb=None) -> dict:
-    """Core score sheet processing — extracted from upload_scoresheet for reuse."""
+    """Core score sheet processing — extracted from upload_scoresheet for reuse.
+
+    Iter48 — in addition to the legacy `score_sheet` insert, this now also:
+        * Appends the (round_name, score) into `bb_applicant_updates.scores[]`
+          for the matched applicant (email primary, phone fallback).
+        * Upserts the round_name into `bb_rounds` (case-insensitive dedupe).
+      So the same score becomes visible on both "View Attended Applicants"
+      and "Update Applicants Scores" without a separate import.
+    """
     df = parse_file(content, filename)
     df.columns = df.columns.str.strip().str.lower()
     required = {"name", "email", "phone", "score", "round_name"}
@@ -2644,6 +2701,7 @@ async def _process_score_file(content: bytes, filename: str, progress_cb=None) -
     if progress_cb:
         await progress_cb(0, total_rows)
     inserted = 0
+    seen_round_names: set = set()
     for idx, row in df.iterrows():
         try:
             email = normalize_email(row.get("email"))
@@ -2659,17 +2717,69 @@ async def _process_score_file(content: bytes, filename: str, progress_cb=None) -
                 score = float(score_val) if not pd.isna(score_val) else 0.0
             except (ValueError, TypeError):
                 score = 0.0
+            now_iso = datetime.now(timezone.utc).isoformat()
             doc = {"name": name, "email": email, "phone": phone, "score": score,
-                   "round_name": round_name, "created_at": datetime.now(timezone.utc).isoformat()}
+                   "round_name": round_name, "created_at": now_iso}
             await db.score_sheet.insert_one(doc)
             inserted += 1
+            seen_round_names.add(round_name)
+
+            # ---- Iter48: sync into bb_applicant_updates (append-only) ----
+            or_clauses = []
+            if email: or_clauses.append({"email": email})
+            if phone: or_clauses.append({"phone": phone})
+            existing = await db.bb_applicant_updates.find_one(
+                {"$or": or_clauses} if len(or_clauses) > 1 else or_clauses[0],
+                {"_id": 0, "email": 1, "scores": 1},
+            )
+            existing_scores = list((existing or {}).get("scores") or [])
+            existing_round_lc = {
+                str(s.get("round_name") or "").strip().lower()
+                for s in existing_scores if s.get("round_name")
+            }
+            if round_name.lower() in existing_round_lc:
+                # Don't overwrite — preserve existing per-applicant score.
+                continue
+            existing_scores.append({"round_name": round_name, "score": score})
+            target_email = (existing or {}).get("email") or email or phone
+            await db.bb_applicant_updates.update_one(
+                {"email": target_email},
+                {"$set": {
+                    "email": target_email,
+                    "scores": existing_scores,
+                    "name": name or (existing or {}).get("name") or "",
+                    "phone": phone or (existing or {}).get("phone") or "",
+                    "updated_at": now_iso,
+                },
+                "$setOnInsert": {"status": "On hold", "isImported": True}},
+                upsert=True,
+            )
         except Exception:
             pass
         if progress_cb and (idx + 1) % 200 == 0:
             await progress_cb(idx + 1, total_rows)
     if progress_cb:
         await progress_cb(total_rows, total_rows)
-    return {"success": True, "inserted": inserted, "total": total_rows}
+
+    # ---- Iter48: auto-register round names into bb_rounds (case-insensitive)
+    rounds_added = 0
+    for rn in sorted(seen_round_names):
+        ex = await db.bb_rounds.find_one(
+            {"name": {"$regex": f"^{re.escape(rn)}$", "$options": "i"}},
+            {"_id": 1, "active": 1},
+        )
+        if ex:
+            if ex.get("active") is False:
+                await db.bb_rounds.update_one({"_id": ex["_id"]}, {"$set": {"active": True}})
+            continue
+        await db.bb_rounds.insert_one({
+            "name": rn, "active": True, "order": 0,
+            "source": "score_sheet",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        rounds_added += 1
+    return {"success": True, "inserted": inserted, "total": total_rows,
+            "rounds_registered": rounds_added}
 
 
 _PROCESS_FN = {
