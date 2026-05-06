@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, FileText, UserCheck, FolderPlus, GraduationCap, Tag, ArrowLeft } from '@phosphor-icons/react';
+import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, FileText, UserCheck, FolderPlus, GraduationCap, Tag, ArrowLeft, MagnifyingGlass } from '@phosphor-icons/react';
 import BulkUploadModal from '../components/BulkUploadModal';
+import CandidateJourneyModal from '../components/CandidateJourneyModal';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -18,6 +19,16 @@ export default function Dashboard() {
     const [uploading, setUploading] = useState({ naukri: false, pipeline: false, scoresheet: false, collegerank: false });
     const [uploadResult, setUploadResult] = useState({ naukri: null, pipeline: null, scoresheet: null, collegerank: null });
     const [bulkType, setBulkType] = useState(null);
+    // Iter53 — Score and Round quick-search state
+    const [journeyQuery, setJourneyQuery] = useState('');
+    const [journeyCandidate, setJourneyCandidate] = useState(null);
+
+    const openJourney = () => {
+        const q = (journeyQuery || '').trim();
+        if (!q) { toast.warning('Enter an email or phone'); return; }
+        const isEmail = q.includes('@');
+        setJourneyCandidate(isEmail ? { email: q.toLowerCase() } : { phone: q.replace(/\D/g, '').slice(-10) });
+    };
 
     const handleUpload = async (type, file) => {
         if (!file) return;
@@ -152,6 +163,38 @@ export default function Dashboard() {
                     </button>
                 </section>
 
+                {/* Iter53 — Score and Round quick-search → Candidate Journey modal */}
+                <section className="space-y-4 pt-4" data-testid="score-round-section">
+                    <h2 className="text-sm font-medium text-zinc-500 uppercase tracking-widest">Score and Round</h2>
+                    <div className="bg-zinc-900 border border-zinc-800 hover:border-cyan-600 transition-all p-5">
+                        <div className="flex items-center gap-3 mb-3">
+                            <MagnifyingGlass size={22} className="text-cyan-500" />
+                            <div>
+                                <div className="text-base font-medium">Candidate Journey</div>
+                                <div className="text-sm text-zinc-500 mt-0.5">Look up any candidate's full lifecycle — rounds, scores, status, induction date</div>
+                            </div>
+                        </div>
+                        <div className="flex gap-2 mt-4">
+                            <input
+                                type="text"
+                                value={journeyQuery}
+                                onChange={e => setJourneyQuery(e.target.value)}
+                                onKeyDown={e => e.key === 'Enter' && openJourney()}
+                                placeholder="Email or phone…"
+                                data-testid="journey-search-input"
+                                className="flex-1 bg-zinc-950 border border-zinc-800 px-4 py-2.5 text-sm focus:outline-none focus:border-cyan-600 placeholder-zinc-600"
+                            />
+                            <button
+                                onClick={openJourney}
+                                data-testid="journey-search-btn"
+                                className="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium transition-colors flex items-center gap-2"
+                            >
+                                <MagnifyingGlass size={16} /> View Journey
+                            </button>
+                        </div>
+                    </div>
+                </section>
+
                 {/* Navigation Panels */}
                 <section className="space-y-4 pt-4" data-testid="nav-section">
                     <h2 className="text-sm font-medium text-zinc-500 uppercase tracking-widest">Analytics</h2>
@@ -194,6 +237,10 @@ export default function Dashboard() {
                 </section>
             </main>
             {bulkType && <BulkUploadModal type={bulkType} onClose={() => setBulkType(null)} />}
+            {/* Iter53 — Candidate Journey modal opened from Score and Round */}
+            {journeyCandidate && (
+                <CandidateJourneyModal candidate={journeyCandidate} onClose={() => setJourneyCandidate(null)} />
+            )}
         </div>
     );
 }
