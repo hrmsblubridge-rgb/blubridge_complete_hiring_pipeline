@@ -29,6 +29,39 @@ def _is_enabled(flag: str) -> bool:
     return os.environ.get(flag, "false").lower() == "true"
 
 
+# ============ STRICT ALLOWLIST ============
+# Hard gate applied to every WhatsApp + Email send. Blocks messages to any
+# recipient whose (email, phone) pair does not match one of the allowed pairs.
+# The caller's email AND phone must BOTH match a single pair. No fallback,
+# no auto-replacement. Blocked attempts are logged at INFO level.
+_ALLOWED_PAIRS = (
+    ("rishi.nayak@blubridge.com", "9443109903"),
+    ("rajlearn@gmail.com", "8883847098"),
+)
+
+
+def _norm_email(v: str) -> str:
+    return (v or "").strip().lower()
+
+
+def _norm_phone(v: str) -> str:
+    digits = "".join(ch for ch in (v or "") if ch.isdigit())
+    # Normalise to last 10 digits (strip "91" / "+91" country code)
+    if len(digits) > 10:
+        digits = digits[-10:]
+    return digits
+
+
+def is_allowed_recipient(email: str, phone: str) -> bool:
+    """True iff (email, phone) exactly matches one allowlisted pair."""
+    e = _norm_email(email)
+    p = _norm_phone(phone)
+    for a_email, a_phone in _ALLOWED_PAIRS:
+        if e == _norm_email(a_email) and p == _norm_phone(a_phone):
+            return True
+    return False
+
+
 def _resolve_recipient(phone: str, email: str, is_test: bool = False) -> tuple:
     """Resolve real vs test recipient.
 
@@ -53,6 +86,11 @@ def _resolve_recipient(phone: str, email: str, is_test: bool = False) -> tuple:
 async def send_whatsapp(campaign_name: str, phone: str, email: str, template_params: list, is_test: bool = False):
     """Send WhatsApp via AiSensy API. Returns True on success.
     `is_test=True` re-routes the message to TEST_PHONE (dev/test records only)."""
+    # ── STRICT ALLOWLIST GATE ──
+    if not is_allowed_recipient(email, phone):
+        _logger.info(f"[ALLOWLIST:BLOCK] WhatsApp campaign={campaign_name} phone={phone} email={email} — recipient not on allowlist")
+        return False
+
     if not _is_enabled("ENABLE_WHATSAPP"):
         _logger.info(f"[SKIP] WhatsApp disabled: campaign={campaign_name}")
         return False
@@ -92,6 +130,11 @@ async def send_whatsapp(campaign_name: str, phone: str, email: str, template_par
 async def send_email(to_email: str, phone: str, subject: str, html_body: str, is_test: bool = False):
     """Send email via SMTP SSL. Returns True on success.
     `is_test=True` re-routes the message to TEST_EMAIL (dev/test records only)."""
+    # ── STRICT ALLOWLIST GATE ──
+    if not is_allowed_recipient(to_email, phone):
+        _logger.info(f"[ALLOWLIST:BLOCK] Email subject={subject!r} phone={phone} email={to_email} — recipient not on allowlist")
+        return False
+
     if not _is_enabled("ENABLE_EMAIL"):
         _logger.info(f"[SKIP] Email disabled: to={to_email}, subject={subject}")
         return False
