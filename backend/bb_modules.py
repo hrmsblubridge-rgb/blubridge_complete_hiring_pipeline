@@ -1927,6 +1927,212 @@ async def candidate_score_summary(
     }
 
 
+# ============ ITER52 — Candidate Journey (A–Z Row Action) ============
+# Aggregates the full hiring lifecycle of one candidate for the dashboard
+# row-action drawer/modal:
+#   * Basic info (name, email, phone, college, job role)
+#   * Round timeline (canonical round names + display labels + status)
+#   * Final outcome (Selected / Rejected / In Progress)
+#   * Date of Induction (read from pipeline_data; "Pending" if absent)
+#
+# Read-only with one tiny exception: PUT /candidate-induction-date allows
+# admins to set `pipeline_data.date_of_induction` once a candidate is
+# Selected. Everything else is sourced from the existing collections.
+
+# Custom display labels per the spec (UI only — canonical names unchanged).
+ROUND_DISPLAY_LABELS = {
+    "Round 1": "Technical 1",
+    "Round 2": "F2F",
+    "HR Round": "HR Interview",
+    "Final Round": "Final Discussion",
+}
+
+
+def _round_status(score) -> str:
+    """Map a score (numeric / None / 'Rejected') to a UI status string."""
+    if score is None:
+        return "Pending"
+    s = str(score).strip().lower()
+    if s in ("rejected", "reject", "fail", "failed"):
+        return "Rejected"
+    return "Completed"
+
+
+def _final_outcome(result_status: str, round_wise: dict) -> str:
+    """Compute Selected / Rejected / In Progress from result_status + scores."""
+    rs = (result_status or "").strip().lower()
+    if "select" in rs or rs in ("hired", "offered"):
+        return "Selected"
+    if "reject" in rs:
+        return "Rejected"
+    return "In Progress"
+
+
+@bb_router.get("/candidate-journey")
+async def candidate_journey(
+    request: Request,
+    email: Optional[str] = Query(None),
+    phone: Optional[str] = Query(None),
+):
+    """Full A–Z candidate journey for the dashboard row-action drawer.
+
+    Resolution: email primary, phone fallback. Reads ONLY from existing
+    processed sources (`pipeline_data`, `bb_applicant_updates`, `score_sheet`)
+    — never modifies records. Conflicts (same phone bound to a different
+    email) return 409 + log so the UI can block the view per spec.
+    """
+    await _require_auth(request)
+    if not email and not phone:
+        raise HTTPException(status_code=400, detail="email or phone required")
+    em = _norm_email(email or "")
+    ph = _norm_phone(phone or "")
+
+    or_clauses = []
+    if em:
+        or_clauses.append({"email": em})
+    if ph:
+        or_clauses.append({"phone": ph})
+    pd_doc = await _db.pipeline_data.find_one(
+        {"$or": or_clauses} if len(or_clauses) > 1 else or_clauses[0],
+        {"_id": 0},
+    )
+    if not pd_doc:
+        raise HTTPException(status_code=404, detail="Candidate not found in pipeline_data")
+
+    # Conflict detection — block the view per spec
+    pd_email = _norm_email(pd_doc.get("email") or "")
+    pd_phone = _norm_phone(pd_doc.get("phone") or "")
+    if em and ph and pd_email and pd_phone and (pd_email != em or pd_phone != ph):
+        if pd_email != em and pd_phone != ph:
+            _logger.warning(f"[Journey] CONFLICT email/phone mismatch: query=({em}/{ph}) record=({pd_email}/{pd_phone})")
+            raise HTTPException(status_code=409, detail="Email/phone mismatch — view blocked")
+
+    resolved_email = pd_email or em
+    resolved_phone = pd_phone or ph
+
+    # Round-wise scores. Priority (matches /attended-for-scores):
+    #   bb_applicant_updates.scores[]  >  score_sheet
+    upd = await _db.bb_applicant_updates.find_one(
+        {"email": resolved_email},
+        {"_id": 0, "status": 1, "scores": 1, "updated_at": 1},
+    ) or {}
+    if upd.get("scores"):
+        # Build the same shape as _build_round_wise_scores so the timeline
+        # logic below stays unchanged.
+        rws_grouped = {}
+        for s in upd.get("scores") or []:
+            canon = _norm_round(s.get("round_name"))
+            if not canon:
+                continue
+            try:
+                sval = float(s.get("score") or 0)
+            except (TypeError, ValueError):
+                sval = 0.0
+            ts = str(upd.get("updated_at") or "")
+            cur = rws_grouped.get(canon)
+            if cur is None or ts > str(cur.get("created_at") or ""):
+                rws_grouped[canon] = {
+                    "score": sval, "raw_round": s.get("round_name") or canon,
+                    "created_at": upd.get("updated_at"),
+                }
+        latest_round = None
+        if rws_grouped:
+            latest_round = max(rws_grouped, key=lambda k: str(rws_grouped[k].get("created_at") or ""))
+        rws = {
+            "round_wise_scores": rws_grouped,
+            "latest_round": latest_round,
+            "latest_score": rws_grouped[latest_round]["score"] if latest_round else None,
+            "total_score": sum((v["score"] or 0) for v in rws_grouped.values()),
+            "rounds": sorted(rws_grouped.keys()),
+        }
+    else:
+        rws = await _build_round_wise_scores(resolved_email, resolved_phone)
+
+    # Status from bb_applicant_updates (recruiter-set) > pipeline_data.result_status
+    result_status = (upd.get("status") or pd_doc.get("result_status") or "").strip()
+
+    # Build the round timeline. Use bb_rounds order so timeline is consistent
+    # across candidates; fall back to alphabetical for any ad-hoc rounds.
+    all_rounds_docs = await _db.bb_rounds.find(
+        {"active": {"$ne": False}}
+    ).sort([("order", 1), ("name", 1)]).to_list(None)
+    ordered_round_names = [r.get("name") for r in all_rounds_docs if r.get("name")]
+    # Append any rounds the candidate has but isn't in bb_rounds (legacy)
+    for rn in rws["rounds"]:
+        if rn not in ordered_round_names:
+            ordered_round_names.append(rn)
+
+    round_details = []
+    for rn in ordered_round_names:
+        bucket = rws["round_wise_scores"].get(rn)
+        score = bucket.get("score") if bucket else None
+        completed_date = bucket.get("created_at") if bucket else None
+        # Spec: skip rounds the candidate has no data for (don't pad with Pending)
+        if score is None and not completed_date:
+            continue
+        round_details.append({
+            "round_name": rn,
+            "round_label": ROUND_DISPLAY_LABELS.get(rn, rn),
+            "score": score,
+            "status": _round_status(score),
+            "completed_date": completed_date,
+        })
+
+    final_status = _final_outcome(result_status, rws["round_wise_scores"])
+    raw_doi = pd_doc.get("date_of_induction") or ""
+    if final_status == "Selected":
+        date_of_induction = raw_doi or "Pending"
+    else:
+        date_of_induction = raw_doi or "Not Applicable"
+
+    return {
+        "basic": {
+            "name": pd_doc.get("name") or "",
+            "email": resolved_email,
+            "phone": resolved_phone,
+            "college": pd_doc.get("college") or pd_doc.get("_college_resolved") or "",
+            "job_role": pd_doc.get("job_role") or pd_doc.get("job_title") or "",
+        },
+        "round_details": round_details,
+        "latest_round": rws["latest_round"],
+        "latest_score": rws["latest_score"],
+        "total_score": rws["total_score"],
+        "final_outcome": {
+            "status": final_status,
+            "result_status_raw": result_status,
+            "date_of_induction": date_of_induction,
+        },
+    }
+
+
+class _InductionDateBody(BaseModel):
+    email: str
+    date_of_induction: Optional[str] = None  # ISO date or "" to clear
+
+
+@bb_router.put("/candidate-induction-date")
+async def update_induction_date(body: _InductionDateBody, request: Request):
+    """Set / clear `pipeline_data.date_of_induction` for a candidate. Used
+    by the Final Outcome card on the journey modal once a candidate is
+    Selected. Read-only on every other field (no other writes here).
+    """
+    await _require_auth(request)
+    em = _norm_email(body.email)
+    if not em:
+        raise HTTPException(status_code=400, detail="email required")
+    pd_doc = await _db.pipeline_data.find_one({"email": em}, {"_id": 1})
+    if not pd_doc:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    new_value = (body.date_of_induction or "").strip()
+    await _db.pipeline_data.update_one(
+        {"email": em},
+        {"$set": {"date_of_induction": new_value,
+                   "induction_updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    _logger.info(f"[Induction] email={em} date_of_induction={new_value or '(cleared)'}")
+    return {"success": True, "email": em, "date_of_induction": new_value or None}
+
+
 @bb_router.post("/import-scores/preview")
 async def import_scores_preview(request: Request):
     """STEP 1 of 2 — Parse uploaded CSV/XLSX and return rows for user preview.

@@ -3,9 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import dayjs from 'dayjs';
 import { toast } from 'sonner';
-import { ArrowLeft, FunnelSimple, ArrowCounterClockwise, SpinnerGap, CaretLeft, CaretRight, CaretDoubleLeft, CaretDoubleRight, MagnifyingGlass } from '@phosphor-icons/react';
+import { ArrowLeft, FunnelSimple, ArrowCounterClockwise, SpinnerGap, CaretLeft, CaretRight, CaretDoubleLeft, CaretDoubleRight, MagnifyingGlass, Eye } from '@phosphor-icons/react';
 import { formatTime12H } from '../utils/dateFormat';
 import SortableHeader from '../components/SortableHeader';
+import CandidateJourneyModal from '../components/CandidateJourneyModal';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 const PAGE_SIZES = [10, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500];
@@ -52,6 +53,7 @@ export default function Applicants() {
     const [collegeStatus, setCollegeStatus] = useState('');
     const [goToPage, setGoToPage] = useState('');
     const [sort, setSort] = useState(null);
+    const [journeyCandidate, setJourneyCandidate] = useState(null);  // Iter52
 
     useEffect(() => {
         (async () => {
@@ -197,6 +199,7 @@ export default function Applicants() {
                             <table className="w-full text-sm">
                                 <thead>
                                     <tr className="bg-zinc-900 border-b border-zinc-800">
+                                        <th className="text-left px-4 py-3 font-medium text-zinc-400 text-xs uppercase tracking-wider whitespace-nowrap w-16">Action</th>
                                         {COLUMNS.map(col => (
                                             <th key={col.key} className="text-left px-4 py-3 font-medium text-zinc-400 text-xs uppercase tracking-wider whitespace-nowrap">
                                                 {col.sortable ? (
@@ -209,10 +212,21 @@ export default function Applicants() {
                                 <tbody>
                                     {data.length === 0 ? (
                                         <tr data-testid="empty-state-row">
-                                            <td colSpan={COLUMNS.length} className="px-4 py-16 text-center text-zinc-500">No records found.</td>
+                                            <td colSpan={COLUMNS.length + 1} className="px-4 py-16 text-center text-zinc-500">No records found.</td>
                                         </tr>
                                     ) : data.map((row, i) => (
                                         <tr key={i} className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors" data-testid={`applicant-row-${i}`}>
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                {/* Iter52 — A–Z row action: opens the full candidate journey modal */}
+                                                <button
+                                                    onClick={() => setJourneyCandidate({ email: row.email, phone: row.phone })}
+                                                    data-testid={`journey-btn-${i}`}
+                                                    title="View Candidate Journey"
+                                                    className="p-1.5 text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800"
+                                                >
+                                                    <Eye size={16} />
+                                                </button>
+                                            </td>
                                             {COLUMNS.map(col => (
                                                 <td key={col.key} className="px-4 py-3 whitespace-nowrap">
                                                     {col.key === 'attended_or_not' ? (
@@ -282,6 +296,10 @@ export default function Applicants() {
                     </>
                 )}
             </div>
+            {/* Iter52 — Candidate Journey modal */}
+            {journeyCandidate && (
+                <CandidateJourneyModal candidate={journeyCandidate} onClose={() => setJourneyCandidate(null)} />
+            )}
         </div>
     );
 }
