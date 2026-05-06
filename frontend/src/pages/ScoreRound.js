@@ -571,7 +571,8 @@ export default function ScoreRound() {
                         </tr>
                         {extraRounds.length > 0 && (
                             <tr className="border-b border-zinc-800 bg-fuchsia-950/30" data-testid="extra-subheader">
-                                <th className="sticky left-0 z-30 bg-zinc-900/70" colSpan={11 + staticDisplayRounds.length + 1}></th>
+                                {/* Iter63 — colspan = 1 (Action) + 10 (basic info) + staticDisplayRounds.length (static rounds) */}
+                                <th className="sticky left-0 z-30 bg-zinc-900/70" colSpan={11 + staticDisplayRounds.length}></th>
                                 {extraRounds.map(er => (
                                     <Fragment key={`subhdr-${er.canon}`}>
                                         <th style={{ width: SUB_WIDTHS[0], minWidth: SUB_WIDTHS[0], maxWidth: SUB_WIDTHS[0] }}
