@@ -443,25 +443,26 @@ export default function ScoreRound() {
         );
     };
 
-    // Iter58 — 5-col group renderer: Round Name / Date / Score / Command / Status
+    // Iter61 — 5-col group renderer with FIXED widths so each sub-cell
+    // aligns precisely under its sub-header (Name / Date / Score / Command / Status).
     const cellsForExtraRound = (row, canon) => {
         const e = row.rounds_map?.[canon] || {};
         const cmd = e.command || '';
         return (
             <>
-                <td className="px-2 py-1.5 text-cyan-300/90 border-l border-zinc-800/70" data-testid={`extra-name-${row.email}-${canon}`}>{e.round_name || '—'}</td>
-                <td className="px-2 py-1.5 text-zinc-400">{e.date ? fmtDDMMYYYY(e.date) : '—'}</td>
-                <td className="px-2 py-1.5 font-medium">{e.score === null || e.score === undefined || e.score === '' ? '—' : e.score}</td>
-                <td className="px-2 py-1.5 max-w-[220px] truncate" title={cmd}>
+                <td className="px-2 py-1.5 text-cyan-300/90 border-l border-fuchsia-700/30 w-[120px] min-w-[120px]" data-testid={`extra-name-${row.email}-${canon}`}>{e.round_name || '—'}</td>
+                <td className="px-2 py-1.5 text-zinc-400 w-[110px] min-w-[110px]">{e.date ? fmtDDMMYYYY(e.date) : '—'}</td>
+                <td className="px-2 py-1.5 font-medium w-[70px] min-w-[70px]">{e.score === null || e.score === undefined || e.score === '' ? '—' : e.score}</td>
+                <td className="px-2 py-1.5 w-[180px] min-w-[180px] max-w-[180px] truncate" title={cmd}>
                     {cmd ? (
                         <span className="group relative inline-flex items-center gap-1 cursor-help">
-                            <Eye size={12} className="text-cyan-400" />
+                            <Eye size={12} className="text-cyan-400 shrink-0" />
                             <span className="text-zinc-400 truncate">{cmd}</span>
                             <span className="absolute left-0 top-full mt-1 hidden group-hover:block z-30 bg-zinc-950 border border-zinc-700 px-2 py-1 text-[11px] text-white whitespace-pre-wrap min-w-[200px] max-w-[320px] shadow-lg">{cmd}</span>
                         </span>
                     ) : <span className="text-zinc-700">—</span>}
                 </td>
-                <td className="px-2 py-1.5">
+                <td className="px-2 py-1.5 w-[140px] min-w-[140px]">
                     {e.status ? <span className="text-[10px] uppercase bg-zinc-800 text-zinc-300 px-1.5 py-0.5">{e.status}</span> : <span className="text-zinc-700">—</span>}
                 </td>
             </>
@@ -470,6 +471,8 @@ export default function ScoreRound() {
 
     const baseColCount = 11 + staticDisplayRounds.length + 3 + 1; // basic + static rounds + DOJ/DOD/DOI + Action
     const totalColCount = baseColCount + extraRounds.length * 5;
+    const SUB_WIDTHS = [120, 110, 70, 180, 140]; // matches cellsForExtraRound widths
+    const groupTotalWidth = SUB_WIDTHS.reduce((a, b) => a + b, 0);
 
     return (
         <div className="min-h-screen bg-[#0a0a0a] text-white" data-testid="score-round-page">
@@ -552,29 +555,36 @@ export default function ScoreRound() {
                             {staticDisplayRounds.map(rn => (
                                 <th key={rn} className="text-left px-3 py-2 font-medium text-cyan-400 uppercase tracking-wider" title={rn}>{rn}</th>
                             ))}
-                            <th className="text-left px-3 py-2 font-medium text-amber-400 uppercase tracking-wider">DOJ</th>
-                            <th className="text-left px-3 py-2 font-medium text-amber-400 uppercase tracking-wider">DOD</th>
-                            <th className="text-left px-3 py-2 font-medium text-amber-400 uppercase tracking-wider">DOI</th>
-                            {/* Iter58 — Extra rounds: 5-col group per round */}
+                            {/* Iter61 — Extra rounds positioned BETWEEN ZA and DOJ. 5-col groups. */}
                             {extraRounds.map(er => (
                                 <th key={`extra-${er.canon}`} colSpan={5}
-                                    className="text-center px-2 py-2 font-medium text-fuchsia-300 uppercase tracking-wider border-l-2 border-fuchsia-700/40 bg-fuchsia-900/10">
+                                    style={{ width: groupTotalWidth, minWidth: groupTotalWidth }}
+                                    className="text-center px-2 py-2 font-medium text-fuchsia-300 uppercase tracking-wider border-l-2 border-fuchsia-700/40 bg-fuchsia-900/20">
                                     {er.label}
                                 </th>
                             ))}
+                            <th className="text-left px-3 py-2 font-medium text-amber-400 uppercase tracking-wider">DOJ</th>
+                            <th className="text-left px-3 py-2 font-medium text-amber-400 uppercase tracking-wider">DOD</th>
+                            <th className="text-left px-3 py-2 font-medium text-amber-400 uppercase tracking-wider">DOI</th>
                         </tr>
                         {extraRounds.length > 0 && (
                             <tr className="border-b border-zinc-800 bg-zinc-900/70" data-testid="extra-subheader">
-                                <th className="sticky left-0 z-30 bg-zinc-900/70" colSpan={baseColCount}></th>
+                                <th className="sticky left-0 z-30 bg-zinc-900/70" colSpan={11 + staticDisplayRounds.length + 1}></th>
                                 {extraRounds.map(er => (
-                                    <>
-                                        <th key={`${er.canon}-name`} className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase border-l border-fuchsia-700/30">Name</th>
-                                        <th key={`${er.canon}-date`} className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase">Date</th>
-                                        <th key={`${er.canon}-score`} className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase">Score</th>
-                                        <th key={`${er.canon}-cmd`} className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase">Command</th>
-                                        <th key={`${er.canon}-status`} className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase">Status</th>
-                                    </>
+                                    <Fragment key={`subhdr-${er.canon}`}>
+                                        <th style={{ width: SUB_WIDTHS[0], minWidth: SUB_WIDTHS[0] }}
+                                            className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase border-l border-fuchsia-700/30">Name</th>
+                                        <th style={{ width: SUB_WIDTHS[1], minWidth: SUB_WIDTHS[1] }}
+                                            className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase">Date</th>
+                                        <th style={{ width: SUB_WIDTHS[2], minWidth: SUB_WIDTHS[2] }}
+                                            className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase">Score</th>
+                                        <th style={{ width: SUB_WIDTHS[3], minWidth: SUB_WIDTHS[3] }}
+                                            className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase">Command</th>
+                                        <th style={{ width: SUB_WIDTHS[4], minWidth: SUB_WIDTHS[4] }}
+                                            className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase">Status</th>
+                                    </Fragment>
                                 ))}
+                                <th colSpan={3} className="bg-zinc-900/70"></th>
                             </tr>
                         )}
                     </thead>
@@ -619,12 +629,12 @@ export default function ScoreRound() {
                                 {staticDisplayRounds.map(rn => (
                                     <td key={rn} className="px-3 py-1.5 text-zinc-300">{cellForRound(row, rn)}</td>
                                 ))}
-                                <td className="px-3 py-1.5 text-amber-200">{fmtDDMMYYYY(row.date_of_joining) || '—'}</td>
-                                <td className="px-3 py-1.5 text-amber-200">{fmtDDMMYYYY(row.date_of_documentation) || '—'}</td>
-                                <td className="px-3 py-1.5 text-amber-200">{fmtDDMMYYYY(row.date_of_induction) || '—'}</td>
                                 {extraRounds.map(er => (
                                     <Fragment key={`${row.email}-${er.canon}`}>{cellsForExtraRound(row, er.canon)}</Fragment>
                                 ))}
+                                <td className="px-3 py-1.5 text-amber-200">{fmtDDMMYYYY(row.date_of_joining) || '—'}</td>
+                                <td className="px-3 py-1.5 text-amber-200">{fmtDDMMYYYY(row.date_of_documentation) || '—'}</td>
+                                <td className="px-3 py-1.5 text-amber-200">{fmtDDMMYYYY(row.date_of_induction) || '—'}</td>
                             </tr>
                         ))}
                     </tbody>
