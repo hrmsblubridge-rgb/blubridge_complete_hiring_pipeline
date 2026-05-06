@@ -45,6 +45,15 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter45)** — Exact Score Mapping with Round Detection (Email + Phone matching):
+  - `bb_modules._build_round_wise_scores(email, phone, pick='latest'|'highest'|'lowest')` groups all `score_sheet` entries by canonical round name; picks one entry per round per the rule.
+  - `bb_modules._norm_round` canonicalises aliases (Technical 1 → Round 1, HR Interview → HR Round, Final Discussion → Final Round, Accounts1 → Accounts 1, Mensa Org variants).
+  - **NEW endpoint** `GET /api/bb/candidate-score-summary?email&phone&pick=` returns `{round_wise_scores, latest_round, latest_score, total_score, rounds, conflict}`.
+  - `GET /api/bb/attended-for-scores` now also includes `round_wise_scores`, `latest_round`, `latest_score`, `total_score` per row (legacy `scores[]` preserved for backward compat).
+  - `POST /api/upload/scoresheet` rewritten to **non-destructive smart upsert** — per (email-or-phone, canonical round) it only overwrites older/missing records. Same-phone-different-email rows are flagged + skipped. Returns `{inserted, updated, skipped_newer, skipped_conflict}`.
+  - `PUT /api/bb/applicant-score/{email}` merges new scores with existing (per canonical round) instead of replacing the whole list.
+  - One-time dedupe script `/app/backend/dedupe_score_sheet.py` collapses legacy duplicate score rows. Dry-run identified 998 distinct (candidate, round) groups in 3514 records → ~2516 duplicate rows ready to remove.
+  - 7/7 regression tests pass — `tests/test_iteration45_score_matching.py`. Iter44 13/13 pass overall.
 - **Feb 2026 (iter44)** — Smart Candidate Matching + Legacy Data Fix:
   - `bb_modules._resolve_candidate_extras(email, phone)` reads `bb_registrations` then `naukri_applies` to fill `college_type`, `source`, `college` when `pipeline_data` lacks them. Used by `/api/bb/verify-otp` as a runtime fallback (read-only, no DB write).
   - VerifyOTP success card now shows `College`, `College Type`, `Source` — N/A only when no source has the data.

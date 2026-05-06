@@ -208,6 +208,158 @@ async def _detect_match_conflict(email: str, phone: str) -> Optional[str]:
     return None
 
 
+# ============ EXACT SCORE MAPPING (Round-aware) ============
+# Master rule: Email primary + Phone secondary. Round names are treated as
+# the round IDENTITY — we don't force a fixed Round 1/2/HR/Final taxonomy.
+# Friendly aliases (Technical 1 → Round 1, etc.) are normalised when present.
+
+# Friendly alias map per the Feb 2026 spec. Keys are case-insensitive after
+# whitespace collapse. Values are the canonical bucket the score will surface
+# under in `round_wise_scores`. Anything not in this map keeps its original
+# (whitespace-collapsed) round name — e.g. "BP" stays "BP".
+ROUND_NAME_ALIASES = {
+    "technical 1": "Round 1",
+    "technical1": "Round 1",
+    "tech 1": "Round 1",
+    "round 1": "Round 1",
+    "round1": "Round 1",
+    "technical 2": "Round 2",
+    "technical2": "Round 2",
+    "tech 2": "Round 2",
+    "round 2": "Round 2",
+    "round2": "Round 2",
+    "hr interview": "HR Round",
+    "hr round": "HR Round",
+    "hr": "HR Round",
+    "final discussion": "Final Round",
+    "final round": "Final Round",
+    "final": "Final Round",
+    # Common spacing variants seen in live score_sheet
+    "accounts1": "Accounts 1",
+    "accounts2": "Accounts 2",
+    "mensa org": "Mensa Org",
+    "mensaorg": "Mensa Org",
+}
+
+
+def _norm_round(name: Optional[str]) -> str:
+    """Whitespace-collapse + alias-map a round name. Empty input → ''."""
+    if not name:
+        return ""
+    s = re.sub(r"\s+", " ", str(name).strip())
+    return ROUND_NAME_ALIASES.get(s.lower(), s)
+
+
+def _score_record_ts(rec: dict) -> str:
+    """Return a sortable timestamp for a score_sheet record (ISO string)."""
+    return str(rec.get("created_at") or rec.get("updated_at") or "")
+
+
+async def _build_round_wise_scores(
+    email: str,
+    phone: str,
+    pick: str = "latest",
+) -> dict:
+    """Resolve all score records for a candidate (email primary, phone fallback)
+    and group them by canonical round name.
+
+    `pick`:
+        - "latest"  → pick the entry with the most recent created_at per round
+        - "highest" → pick the highest score per round
+        - "lowest"  → pick the lowest score per round
+    Returns:
+        {
+          "round_wise_scores": { canonical_round: {score, raw_round, created_at} },
+          "latest_round": <round name with the most recent created_at across all>,
+          "latest_score": <its numeric score>,
+          "total_score":  <sum of selected scores per round>,
+          "rounds":       <ordered list of canonical round names>,
+        }
+    """
+    em = _norm_email(email)
+    ph = _norm_phone(phone)
+    if not em and not ph:
+        return {"round_wise_scores": {}, "latest_round": None,
+                "latest_score": None, "total_score": 0, "rounds": []}
+
+    or_clauses = []
+    if em:
+        or_clauses.append({"email": em})
+    if ph:
+        or_clauses.append({"phone": ph})
+    cursor = _db.score_sheet.find(
+        {"$or": or_clauses} if len(or_clauses) > 1 else or_clauses[0],
+        {"_id": 0},
+    )
+    records = await cursor.to_list(None) or []
+    if not records:
+        return {"round_wise_scores": {}, "latest_round": None,
+                "latest_score": None, "total_score": 0, "rounds": []}
+
+    # Group by canonical round name
+    grouped: dict = {}
+    for rec in records:
+        canon = _norm_round(rec.get("round_name"))
+        if not canon:
+            continue
+        grouped.setdefault(canon, []).append(rec)
+
+    selected = {}
+    for canon, recs in grouped.items():
+        if pick == "highest":
+            best = max(recs, key=lambda r: float(r.get("score") or 0))
+        elif pick == "lowest":
+            best = min(recs, key=lambda r: float(r.get("score") or 0))
+        else:  # latest (default)
+            best = max(recs, key=_score_record_ts)
+        try:
+            score_val = float(best.get("score") or 0)
+        except (TypeError, ValueError):
+            score_val = 0.0
+        selected[canon] = {
+            "score": score_val,
+            "raw_round": (best.get("round_name") or canon),
+            "created_at": best.get("created_at"),
+        }
+
+    # Latest round across the whole candidate
+    latest_round = None
+    latest_score = None
+    if selected:
+        latest_round = max(selected, key=lambda k: str(selected[k].get("created_at") or ""))
+        latest_score = selected[latest_round]["score"]
+    total_score = sum((s["score"] or 0) for s in selected.values())
+
+    return {
+        "round_wise_scores": selected,
+        "latest_round": latest_round,
+        "latest_score": latest_score,
+        "total_score": total_score,
+        "rounds": sorted(selected.keys()),
+    }
+
+
+async def _detect_score_phone_conflict(email: str, phone: str) -> Optional[str]:
+    """For score uploads — return a conflict reason if `phone` is already
+    associated with a *different* email in score_sheet."""
+    em = _norm_email(email)
+    ph = _norm_phone(phone)
+    if not em or not ph:
+        return None
+    doc = await _db.score_sheet.find_one(
+        {"phone": ph, "email": {"$nin": [None, "", em]}},
+        {"_id": 0, "email": 1},
+    )
+    if doc:
+        other = _norm_email(doc.get("email"))
+        # Allow comma-joined dup emails (e.g. "x@y.com, x@y.com")
+        parts = {p.strip() for p in (other or "").split(",") if p.strip()}
+        if other and other != em and em not in parts:
+            return f"phone {ph} ↔ different email '{other}' in score_sheet"
+    return None
+
+
+
 
 def _oid(id_str: str) -> ObjectId:
     try:
@@ -1582,11 +1734,42 @@ async def get_attended_for_scores(
                 if rn:
                     merged_scores.append({"round_name": rn, "score": sc})
 
+        # ---- Round-wise structured summary (Iter45) ----
+        # Group merged_scores by canonical round name and pick the most-recent
+        # entry per round. Keeps the legacy `scores` array for backward compat.
+        rws_grouped: dict = {}
+        for s in merged_scores:
+            canon = _norm_round(s.get("round_name"))
+            if not canon:
+                continue
+            ts = str(s.get("created_at") or s.get("updated_at") or "")
+            cur = rws_grouped.get(canon)
+            if cur is None or ts > str(cur.get("created_at") or ""):
+                try:
+                    sval = float(s.get("score") or 0)
+                except (TypeError, ValueError):
+                    sval = 0.0
+                rws_grouped[canon] = {
+                    "score": sval,
+                    "raw_round": s.get("round_name") or canon,
+                    "created_at": s.get("created_at"),
+                }
+        latest_round = None
+        latest_score = None
+        if rws_grouped:
+            latest_round = max(rws_grouped, key=lambda k: str(rws_grouped[k].get("created_at") or ""))
+            latest_score = rws_grouped[latest_round]["score"]
+        total_score = sum((v["score"] or 0) for v in rws_grouped.values())
+
         result.append({"name": doc.get("name") or "-", "email": email, "phone": doc.get("phone") or "-",
                         "date_of_interview": doc.get("schedule_date") or "-",
                         "job_role": doc.get("job_role") or doc.get("job_title") or "-",
                         "status": upd.get("status") or doc.get("result_status") or "On hold",
-                        "scores": merged_scores})
+                        "scores": merged_scores,
+                        "round_wise_scores": rws_grouped,
+                        "latest_round": latest_round,
+                        "latest_score": latest_score,
+                        "total_score": total_score})
 
     total_pages = (total + limit - 1) // limit if total else 1
     return {
@@ -1605,10 +1788,80 @@ async def update_applicant_score(email: str, data: ApplicantScoreUpdate, request
         raise HTTPException(status_code=400, detail="Email required")
     update_doc = {"email": email, "status": data.status, "updated_at": datetime.now(timezone.utc).isoformat()}
     if data.scores:
-        update_doc["scores"] = [{"round_name": s.round_name, "score": s.score} for s in data.scores]
+        # Non-destructive merge: existing valid scores are preserved per
+        # canonical round name. Newer timestamps (or missing rounds) win.
+        existing = await _db.bb_applicant_updates.find_one({"email": email}, {"_id": 0, "scores": 1})
+        existing_by_round = {}
+        for s in (existing.get("scores") or []) if existing else []:
+            canon = _norm_round(s.get("round_name"))
+            if canon:
+                existing_by_round[canon] = s
+        for s in data.scores:
+            canon = _norm_round(s.round_name)
+            if not canon:
+                continue
+            existing_by_round[canon] = {"round_name": s.round_name, "score": s.score}
+        update_doc["scores"] = list(existing_by_round.values())
     await _db.bb_applicant_updates.update_one({"email": email}, {"$set": update_doc}, upsert=True)
     await _db.registered_candidates.update_many({"email": email}, {"$set": {"result_status": data.status}})
     return {"success": True}
+
+
+@bb_router.get("/candidate-score-summary")
+async def candidate_score_summary(
+    request: Request,
+    email: Optional[str] = Query(None),
+    phone: Optional[str] = Query(None),
+    pick: str = Query("latest", regex="^(latest|highest|lowest)$"),
+):
+    """Round-wise score summary for a single candidate (Email primary, Phone
+    fallback). Returns a structured object per the Iter45 spec:
+
+        {email, phone, name, round_wise_scores: {...},
+         latest_round, latest_score, total_score, rounds, conflict?}
+    """
+    await _require_auth(request)
+    if not email and not phone:
+        raise HTTPException(status_code=400, detail="email or phone required")
+
+    em = _norm_email(email or "")
+    ph = _norm_phone(phone or "")
+
+    # Identity from pipeline_data first; bb_registrations fallback
+    or_clauses = []
+    if em:
+        or_clauses.append({"email": em})
+    if ph:
+        or_clauses.append({"phone": ph})
+    pd_doc = await _db.pipeline_data.find_one(
+        {"$or": or_clauses} if len(or_clauses) > 1 else or_clauses[0],
+        {"_id": 0, "name": 1, "email": 1, "phone": 1},
+    )
+    if not pd_doc:
+        reg = await _db.bb_registrations.find(
+            {"$or": or_clauses} if len(or_clauses) > 1 else or_clauses[0],
+            {"_id": 0, "full_name": 1, "email": 1, "phone": 1},
+        ).sort("registered_at", -1).limit(1).to_list(1)
+        pd_doc = reg[0] if reg else {}
+
+    name = pd_doc.get("name") or pd_doc.get("full_name") or ""
+    resolved_email = em or _norm_email(pd_doc.get("email") or "")
+    resolved_phone = ph or _norm_phone(pd_doc.get("phone") or "")
+
+    rws = await _build_round_wise_scores(resolved_email, resolved_phone, pick=pick)
+    conflict = await _detect_score_phone_conflict(resolved_email, resolved_phone)
+
+    return {
+        "email": resolved_email,
+        "phone": resolved_phone,
+        "name": name,
+        "round_wise_scores": rws["round_wise_scores"],
+        "latest_round": rws["latest_round"],
+        "latest_score": rws["latest_score"],
+        "total_score": rws["total_score"],
+        "rounds": rws["rounds"],
+        "conflict": conflict,
+    }
 
 
 @bb_router.post("/import-scores/preview")

@@ -1733,7 +1733,18 @@ async def upload_score_sheet(
     user: str = Depends(get_current_user)
 ):
     """Upload score sheet (CSV/XLSX). Fields: name, email, phone, score, round_name.
-    Multiple rows per applicant (different rounds) are allowed — no overwrite."""
+
+    Non-destructive smart upsert (Feb 2026 / iter45):
+      * Email + Phone matching (email primary, phone secondary).
+      * Per (email-or-phone, canonical round_name): the upload only overwrites
+        when the existing record is older OR missing. Newer existing records
+        are preserved + skipped.
+      * Same phone with a different email → flagged as a conflict and skipped.
+      * Round names are whitespace-collapsed; common aliases (Technical 1 →
+        Round 1, Accounts1 → Accounts 1, etc.) are canonicalised before match.
+    """
+    from bb_modules import _norm_round, _norm_email, _norm_phone, _detect_score_phone_conflict
+
     content = await file.read()
     df = parse_file(content, file.filename)
     df.columns = df.columns.str.strip().str.lower()
@@ -1744,48 +1755,94 @@ async def upload_score_sheet(
         raise HTTPException(status_code=400, detail=f"Missing columns: {missing}")
 
     inserted = 0
+    updated = 0
+    skipped_newer = 0
+    skipped_conflict = 0
     errors = []
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     for idx, row in df.iterrows():
         try:
-            email = normalize_email(row.get("email"))
-            phone = normalize_phone(row.get("phone"))
+            email = _norm_email(row.get("email"))
+            phone = _norm_phone(row.get("phone"))
             name = str(row.get("name") or "").strip()
-            round_name = str(row.get("round_name") or "").strip()
+            raw_round = str(row.get("round_name") or "").strip()
+            canon_round = _norm_round(raw_round)
             score_val = row.get("score")
 
             if not email and not phone:
                 errors.append(f"Row {idx + 2}: Missing email and phone")
                 continue
-            if not round_name:
+            if not canon_round:
                 errors.append(f"Row {idx + 2}: Missing round_name")
                 continue
 
-            # Parse score as float
             try:
                 score = float(score_val) if not pd.isna(score_val) else 0.0
             except (ValueError, TypeError):
                 score = 0.0
+
+            # Conflict check: same phone, different email
+            conflict = await _detect_score_phone_conflict(email, phone)
+            if conflict:
+                skipped_conflict += 1
+                errors.append(f"Row {idx + 2}: SKIP {conflict}")
+                continue
+
+            # Build identity match across email/phone for the same canonical
+            # round (canon comparison is case-insensitive via $regex).
+            or_clauses = []
+            if email:
+                or_clauses.append({"email": email})
+            if phone:
+                or_clauses.append({"phone": phone})
+            existing = None
+            cursor = db.score_sheet.find(
+                {"$or": or_clauses} if len(or_clauses) > 1 else or_clauses[0],
+                {"_id": 1, "round_name": 1, "score": 1, "created_at": 1, "updated_at": 1},
+            )
+            async for r in cursor:
+                if _norm_round(r.get("round_name")) == canon_round:
+                    existing = r
+                    break
 
             doc = {
                 "name": name,
                 "email": email,
                 "phone": phone,
                 "score": score,
-                "round_name": round_name,
-                "created_at": datetime.now(timezone.utc).isoformat()
+                "round_name": raw_round or canon_round,
+                "round_canonical": canon_round,
+                "created_at": now_iso,
+                "updated_at": now_iso,
             }
 
-            await db.score_sheet.insert_one(doc)
-            inserted += 1
+            if not existing:
+                await db.score_sheet.insert_one(doc)
+                inserted += 1
+            else:
+                existing_ts = str(existing.get("updated_at") or existing.get("created_at") or "")
+                if existing_ts and existing_ts > now_iso:
+                    skipped_newer += 1
+                    continue
+                # Replace older / equal-timestamp record with the new one
+                await db.score_sheet.update_one(
+                    {"_id": existing["_id"]},
+                    {"$set": {**doc, "created_at": existing.get("created_at") or now_iso}},
+                )
+                updated += 1
 
         except Exception as e:
             errors.append(f"Row {idx + 2}: {str(e)}")
 
     return {
         "success": True,
-        "message": f"Score sheet uploaded. Inserted: {inserted}",
+        "message": f"Score sheet processed. Inserted: {inserted}, Updated: {updated}, "
+                   f"Skipped (newer): {skipped_newer}, Skipped (conflict): {skipped_conflict}",
         "inserted": inserted,
+        "updated": updated,
+        "skipped_newer": skipped_newer,
+        "skipped_conflict": skipped_conflict,
         "errors": errors[:20]
     }
 
