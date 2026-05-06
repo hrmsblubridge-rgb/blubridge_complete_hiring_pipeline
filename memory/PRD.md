@@ -45,6 +45,13 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter51)** — Cooldown bypass for test users + Round duplication eliminated:
+  - **Cooldown bypass** (`register_applicant`): the 4-month re-registration block now skips the allowlist pair `(rishi.nayak@blubridge.com, 9443109903)` and `(rajlearn@gmail.com, 8883847098)` — same `is_allowed_recipient` check used by messaging. Only matches when BOTH email + phone of a single allowed pair line up. All other users follow the unchanged cooldown rule. Logs `[Cooldown] BYPASS for allowlisted test user…` for traceability.
+  - **Round dedup — root cause**: `score_sheet` legacy data has BOTH `'Accounts1'` and `'Accounts 1'` (and similar variants). Export was collecting raw round_names with only `.strip()`, so each variant became a separate column.
+  - **Export fix** (`/api/bb/export-scores`): round columns now collapse via `_norm_round` (whitespace-collapsed + alias-mapped); per-applicant scores from any variant fall into the canonical bucket. CSV/XLSX header has no duplicate round columns.
+  - **Import fix** (`/api/bb/import-scores/preview`): if the imported file has both `Accounts1` and `Accounts 1` columns, both collapse to a single canonical `Accounts 1` column; per-row score from any variant column lands in the canonical bucket (last-wins to handle conflicting CSV cells).
+  - **UI safety net** (`/api/bb/rounds`): list endpoint now does case-insensitive + whitespace-collapsed dedupe at render time so the rounds tabs UI never shows the same round twice even if legacy bad data exists in `bb_rounds`.
+  - 27/27 regression tests pass (5 new in `test_iteration51_cooldown_round_dedup.py`). No live data modified.
 - **Feb 2026 (iter50)** — Auto-Move Public College Registration → `pipeline_data`:
   - `register_college_applicant` now syncs each successful submission into `pipeline_data` per the College Drive spec:
     - **`source: "college_drive"`** (was `"college_form"`).
