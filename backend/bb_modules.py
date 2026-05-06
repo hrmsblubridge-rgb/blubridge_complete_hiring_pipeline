@@ -1043,7 +1043,7 @@ async def register_college_applicant(data: CollegeRegistrationBody):
         "schedule_time": schedule_time,
         "otp_verified": "",
         "result_status": "",
-        "source": "college_form",
+        "source": "college_drive",
         # Persisted derived fields so HR pages immediately reflect this record
         "_college_status": cc["college_status"],
         "_nirf_category": "NIRF" if college_type.startswith("NIRF - #") else "Non NIRF",
@@ -1055,36 +1055,87 @@ async def register_college_applicant(data: CollegeRegistrationBody):
     # register_applicant for full rationale). Dynamic fields (schedule_date,
     # schedule_time, job_role, email_type, submitted_at, last_update) always
     # update; profile fields are preserved if already populated.
+    # Iter50 — also enforces:
+    #   * source is filled if missing (never overwritten if already set)
+    #   * stage:"registered" + initial pipeline timestamps on insert only
+    #   * scores/status/progress fields are NEVER touched here
+    #   * email↔phone conflicts are logged + skipped (registration still
+    #     succeeds; spec says pipeline failure must not block the response)
     PROFILE_FIELDS = {
         "name", "email", "phone", "age", "gender", "college", "college_type",
         "degree", "course", "location", "year_of_graduation", "source",
         "_college_status", "_nirf_category", "_college_resolved", "_match_confidence",
+        # Iter50 — pipeline progress fields are NEVER overwritten by a
+        # college-drive re-registration (per spec: "Do NOT overwrite scores,
+        # status, previous pipeline progress").
+        "otp_verified", "result_status",
     }
     DYNAMIC_FIELDS = {
         "job_role", "job_title", "email_type", "submitted_at", "last_update",
         "_normalized_job_role", "schedule_date", "schedule_time",
-        "otp_verified", "result_status",
     }
-    existing = await _db.pipeline_data.find_one(
-        {"$or": [{"email": data.email.strip().lower()}, {"phone": phone_normalized}]},
-        {"_id": 0},
-    )
-    set_fields = {}
-    for k, v in pipeline_doc_set.items():
-        if k in DYNAMIC_FIELDS:
-            set_fields[k] = v
-        elif k in PROFILE_FIELDS:
-            if not existing or _is_blank(existing.get(k)):
-                set_fields[k] = v
+    try:
+        target_email = data.email.strip().lower()
+        existing = await _db.pipeline_data.find_one(
+            {"$or": [{"email": target_email}, {"phone": phone_normalized}]},
+            {"_id": 0, "email": 1, "phone": 1, **{f: 1 for f in PROFILE_FIELDS}},
+        )
+        # Conflict detection: same phone but a different stored email → log + skip.
+        # Per spec: "If both exist but mismatch → log conflict, skip auto update"
+        if existing:
+            ex_email = (existing.get("email") or "").strip().lower()
+            ex_phone = (existing.get("phone") or "").strip()
+            if ex_email and ex_phone and ex_email != target_email and ex_phone == phone_normalized:
+                _logger.warning(
+                    f"[Pipeline] CONFLICT skip — phone {phone_normalized} already maps "
+                    f"to email '{ex_email}', cannot also bind to '{target_email}'"
+                )
+            else:
+                set_fields = {}
+                for k, v in pipeline_doc_set.items():
+                    if k in DYNAMIC_FIELDS:
+                        set_fields[k] = v
+                    elif k in PROFILE_FIELDS:
+                        if _is_blank(existing.get(k)):
+                            set_fields[k] = v
+                    else:
+                        set_fields[k] = v
+                set_fields["last_update"] = submitted_at
+                set_fields["updated_at"] = submitted_at
+                await _db.pipeline_data.update_one(
+                    {"email": target_email},
+                    {"$set": set_fields,
+                     # Insert-only fields per spec
+                     "$setOnInsert": {"created_at": submitted_at,
+                                       "stage": "registered",
+                                       "pipeline_synced_at": submitted_at}},
+                )
+                _logger.info(
+                    f"[Pipeline] action=updated source=college_drive "
+                    f"email={target_email} phone={phone_normalized} "
+                    f"college={college} role={role}"
+                )
         else:
-            set_fields[k] = v
-    set_fields["last_update"] = submitted_at
-    set_fields["updated_at"] = submitted_at
-    await _db.pipeline_data.update_one(
-        {"email": data.email.strip().lower()},
-        {"$set": set_fields, "$setOnInsert": {"created_at": submitted_at}},
-        upsert=True,
-    )
+            # No existing record — fresh insert with full payload + stage flag
+            insert_doc = dict(pipeline_doc_set)
+            insert_doc["last_update"] = submitted_at
+            insert_doc["updated_at"] = submitted_at
+            insert_doc["created_at"] = submitted_at
+            insert_doc["stage"] = "registered"
+            insert_doc["pipeline_synced_at"] = submitted_at
+            await _db.pipeline_data.update_one(
+                {"email": target_email},
+                {"$set": insert_doc},
+                upsert=True,
+            )
+            _logger.info(
+                f"[Pipeline] action=created source=college_drive "
+                f"email={target_email} phone={phone_normalized} "
+                f"college={college} role={role}"
+            )
+    except Exception as e:
+        # Per spec: pipeline failure must NOT block registration success
+        _logger.error(f"[Pipeline] sync failed for email={data.email}: {e}", exc_info=True)
 
     _logger.info(f"[CollegeForm] registered email={data.email} college={college} role={role} → {schedule_date} {schedule_time}")
     return {

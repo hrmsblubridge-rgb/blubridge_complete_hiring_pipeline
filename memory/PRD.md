@@ -45,6 +45,18 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter50)** — Auto-Move Public College Registration → `pipeline_data`:
+  - `register_college_applicant` now syncs each successful submission into `pipeline_data` per the College Drive spec:
+    - **`source: "college_drive"`** (was `"college_form"`).
+    - **Insert-only flags**: `stage: "registered"`, `created_at`, `pipeline_synced_at` (never overwritten on re-registration via `$setOnInsert`).
+    - **Profile preserved** (name, college, source, age, …) — only filled if currently blank.
+    - **Pipeline progress preserved** — `scores`, `result_status`, `otp_verified` are NEVER touched by the sync.
+    - **Dynamic fields refreshed** — `schedule_date`, `schedule_time`, `job_role`, `email_type`, `last_update`, `updated_at`.
+    - **Phone↔email conflict guard**: same phone bound to a different email → logged + sync SKIPPED, registration still returns 200 (per spec).
+    - **Failure-isolated**: any pipeline error is caught + logged but never blocks the registration response.
+    - **Audit log**: `[Pipeline] action=created/updated source=college_drive email=... phone=... college=... role=...`
+  - Email/WhatsApp triggers untouched (spec requirement).
+  - 22/22 regression tests pass (3 new in `test_iteration50_pipeline_sync.py`). No live data touched.
 - **Feb 2026 (iter49)** — Update Applicants Scores: Import error fix + Export performance:
   - **Root cause of "Script error at handleError…"**: the import error path passed `err.response.data.detail` directly to `toast.error()`. FastAPI sometimes returns `detail` as an array/object (not a string), and React renders an object as a child → uncaught error → CRA dev overlay showed the generic "Script error" message instead of the real cause.
   - **Frontend hardening** (`UpdateScores.js`): added `errMsg()` coercion that handles string / list-of-validation-errors / object / network shapes; preview-modal renders use `String(...)` coercion and `Array.isArray()` guards on `r.scores` / `round_columns` so undefined fields after "Status" never crash the row; both `handleImport` and `handleImportConfirm` now log to console + show real backend error; added 2-min axios timeout + reset file input early so retry-with-same-file works; export shows a "Exporting…" loading toast (no more frozen UI feel).
