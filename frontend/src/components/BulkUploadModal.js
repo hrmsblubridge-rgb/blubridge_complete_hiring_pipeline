@@ -31,18 +31,46 @@ export default function BulkUploadModal({ type, onClose }) {
         fetchStatus();
     }, [fetchStatus]);
 
+    // ---- Live polling while a job is processing (Iter46) ----
+    // Polls every 1.5s when there's a queued/processing job so the row-count
+    // progress bar updates in near-real-time. Stops polling when the queue is
+    // idle to save bandwidth.
+    useEffect(() => {
+        const hasActive = pending.some(p => p.status === 'processing' || p.status === 'queued' || p.status === 'pending');
+        if (!hasActive) return;
+        const id = setInterval(fetchStatus, 1500);
+        return () => clearInterval(id);
+    }, [pending, fetchStatus]);
+
     const handleUpload = async (e) => {
         const files = e.target.files;
         if (!files || files.length === 0) return;
+        // Soft size warning — Kubernetes ingress + Atlas pipeline get unhappy
+        // above ~50 MB. We still attempt the upload.
+        const big = Array.from(files).find(f => f.size > 50 * 1024 * 1024);
+        if (big) {
+            toast.warning(`${big.name} is ${(big.size / (1024 * 1024)).toFixed(1)} MB — upload may be slow or rejected by ingress`);
+        }
         setUploading(true);
         try {
             const formData = new FormData();
             for (let i = 0; i < files.length; i++) formData.append('files', files[i]);
-            await axios.post(`${API}/api/bulk-upload/${type}`, formData, { withCredentials: true });
+            await axios.post(`${API}/api/bulk-upload/${type}`, formData, {
+                withCredentials: true,
+                timeout: 5 * 60 * 1000,  // 5-minute timeout for large multi-file uploads
+            });
             toast.success(`${files.length} file(s) added to queue`);
             fetchStatus();
         } catch (err) {
-            toast.error('Upload failed');
+            // Surface the actual server error so debugging isn't a guessing
+            // game. Falls back to status text or network message.
+            const detail =
+                err.response?.data?.detail ||
+                err.response?.data?.message ||
+                (err.response ? `${err.response.status} ${err.response.statusText || 'error'}` : null) ||
+                err.message ||
+                'Upload failed';
+            toast.error(`Upload failed: ${detail}`);
         } finally {
             setUploading(false);
             if (fileRef.current) fileRef.current.value = '';
@@ -125,16 +153,40 @@ export default function BulkUploadModal({ type, onClose }) {
                         ) : (
                             <div className="space-y-2 pl-2" data-testid="pending-list">
                                 {pending.map(f => (
-                                    <div key={f.id} className="flex items-center gap-3 px-4 py-2.5 bg-zinc-800/50 border border-zinc-800" data-testid={`pending-file-${f.id}`}>
-                                        {statusIcon(f.status)}
-                                        <span className="text-sm truncate flex-1" title={f.name}>{f.name}</span>
-                                        <span className="text-xs text-zinc-500">{formatSize(f.size)}</span>
-                                        {statusBadge(f.status)}
-                                        {(f.status === 'pending' || f.status === 'queued') && (
-                                            <button onClick={() => handleDelete(f.id)} data-testid={`delete-${f.id}`}
-                                                className="p-1 hover:bg-zinc-700 transition-colors text-zinc-500 hover:text-red-400">
-                                                <Trash size={16} />
-                                            </button>
+                                    <div key={f.id} className="flex flex-col gap-1.5 px-4 py-2.5 bg-zinc-800/50 border border-zinc-800" data-testid={`pending-file-${f.id}`}>
+                                        <div className="flex items-center gap-3">
+                                            {statusIcon(f.status)}
+                                            <span className="text-sm truncate flex-1" title={f.name}>{f.name}</span>
+                                            <span className="text-xs text-zinc-500">{formatSize(f.size)}</span>
+                                            {statusBadge(f.status)}
+                                            {(f.status === 'pending' || f.status === 'queued') && (
+                                                <button onClick={() => handleDelete(f.id)} data-testid={`delete-${f.id}`}
+                                                    className="p-1 hover:bg-zinc-700 transition-colors text-zinc-500 hover:text-red-400">
+                                                    <Trash size={16} />
+                                                </button>
+                                            )}
+                                        </div>
+                                        {/* Live row-count progress (Iter46) */}
+                                        {f.status === 'processing' && f.progress && f.progress.total > 0 && (
+                                            <div className="pl-7" data-testid={`progress-${f.id}`}>
+                                                <div className="flex items-center justify-between text-xs text-zinc-400 mb-1">
+                                                    <span data-testid={`progress-count-${f.id}`}>
+                                                        {f.progress.processed.toLocaleString()} / {f.progress.total.toLocaleString()} rows
+                                                    </span>
+                                                    <span className="text-cyan-400 font-medium">{f.progress.percent}%</span>
+                                                </div>
+                                                <div className="h-1.5 w-full bg-zinc-800 rounded-sm overflow-hidden">
+                                                    <div
+                                                        className="h-full bg-cyan-500 transition-all duration-500"
+                                                        style={{ width: `${f.progress.percent}%` }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+                                        {f.status === 'processing' && (!f.progress || !f.progress.total) && (
+                                            <div className="pl-7 text-xs text-zinc-500" data-testid={`progress-init-${f.id}`}>
+                                                Starting…
+                                            </div>
                                         )}
                                     </div>
                                 ))}

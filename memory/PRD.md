@@ -45,6 +45,10 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter46)** — Bulk Upload UX improvements:
+  - **Live row-count progress** during processing — worker writes `progress = {processed, total, percent}` to the queue doc every 200 rows; status endpoint surfaces it; frontend modal renders an animated progress bar (`247 / 5,000 rows · 4%`) with auto-polling every 1.5s while a job is active. Verified live: `200/5000 → 400/5000 (4% → 8%)` updates in ~15s.
+  - **Real upload errors surfaced** — frontend `BulkUploadModal` now shows the actual server error (`Upload failed: 413 Payload Too Large`, `Upload failed: 401 Unauthorized`, etc.) instead of a generic "Upload failed" toast. Adds 5-min axios timeout for large multi-file uploads + soft warning toast for files >50 MB.
+  - All 13 prior regression tests (iter44 + iter45) still pass.
 - **Feb 2026 (iter45)** — Exact Score Mapping with Round Detection (Email + Phone matching):
   - `bb_modules._build_round_wise_scores(email, phone, pick='latest'|'highest'|'lowest')` groups all `score_sheet` entries by canonical round name; picks one entry per round per the rule.
   - `bb_modules._norm_round` canonicalises aliases (Technical 1 → Round 1, HR Interview → HR Round, Final Discussion → Final Round, Accounts1 → Accounts 1, Mensa Org variants).

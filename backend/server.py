@@ -2265,7 +2265,25 @@ async def _bg_queue_worker():
                     if not process_fn:
                         raise ValueError(f"Unknown file type: {file_type}")
 
-                    result = await process_fn(content, file_name)
+                    # ---- Live row-count progress writer (Iter46) ----
+                    # process_fn calls back every 200 rows so the queue doc
+                    # carries `progress = {processed, total, percent}` for the
+                    # status endpoint / UI to surface live.
+                    async def _write_progress(processed: int, total: int):
+                        try:
+                            pct = int(round((processed / total) * 100)) if total else 0
+                            await db.bulk_upload_queue.update_one(
+                                {"_id": job_id},
+                                {"$set": {
+                                    "progress": {"processed": int(processed),
+                                                  "total": int(total),
+                                                  "percent": pct},
+                                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                                }},
+                            )
+                        except Exception:
+                            pass  # progress write must never crash the worker
+                    result = await process_fn(content, file_name, progress_cb=_write_progress)
 
                     if result.get("success"):
                         # Move file to processed_files directory
@@ -2335,7 +2353,8 @@ async def bulk_upload_status(user: str = Depends(get_current_user)):
         # for backward-compat)
         active = await db.bulk_upload_queue.find(
             {"file_type": utype, "status": {"$in": ["queued", "pending", "processing"]}},
-            {"_id": 1, "file_name": 1, "file_path": 1, "status": 1, "created_at": 1, "error_message": 1}
+            {"_id": 1, "file_name": 1, "file_path": 1, "status": 1, "created_at": 1,
+             "error_message": 1, "progress": 1}
         ).sort("created_at", 1).to_list(None)
         pending = []
         for j in active:
@@ -2351,6 +2370,7 @@ async def bulk_upload_status(user: str = Depends(get_current_user)):
                 "name": j["file_name"],
                 "status": j["status"],
                 "size": size,
+                "progress": j.get("progress") or None,
             })
 
         # Completed from DB
@@ -2486,8 +2506,10 @@ async def delete_bulk_file(upload_type: str, queue_id: str, user: str = Depends(
     return {"success": True, "deleted": job["file_name"]}
 
 
-async def _process_naukri_file(content: bytes, filename: str) -> dict:
-    """Core naukri processing — extracted from upload_naukri for reuse."""
+async def _process_naukri_file(content: bytes, filename: str, progress_cb=None) -> dict:
+    """Core naukri processing — extracted from upload_naukri for reuse.
+    `progress_cb(processed:int, total:int)` is called every 200 rows so the
+    worker can surface live row-count progress on the queue document."""
     df = parse_file(content, filename)
     df.columns = df.columns.str.strip()
     col_map = {}
@@ -2499,6 +2521,9 @@ async def _process_naukri_file(content: bytes, filename: str) -> dict:
     mapped_fields = set(col_map.values())
     if "email" not in mapped_fields and "phone" not in mapped_fields:
         return {"success": False, "error": "No email/phone column found"}
+    total_rows = int(len(df))
+    if progress_cb:
+        await progress_cb(0, total_rows)
     inserted = 0
     updated = 0
     for idx, row in df.iterrows():
@@ -2533,12 +2558,17 @@ async def _process_naukri_file(content: bytes, filename: str) -> dict:
                 inserted += 1
         except Exception:
             pass
+        # Live progress every 200 rows
+        if progress_cb and (idx + 1) % 200 == 0:
+            await progress_cb(idx + 1, total_rows)
+    if progress_cb:
+        await progress_cb(total_rows, total_rows)
     # NOTE: reprocess_matching() / _sync_job_titles_master() are now deferred
     # to the queue worker (run ONCE after batch drains) for performance.
-    return {"success": True, "inserted": inserted, "updated": updated}
+    return {"success": True, "inserted": inserted, "updated": updated, "total": total_rows}
 
 
-async def _process_pipeline_file(content: bytes, filename: str) -> dict:
+async def _process_pipeline_file(content: bytes, filename: str, progress_cb=None) -> dict:
     """Core pipeline processing — extracted from upload_pipeline for reuse."""
     df = parse_file(content, filename)
     df.columns = df.columns.str.strip()
@@ -2561,6 +2591,9 @@ async def _process_pipeline_file(content: bytes, filename: str) -> dict:
     mapped_fields = set(col_map.values())
     if "email" not in mapped_fields and "phone" not in mapped_fields:
         return {"success": False, "error": "No email/phone column found"}
+    total_rows = int(len(df))
+    if progress_cb:
+        await progress_cb(0, total_rows)
     inserted = 0
     updated = 0
     for idx, row in df.iterrows():
@@ -2592,17 +2625,24 @@ async def _process_pipeline_file(content: bytes, filename: str) -> dict:
                 inserted += 1
         except Exception:
             pass
+        if progress_cb and (idx + 1) % 200 == 0:
+            await progress_cb(idx + 1, total_rows)
+    if progress_cb:
+        await progress_cb(total_rows, total_rows)
     # NOTE: reprocess_matching() is deferred to queue worker post-batch.
-    return {"success": True, "inserted": inserted, "updated": updated}
+    return {"success": True, "inserted": inserted, "updated": updated, "total": total_rows}
 
 
-async def _process_score_file(content: bytes, filename: str) -> dict:
+async def _process_score_file(content: bytes, filename: str, progress_cb=None) -> dict:
     """Core score sheet processing — extracted from upload_scoresheet for reuse."""
     df = parse_file(content, filename)
     df.columns = df.columns.str.strip().str.lower()
     required = {"name", "email", "phone", "score", "round_name"}
     if not required.issubset(set(df.columns)):
         return {"success": False, "error": f"Missing columns: {required - set(df.columns)}"}
+    total_rows = int(len(df))
+    if progress_cb:
+        await progress_cb(0, total_rows)
     inserted = 0
     for idx, row in df.iterrows():
         try:
@@ -2625,7 +2665,11 @@ async def _process_score_file(content: bytes, filename: str) -> dict:
             inserted += 1
         except Exception:
             pass
-    return {"success": True, "inserted": inserted}
+        if progress_cb and (idx + 1) % 200 == 0:
+            await progress_cb(idx + 1, total_rows)
+    if progress_cb:
+        await progress_cb(total_rows, total_rows)
+    return {"success": True, "inserted": inserted, "total": total_rows}
 
 
 _PROCESS_FN = {
