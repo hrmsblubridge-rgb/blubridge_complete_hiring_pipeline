@@ -14,6 +14,9 @@ import {
     ArrowLeft, Plus, X, PencilSimple, Trash, Eye, Sliders, MagnifyingGlass,
     ArrowCounterClockwise, CaretDown,
 } from '@phosphor-icons/react';
+import {
+    DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
+} from '../components/ui/dropdown-menu';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -366,7 +369,6 @@ export default function ScoreRound() {
     const [showManage, setShowManage] = useState(false);
     const [scoreRow, setScoreRow] = useState(null);
     const [dateRow, setDateRow] = useState(null);
-    const [actionMenuFor, setActionMenuFor] = useState(null);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -582,23 +584,27 @@ export default function ScoreRound() {
                         {!loading && rows.map((row, idx) => (
                             <tr key={`${row.email}-${idx}`} className="border-b border-zinc-900 hover:bg-zinc-900/50" data-testid={`row-${idx}`}>
                                 <td className="sticky left-0 bg-[#0a0a0a] hover:bg-zinc-900 px-2 py-1.5 z-10">
-                                    <div className="relative">
-                                        <button onClick={() => setActionMenuFor(actionMenuFor === idx ? null : idx)}
-                                            data-testid={`action-btn-${idx}`}
-                                            className="flex items-center gap-1 px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-[11px]">
-                                            Action <CaretDown size={10} />
-                                        </button>
-                                        {actionMenuFor === idx && (
-                                            <div className="absolute left-0 top-full mt-1 z-40 bg-zinc-900 border border-zinc-700 min-w-[160px] shadow-xl">
-                                                <button onClick={() => { setScoreRow(row); setActionMenuFor(null); }}
-                                                    data-testid={`action-update-score-${idx}`}
-                                                    className="block w-full text-left px-3 py-1.5 text-xs hover:bg-zinc-800">1. Update Score</button>
-                                                <button onClick={() => { setDateRow(row); setActionMenuFor(null); }}
-                                                    data-testid={`action-update-date-${idx}`}
-                                                    className="block w-full text-left px-3 py-1.5 text-xs hover:bg-zinc-800">2. Update Date</button>
-                                            </div>
-                                        )}
-                                    </div>
+                                    <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                            <button data-testid={`action-btn-${idx}`}
+                                                className="flex items-center gap-1 px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-[11px] text-white focus:outline-none">
+                                                Action <CaretDown size={10} />
+                                            </button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="start" sideOffset={4}
+                                            className="bg-zinc-900 border-zinc-700 text-white min-w-[180px] z-[100]">
+                                            <DropdownMenuItem onSelect={() => setScoreRow(row)}
+                                                data-testid={`action-update-score-${idx}`}
+                                                className="text-xs cursor-pointer focus:bg-zinc-800 focus:text-white">
+                                                1. Update Score
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem onSelect={() => setDateRow(row)}
+                                                data-testid={`action-update-date-${idx}`}
+                                                className="text-xs cursor-pointer focus:bg-zinc-800 focus:text-white">
+                                                2. Update Date
+                                            </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                    </DropdownMenu>
                                 </td>
                                 <td className="px-3 py-1.5 font-medium">{row.name || '—'}</td>
                                 <td className="px-3 py-1.5 text-zinc-400">{fmtDDMMYYYY(row.schedule_date) || '—'}</td>
