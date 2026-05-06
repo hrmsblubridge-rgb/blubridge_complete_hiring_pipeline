@@ -45,6 +45,16 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter56)** — Job Role hardened to structured multi-input + select dropdown:
+  - **Backend** (`bb_modules.py`):
+    - `bb_college_schedules` schema now stores **`job_roles: ["AI/ML","Administration","HR"]`** array (preferred) AND legacy `job_role: "AI/ML,Administration,HR"` joined string for backward compat with the register endpoint that regex-matches on `job_role`.
+    - New `_normalize_roles()` helper coerces either input form (`job_roles[]` or comma `job_role`) into a deduped, ordered list (case-insensitive dedupe, first-seen casing preserved).
+    - `POST /api/bb/college-schedules` & `PUT` accept either `job_roles` (preferred) or legacy `job_role` string. Removed (college, role) compound dup-check — multi-role schedules per college are now first-class.
+    - `GET /api/bb/college-schedules` always returns `job_roles[]` (auto-backfilled from legacy rows on read).
+    - `GET /api/pub/college-form/schedule` exposes `job_roles[]` array alongside `job_role` for frontend select-population.
+  - **Admin form** (`CollegeSchedules.js`): replaced text input with proper **chip-based multi-input** — type and press Enter or `,` to add a chip, click ✕ on a chip to remove, Backspace on empty input removes the last chip. Case-insensitive dedup. Edit mode loads existing `job_roles[]` (or splits legacy joined string) into individual chips. Listing column renders each role as its own pill instead of joined text.
+  - **Public form** (`CollegeRegistration.js`): Job Role is now a **`<select>` dropdown** (not a text input). On college change, options are populated from the schedule's `job_roles[]` array. If only one role exists, it auto-selects; otherwise user must pick one. Disabled when no college selected or no roles available. User CANNOT type — selection only.
+  - **Verified live**: admin chip UI (add Enter / add comma / Backspace remove / dup ignored), backend stores both `job_roles` array + joined string, public select shows `[Select role, AI/ML, Administration, HR]` for multi-role schedules and auto-picks the single role for legacy schedules. Test rows cleaned up post-test. Submission logic untouched.
 - **Feb 2026 (iter55)** — New "Score & Round" dashboard module (URGENT spec):
   - **New page** `/score-round` (`ScoreRound.js`) — Excel-like table with sticky header + sticky Action column. Columns: Action, Name, Schedule Date, College, Degree, Course, YOG, Email, Phone, Job Role, Status, then ALL active rounds dynamically (static: Accounts 1, Accounts 2, BA, BE, BP, C++, Java, LA, Mensa, Mensa Org, ZA — always present even if not in `bb_rounds`), then DOJ / DOD / DOI. Round cells show numeric score; on hover an eye icon appears with a tooltip displaying Date / Status / Command. Pagination 50/page (103,962 candidates total). Live free-text search across name/email/phone.
   - **"Add Rounds" button** opens `ManageRoundsModal` — uses existing `/api/bb/rounds` CRUD: add new round (Enter to submit), inline rename, logical delete (preserves historical scores), restore. Show-inactive toggle.

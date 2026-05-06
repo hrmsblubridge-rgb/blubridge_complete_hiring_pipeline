@@ -12,7 +12,9 @@ export default function CollegeSchedules() {
     const [showInactive, setShowInactive] = useState(false);
     const [showModal, setShowModal] = useState(false);
     const [editId, setEditId] = useState(null);
-    const [form, setForm] = useState({ college_name: '', job_role: '', schedule_date: '', schedule_time: '', notes: '' });
+    // Iter56 — job_roles is an array of chips; legacy single-string rows split on edit
+    const [form, setForm] = useState({ college_name: '', job_roles: [], schedule_date: '', schedule_time: '', notes: '' });
+    const [roleInput, setRoleInput] = useState('');
     const [loading, setLoading] = useState(false);
 
     const fetchSchedules = useCallback(async (incInactive = false) => {
@@ -31,39 +33,73 @@ export default function CollegeSchedules() {
 
     const openCreate = () => {
         setEditId(null);
-        setForm({ college_name: '', job_role: '', schedule_date: '', schedule_time: '', notes: '' });
+        setForm({ college_name: '', job_roles: [], schedule_date: '', schedule_time: '', notes: '' });
+        setRoleInput('');
         setShowModal(true);
     };
 
     const openEdit = (s) => {
         setEditId(s.id);
+        // Iter56 — load job_roles array; fall back to splitting legacy job_role string
+        const roles = Array.isArray(s.job_roles) && s.job_roles.length
+            ? s.job_roles
+            : (s.job_role ? s.job_role.split(',').map(r => r.trim()).filter(Boolean) : []);
         setForm({
             college_name: s.college_name || '',
-            job_role: s.job_role || '',
+            job_roles: roles,
             schedule_date: s.schedule_date || '',
-            schedule_time: (s.schedule_time || '').slice(0, 5),  // HH:MM for input
+            schedule_time: (s.schedule_time || '').slice(0, 5),
             notes: s.notes || '',
         });
+        setRoleInput('');
         setShowModal(true);
     };
 
-    const save = async () => {
-        // Iter54 Req1 — Job Role multi-value: split by comma, trim, dedupe (case-insensitive),
-        // re-join as "AI/ML,Administration,HR" (no spaces). Single value still works.
-        const rawRole = (form.job_role || '').trim();
-        const roleParts = rawRole.split(',').map(p => p.trim()).filter(Boolean);
-        const seen = new Set();
-        const dedupedRoles = [];
-        for (const p of roleParts) {
-            const k = p.toLowerCase();
-            if (!seen.has(k)) { seen.add(k); dedupedRoles.push(p); }
+    // Iter56 — chip helpers
+    const addRoleChip = (raw) => {
+        const v = (raw || '').trim();
+        if (!v) return;
+        setForm(p => {
+            const exists = p.job_roles.some(r => r.toLowerCase() === v.toLowerCase());
+            if (exists) return p;
+            return { ...p, job_roles: [...p.job_roles, v] };
+        });
+        setRoleInput('');
+    };
+    const removeRoleChip = (idx) => {
+        setForm(p => ({ ...p, job_roles: p.job_roles.filter((_, i) => i !== idx) }));
+    };
+    const onRoleKey = (e) => {
+        if (e.key === 'Enter' || e.key === ',') {
+            e.preventDefault();
+            addRoleChip(roleInput);
+        } else if (e.key === 'Backspace' && !roleInput && form.job_roles.length) {
+            setForm(p => ({ ...p, job_roles: p.job_roles.slice(0, -1) }));
         }
-        const normalizedRole = dedupedRoles.join(',');
-        if (!form.college_name.trim() || !normalizedRole || !form.schedule_date || !form.schedule_time) {
-            toast.error('All fields except Notes are required');
+    };
+
+    const save = async () => {
+        // Iter56 — flush any text still in the input as a final chip
+        const pending = roleInput.trim();
+        const roles = pending ? [...form.job_roles, pending] : [...form.job_roles];
+        // de-dupe (case-insensitive) preserving first-seen casing
+        const seen = new Set();
+        const deduped = [];
+        for (const r of roles) {
+            const k = r.toLowerCase();
+            if (!seen.has(k)) { seen.add(k); deduped.push(r); }
+        }
+        if (!form.college_name.trim() || deduped.length === 0 || !form.schedule_date || !form.schedule_time) {
+            toast.error('College, at least one Job Role, Date and Time are required');
             return;
         }
-        const payload = { ...form, job_role: normalizedRole };
+        const payload = {
+            college_name: form.college_name,
+            job_roles: deduped,
+            schedule_date: form.schedule_date,
+            schedule_time: form.schedule_time,
+            notes: form.notes,
+        };
         try {
             if (editId) {
                 await axios.put(`${API}/api/bb/college-schedules/${editId}`, payload, { withCredentials: true });
@@ -144,7 +180,15 @@ export default function CollegeSchedules() {
                             return (
                                 <tr key={s.id} data-testid={`schedule-row-${s.id}`} className={`border-b border-zinc-900 hover:bg-zinc-900/50 ${inactive ? 'opacity-60' : ''}`}>
                                     <td className="px-4 py-3 font-medium">{s.college_name}</td>
-                                    <td className="px-4 py-3">{s.job_role}</td>
+                                    <td className="px-4 py-3">
+                                        {Array.isArray(s.job_roles) && s.job_roles.length > 0 ? (
+                                            <div className="flex flex-wrap gap-1">
+                                                {s.job_roles.map((r, i) => (
+                                                    <span key={`${r}-${i}`} className="inline-block bg-cyan-900/40 border border-cyan-700/50 text-cyan-200 px-1.5 py-0.5 text-[11px] rounded">{r}</span>
+                                                ))}
+                                            </div>
+                                        ) : (s.job_role || '-')}
+                                    </td>
                                     <td className="px-4 py-3">{s.schedule_date}</td>
                                     <td className="px-4 py-3">{formatTime(s.schedule_time)}</td>
                                     <td className="px-4 py-3 text-zinc-400 text-xs">{s.notes || '-'}</td>
@@ -188,11 +232,30 @@ export default function CollegeSchedules() {
                                     className="w-full mt-1 bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
                             </div>
                             <div>
-                                <label className="text-xs text-zinc-500 uppercase tracking-wider">Job Role</label>
-                                <input type="text" value={form.job_role} onChange={e => setForm(p => ({ ...p, job_role: e.target.value }))}
-                                    placeholder="e.g. AI/ML, Administration, HR" data-testid="role-input"
-                                    className="w-full mt-1 bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
-                                <p className="text-[11px] text-zinc-500 mt-1">Tip: enter multiple roles separated by commas. They'll be saved as <code className="text-zinc-400">AI/ML,Administration,HR</code>.</p>
+                                <label className="text-xs text-zinc-500 uppercase tracking-wider">Job Role(s)</label>
+                                <div data-testid="role-chip-container"
+                                    className="w-full mt-1 bg-zinc-800 border border-zinc-700 px-2 py-1.5 text-sm focus-within:border-zinc-500 flex flex-wrap items-center gap-1 min-h-[40px]"
+                                    onClick={() => document.getElementById('role-chip-input')?.focus()}>
+                                    {form.job_roles.map((r, i) => (
+                                        <span key={`${r}-${i}`} data-testid={`role-chip-${i}`}
+                                            className="inline-flex items-center gap-1 bg-cyan-900/40 border border-cyan-700/50 text-cyan-200 px-2 py-0.5 text-xs rounded">
+                                            {r}
+                                            <button type="button" onClick={(e) => { e.stopPropagation(); removeRoleChip(i); }}
+                                                data-testid={`role-chip-remove-${i}`}
+                                                className="text-cyan-400 hover:text-white" aria-label={`Remove ${r}`}>
+                                                <X size={12} />
+                                            </button>
+                                        </span>
+                                    ))}
+                                    <input id="role-chip-input" type="text" value={roleInput}
+                                        onChange={e => setRoleInput(e.target.value)}
+                                        onKeyDown={onRoleKey}
+                                        onBlur={() => roleInput.trim() && addRoleChip(roleInput)}
+                                        placeholder={form.job_roles.length === 0 ? 'Type a role and press Enter (e.g. AI/ML)' : 'Add another…'}
+                                        data-testid="role-input"
+                                        className="flex-1 min-w-[120px] bg-transparent outline-none text-sm py-0.5" />
+                                </div>
+                                <p className="text-[11px] text-zinc-500 mt-1">Press <b>Enter</b> or <b>,</b> to add. Backspace removes the last chip.</p>
                             </div>
                             <div className="grid grid-cols-2 gap-3">
                                 <div>

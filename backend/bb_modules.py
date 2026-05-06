@@ -828,7 +828,8 @@ async def restore_round(round_id: str, request: Request):
 
 class CollegeScheduleBody(BaseModel):
     college_name: str
-    job_role: str
+    job_role: Optional[str] = None     # legacy — joined string accepted
+    job_roles: Optional[List[str]] = None  # iter56 — preferred structured array
     schedule_date: str   # ISO YYYY-MM-DD
     schedule_time: str   # 24h HH:MM:SS or HH:MM
     notes: Optional[str] = ""
@@ -837,9 +838,33 @@ class CollegeScheduleBody(BaseModel):
 class CollegeScheduleUpdate(BaseModel):
     college_name: Optional[str] = None
     job_role: Optional[str] = None
+    job_roles: Optional[List[str]] = None
     schedule_date: Optional[str] = None
     schedule_time: Optional[str] = None
     notes: Optional[str] = None
+
+
+def _normalize_roles(job_role: Optional[str], job_roles: Optional[List[str]]) -> List[str]:
+    """Iter56 — Coerce either input form into a clean, deduped, ordered list.
+    Accepts:  ['AI/ML','HR']  OR  'AI/ML, HR, AI/ML' (legacy comma string).
+    """
+    raw = []
+    if job_roles:
+        raw = list(job_roles)
+    elif job_role:
+        raw = job_role.split(",")
+    out: List[str] = []
+    seen = set()
+    for r in raw:
+        s = (r or "").strip()
+        if not s:
+            continue
+        k = s.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(s)
+    return out
 
 
 @bb_router.get("/college-schedules")
@@ -854,31 +879,29 @@ async def list_college_schedules(request: Request, includeInactive: bool = Query
         d["id"] = str(d.pop("_id"))
         if "active" not in d:
             d["active"] = True
+        # Iter56 — always expose `job_roles` array. Backfill from legacy joined `job_role` string.
+        if "job_roles" not in d or not isinstance(d.get("job_roles"), list):
+            d["job_roles"] = _normalize_roles(d.get("job_role"), None)
     return {"schedules": docs}
 
 
 @bb_router.post("/college-schedules")
 async def create_college_schedule(data: CollegeScheduleBody, request: Request):
-    """Create a college+role+date+time mapping. Compound unique on (college, role)."""
+    """Create a college+roles+date+time mapping. Iter56 — Job Role accepted as
+    array (preferred) or legacy comma string. Stored as both `job_roles` array
+    and `job_role` joined string for backward compat with downstream readers
+    (register endpoint regex matches on `job_role`)."""
     await _require_auth(request)
     college = (data.college_name or "").strip()
-    role = (data.job_role or "").strip()
+    roles = _normalize_roles(data.job_role, data.job_roles)
     date = (data.schedule_date or "").strip()
     time = (data.schedule_time or "").strip()
-    if not (college and role and date and time):
-        raise HTTPException(status_code=400, detail="college_name, job_role, schedule_date and schedule_time are required")
-    # Uniqueness on (college, role) — case-insensitive on both
-    dup = await _db.bb_college_schedules.find_one({
-        "college_name": {"$regex": f"^{re.escape(college)}$", "$options": "i"},
-        "job_role": {"$regex": f"^{re.escape(role)}$", "$options": "i"},
-    }, {"_id": 1, "active": 1})
-    if dup:
-        if dup.get("active") is False:
-            raise HTTPException(status_code=409, detail="A schedule for this college+role already exists but is disabled. Edit and restore it instead.")
-        raise HTTPException(status_code=409, detail="A schedule for this college+role already exists. Edit it instead of creating a duplicate.")
+    if not (college and roles and date and time):
+        raise HTTPException(status_code=400, detail="college_name, job_roles, schedule_date and schedule_time are required")
     doc = {
         "college_name": college,
-        "job_role": role,
+        "job_roles": roles,
+        "job_role": ",".join(roles),  # legacy compat — used by register endpoint regex matcher
         "schedule_date": date,
         "schedule_time": time if len(time.split(":")) == 3 else (time + ":00"),
         "notes": (data.notes or "").strip(),
@@ -898,12 +921,15 @@ async def update_college_schedule(sched_id: str, data: CollegeScheduleUpdate, re
     if not cur:
         raise HTTPException(status_code=404, detail="Not found")
     updates = {"updated_at": datetime.now(timezone.utc).isoformat()}
-    new_college = (data.college_name or cur.get("college_name") or "").strip()
-    new_role = (data.job_role or cur.get("job_role") or "").strip()
     if data.college_name is not None:
-        updates["college_name"] = new_college
-    if data.job_role is not None:
-        updates["job_role"] = new_role
+        updates["college_name"] = data.college_name.strip()
+    # Iter56 — when either form of role input is present, normalize and write both fields
+    if data.job_role is not None or data.job_roles is not None:
+        roles = _normalize_roles(data.job_role, data.job_roles)
+        if not roles:
+            raise HTTPException(status_code=400, detail="At least one job role is required")
+        updates["job_roles"] = roles
+        updates["job_role"] = ",".join(roles)
     if data.schedule_date is not None:
         updates["schedule_date"] = data.schedule_date.strip()
     if data.schedule_time is not None:
@@ -911,15 +937,6 @@ async def update_college_schedule(sched_id: str, data: CollegeScheduleUpdate, re
         updates["schedule_time"] = t if len(t.split(":")) == 3 else (t + ":00")
     if data.notes is not None:
         updates["notes"] = data.notes.strip()
-    # Re-check uniqueness if (college, role) changed
-    if data.college_name is not None or data.job_role is not None:
-        dup = await _db.bb_college_schedules.find_one({
-            "_id": {"$ne": oid},
-            "college_name": {"$regex": f"^{re.escape(new_college)}$", "$options": "i"},
-            "job_role": {"$regex": f"^{re.escape(new_role)}$", "$options": "i"},
-        }, {"_id": 1})
-        if dup:
-            raise HTTPException(status_code=409, detail="Another schedule with this college+role already exists.")
     await _db.bb_college_schedules.update_one({"_id": oid}, {"$set": updates})
     return {"success": True}
 
@@ -990,6 +1007,7 @@ async def pub_latest_schedule_for_college(college: str = Query(...)):
     Returns the LATEST ACTIVE schedule (by created_at, then schedule_date) for the
     given college so the public registration form can dynamically populate the
     Schedule Date, Schedule Time and Job Role fields on college selection.
+    Iter56 — adds `job_roles` array (preferred) alongside legacy `job_role` string.
     Returns {"schedule": null} if nothing matches — caller must clear its fields.
     """
     name = (college or "").strip()
@@ -1000,14 +1018,19 @@ async def pub_latest_schedule_for_college(college: str = Query(...)):
             "active": {"$ne": False},
             "college_name": {"$regex": f"^{re.escape(name)}$", "$options": "i"},
         },
-        {"_id": 0, "college_name": 1, "job_role": 1, "schedule_date": 1, "schedule_time": 1, "created_at": 1},
+        {"_id": 0, "college_name": 1, "job_role": 1, "job_roles": 1,
+         "schedule_date": 1, "schedule_time": 1, "created_at": 1},
         sort=[("created_at", -1), ("schedule_date", -1)],
     )
     if not doc:
         return {"schedule": None}
+    roles = doc.get("job_roles")
+    if not isinstance(roles, list) or not roles:
+        roles = _normalize_roles(doc.get("job_role"), None)
     return {"schedule": {
         "college_name": doc.get("college_name", ""),
-        "job_role": doc.get("job_role", "") or "",
+        "job_role": doc.get("job_role", "") or ",".join(roles),
+        "job_roles": roles,
         "schedule_date": doc.get("schedule_date", "") or "",
         "schedule_time": doc.get("schedule_time", "") or "",
     }}
