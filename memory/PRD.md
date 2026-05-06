@@ -45,6 +45,13 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter58)** — Score & Round — Advanced filters + Dynamic per-round 5-col groups:
+  - **Filter bar** on `/score-round`: Search (name/email/phone), **From Date** + **To Date** (`pipeline_data.schedule_date`), **Status** dropdown (Shortlisted / Rejected / On-Hold — OVERALL only; recruiter `bb_applicant_updates.status` wins over `result_status`), **College** + **Job Role** substring filters. Apply / Reset. All combinable; AND logic; no filters → all rows.
+  - **Status perf**: single `distinct()` on `bb_applicant_updates.email` index → main `pipeline_data` query uses `email IN [matching]`. Sub-second on 100K rows.
+  - **NEW backend params** on `GET /api/bb/score-round/table`: `startDate`, `endDate`, `status`, `college`, `job_role`. **NEW response field** `extra_rounds: [{canon, label}]` — rounds beyond the 11 static set with ANY data on current page; sorted alphabetically.
+  - **Table layout**: After Z A → DOJ/DOD/DOI → each `extra_rounds` entry renders a **5-column group** (Round Name / Date / Score / Command-with-eye-tooltip / Status) under a fuchsia subheader strip. Static 11 rounds keep single-cell rendering with hover-tooltip (unchanged).
+  - **Verified live**: Status=Shortlisted + demo search → 2 rows; Status=All + demo → 10 rows mixed; custom "Final Discussion" round renders as 5-col group after ZA.
+- **Feb 2026 (iter57)** — Seeded 10 demo candidates for Score & Round (`/app/backend/seed_score_round_demo.py`, idempotent, `--cleanup` supported). All `seed='score_round_iter57'`.
 - **Feb 2026 (iter56)** — Job Role hardened to structured multi-input + select dropdown:
   - **Backend** (`bb_modules.py`):
     - `bb_college_schedules` schema now stores **`job_roles: ["AI/ML","Administration","HR"]`** array (preferred) AND legacy `job_role: "AI/ML,Administration,HR"` joined string for backward compat with the register endpoint that regex-matches on `job_role`.

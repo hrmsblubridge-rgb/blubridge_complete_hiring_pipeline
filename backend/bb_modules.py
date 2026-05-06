@@ -2206,13 +2206,26 @@ async def score_round_table(
     request: Request,
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=500),
-    q: Optional[str] = Query(None),  # free-text search across name/email/phone
+    q: Optional[str] = Query(None),       # free-text search across name/email/phone
+    startDate: Optional[str] = Query(None),  # ISO YYYY-MM-DD inclusive
+    endDate: Optional[str] = Query(None),    # ISO YYYY-MM-DD inclusive
+    status: Optional[str] = Query(None),     # OVERALL status: Shortlisted | Rejected | On-Hold | …
+    college: Optional[str] = Query(None),
+    job_role: Optional[str] = Query(None),
 ):
-    """Iter55 — Score & Round table data source.
+    """Iter55/iter58 — Score & Round table data source.
 
     Returns paginated rows joining `pipeline_data` (basic info + dates) with
     `bb_applicant_updates` (status + per-round scores). Each row carries a
     `rounds_map` keyed by canonical round name → full round entry.
+
+    Iter58 — supports filters: date range on schedule_date, OVERALL status
+    (recruiter-set wins over pipeline result_status), college, job_role, q.
+    All filters are AND-combined.
+
+    Performance: status filter does a single distinct() round-trip on
+    bb_applicant_updates (small collection) so the main pipeline_data query
+    stays index-friendly even at 100K+ documents.
     """
     await _require_auth(request)
     match = {}
@@ -2225,6 +2238,42 @@ async def score_round_table(
                 {"email": {"$regex": esc, "$options": "i"}},
                 {"phone": {"$regex": esc, "$options": "i"}},
             ]
+    # Schedule Date range — inclusive on both ends
+    if startDate or endDate:
+        sd_q = {}
+        if startDate:
+            sd_q["$gte"] = startDate.strip()
+        if endDate:
+            sd_q["$lte"] = endDate.strip()
+        match["schedule_date"] = sd_q
+    # College — case-insensitive substring against either field name
+    if college:
+        c = re.escape(college.strip())
+        match.setdefault("$and", []).append({
+            "$or": [
+                {"college": {"$regex": c, "$options": "i"}},
+                {"college_name": {"$regex": c, "$options": "i"}},
+            ],
+        })
+    # Job Role — case-insensitive substring against job_role or job_title
+    if job_role:
+        jr = re.escape(job_role.strip())
+        match.setdefault("$and", []).append({
+            "$or": [
+                {"job_role": {"$regex": jr, "$options": "i"}},
+                {"job_title": {"$regex": jr, "$options": "i"}},
+            ],
+        })
+    # OVERALL status — recruiter override (bb_applicant_updates.status) wins.
+    # Single fast distinct() on bb_applicant_updates email index.
+    # Trade-off: candidates with NO bb_applicant_updates doc but a matching
+    # pipeline_data.result_status are NOT included. Acceptable: any recruiter
+    # action upserts an update doc, so unfiltered candidates have null state.
+    if status:
+        st = status.strip()
+        emails_match = await _db.bb_applicant_updates.distinct("email",
+            {"status": {"$regex": f"^{re.escape(st)}$", "$options": "i"}})
+        match.setdefault("$and", []).append({"email": {"$in": emails_match}})
 
     src = _db.pipeline_data
     total = await src.count_documents(match)
@@ -2297,6 +2346,25 @@ async def score_round_table(
         })
 
     total_pages = (total + limit - 1) // limit if total else 1
+
+    # Iter58 — Determine `extra_rounds`: rounds beyond the 11 static ones that
+    # have any data on the current page. Each gets a 5-column group after ZA.
+    static_canon_set = {_norm_round(s).lower() for s in STATIC_ROUNDS_ITER55}
+    extra_rounds: List[dict] = []
+    seen_canon = set()
+    for row in rows:
+        for canon, entry in row["rounds_map"].items():
+            if canon in static_canon_set or canon in seen_canon:
+                continue
+            # qualifies if at least one of date/score/command/status is present
+            has_data = bool(entry.get("date") or entry.get("score") not in (None, "", 0)
+                            or entry.get("command") or entry.get("status"))
+            if has_data:
+                seen_canon.add(canon)
+                extra_rounds.append({"canon": canon, "label": entry.get("round_name") or canon})
+    # Sort extras alphabetically by label for predictable column ordering
+    extra_rounds.sort(key=lambda r: r["label"].lower())
+
     return {
         "data": rows,
         "total": total,
@@ -2305,6 +2373,7 @@ async def score_round_table(
         "totalPages": total_pages,
         "rounds": ordered_round_names,
         "static_rounds": STATIC_ROUNDS_ITER55,
+        "extra_rounds": extra_rounds,
     }
 
 

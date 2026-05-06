@@ -6,7 +6,7 @@
  * Backed by GET /api/bb/score-round/table, POST /save-scores, PUT /save-dates,
  * plus existing /api/bb/rounds CRUD for round management.
  */
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
@@ -345,14 +345,24 @@ function UpdateDateModal({ row, onClose, onSaved }) {
 export default function ScoreRound() {
     const navigate = useNavigate();
     const [rows, setRows] = useState([]);
-    const [rounds, setRounds] = useState([]);
+    const [rounds, setRounds] = useState([]);          // all rounds (legacy column ordering)
+    const [staticRounds, setStaticRounds] = useState([]);  // 11-round static set returned by API
+    const [extraRounds, setExtraRounds] = useState([]);    // {canon,label} after-ZA 5-col groups
     const [loading, setLoading] = useState(false);
     const [page, setPage] = useState(1);
     const [limit] = useState(50);
     const [total, setTotal] = useState(0);
     const [totalPages, setTotalPages] = useState(1);
-    const [search, setSearch] = useState('');
+    // --- Iter58 filters ---
     const [searchInput, setSearchInput] = useState('');
+    const [search, setSearch] = useState('');
+    const [startDate, setStartDate] = useState('');
+    const [endDate, setEndDate] = useState('');
+    const [statusFilter, setStatusFilter] = useState('');
+    const [collegeFilter, setCollegeFilter] = useState('');
+    const [roleFilter, setRoleFilter] = useState('');
+    const [appliedFilters, setAppliedFilters] = useState({});
+    // ---
     const [showManage, setShowManage] = useState(false);
     const [scoreRow, setScoreRow] = useState(null);
     const [dateRow, setDateRow] = useState(null);
@@ -361,20 +371,55 @@ export default function ScoreRound() {
     const load = useCallback(async () => {
         setLoading(true);
         try {
+            const params = { page, limit };
+            if (search) params.q = search;
+            if (appliedFilters.startDate) params.startDate = appliedFilters.startDate;
+            if (appliedFilters.endDate) params.endDate = appliedFilters.endDate;
+            if (appliedFilters.status) params.status = appliedFilters.status;
+            if (appliedFilters.college) params.college = appliedFilters.college;
+            if (appliedFilters.role) params.job_role = appliedFilters.role;
             const r = await axios.get(`${API}/api/bb/score-round/table`, {
-                params: { page, limit, q: search || undefined },
-                withCredentials: true,
+                params, withCredentials: true,
             });
             setRows(r.data.data || []);
             setRounds(r.data.rounds || []);
+            setStaticRounds(r.data.static_rounds || []);
+            setExtraRounds(r.data.extra_rounds || []);
             setTotal(r.data.total || 0);
             setTotalPages(r.data.totalPages || 1);
         } catch (e) { toast.error('Failed to load'); }
         finally { setLoading(false); }
-    }, [page, limit, search]);
+    }, [page, limit, search, appliedFilters]);
     useEffect(() => { load(); }, [load]);
 
-    const onSearch = () => { setPage(1); setSearch(searchInput.trim()); };
+    const applyFilters = () => {
+        setPage(1);
+        setSearch(searchInput.trim());
+        setAppliedFilters({
+            startDate: startDate || '',
+            endDate: endDate || '',
+            status: statusFilter || '',
+            college: collegeFilter.trim(),
+            role: roleFilter.trim(),
+        });
+    };
+    const resetFilters = () => {
+        setSearchInput(''); setSearch('');
+        setStartDate(''); setEndDate('');
+        setStatusFilter(''); setCollegeFilter(''); setRoleFilter('');
+        setAppliedFilters({});
+        setPage(1);
+    };
+
+    // Static-round set for column-rendering decisions
+    const staticCanonSet = useMemo(() => new Set(
+        staticRounds.map(s => s.replace(/\s+/g, ' ').trim().toLowerCase())
+    ), [staticRounds]);
+    // Static rounds = the 11-name list (always shown as single columns)
+    const staticDisplayRounds = staticRounds.length ? staticRounds : rounds.filter(r => {
+        const c = r.replace(/\s+/g, ' ').trim().toLowerCase();
+        return staticCanonSet.has(c);
+    });
 
     const cellForRound = (row, roundName) => {
         const canon = roundName.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -396,30 +441,105 @@ export default function ScoreRound() {
         );
     };
 
+    // Iter58 — 5-col group renderer: Round Name / Date / Score / Command / Status
+    const cellsForExtraRound = (row, canon) => {
+        const e = row.rounds_map?.[canon] || {};
+        const cmd = e.command || '';
+        return (
+            <>
+                <td className="px-2 py-1.5 text-cyan-300/90 border-l border-zinc-800/70" data-testid={`extra-name-${row.email}-${canon}`}>{e.round_name || '—'}</td>
+                <td className="px-2 py-1.5 text-zinc-400">{e.date ? fmtDDMMYYYY(e.date) : '—'}</td>
+                <td className="px-2 py-1.5 font-medium">{e.score === null || e.score === undefined || e.score === '' ? '—' : e.score}</td>
+                <td className="px-2 py-1.5 max-w-[220px] truncate" title={cmd}>
+                    {cmd ? (
+                        <span className="group relative inline-flex items-center gap-1 cursor-help">
+                            <Eye size={12} className="text-cyan-400" />
+                            <span className="text-zinc-400 truncate">{cmd}</span>
+                            <span className="absolute left-0 top-full mt-1 hidden group-hover:block z-30 bg-zinc-950 border border-zinc-700 px-2 py-1 text-[11px] text-white whitespace-pre-wrap min-w-[200px] max-w-[320px] shadow-lg">{cmd}</span>
+                        </span>
+                    ) : <span className="text-zinc-700">—</span>}
+                </td>
+                <td className="px-2 py-1.5">
+                    {e.status ? <span className="text-[10px] uppercase bg-zinc-800 text-zinc-300 px-1.5 py-0.5">{e.status}</span> : <span className="text-zinc-700">—</span>}
+                </td>
+            </>
+        );
+    };
+
+    const baseColCount = 11 + staticDisplayRounds.length + 3 + 1; // basic + static rounds + DOJ/DOD/DOI + Action
+    const totalColCount = baseColCount + extraRounds.length * 5;
+
     return (
         <div className="min-h-screen bg-[#0a0a0a] text-white" data-testid="score-round-page">
             <header className="border-b border-zinc-800 px-6 py-4 flex items-center gap-4 flex-wrap">
                 <button onClick={() => navigate('/home')} data-testid="back-btn" className="p-2 hover:bg-zinc-800"><ArrowLeft size={18} /></button>
                 <h1 className="text-lg font-semibold tracking-tight">Score &amp; Round</h1>
                 <span className="text-xs text-zinc-500">{total} candidate{total === 1 ? '' : 's'}</span>
-                <div className="ml-auto flex items-center gap-2">
-                    <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 px-2">
-                        <MagnifyingGlass size={14} className="text-zinc-500" />
-                        <input value={searchInput} onChange={e => setSearchInput(e.target.value)}
-                            onKeyDown={e => e.key === 'Enter' && onSearch()}
-                            placeholder="Search name / email / phone"
-                            data-testid="search-input"
-                            className="bg-transparent text-sm py-1.5 px-1 w-64 focus:outline-none placeholder-zinc-600" />
-                        <button onClick={onSearch} className="text-cyan-400 hover:text-cyan-300 text-xs px-1">Go</button>
-                    </div>
-                    <button onClick={() => setShowManage(true)} data-testid="manage-rounds-btn"
-                        className="flex items-center gap-2 px-3 py-2 bg-cyan-700 hover:bg-cyan-600 text-sm font-medium">
-                        <Sliders size={16} /> Add Rounds
-                    </button>
-                </div>
+                <button onClick={() => setShowManage(true)} data-testid="manage-rounds-btn"
+                    className="ml-auto flex items-center gap-2 px-3 py-2 bg-cyan-700 hover:bg-cyan-600 text-sm font-medium">
+                    <Sliders size={16} /> Add Rounds
+                </button>
             </header>
 
-            <div className="overflow-auto" style={{ maxHeight: 'calc(100vh - 130px)' }}>
+            {/* Iter58 — Filter bar */}
+            <div className="border-b border-zinc-800 px-6 py-3 flex flex-wrap items-end gap-3 bg-zinc-950/50" data-testid="filter-bar">
+                <div className="flex flex-col">
+                    <label className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Search</label>
+                    <div className="flex items-center bg-zinc-900 border border-zinc-800 px-2">
+                        <MagnifyingGlass size={14} className="text-zinc-500" />
+                        <input value={searchInput} onChange={e => setSearchInput(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && applyFilters()}
+                            placeholder="Name / email / phone"
+                            data-testid="search-input"
+                            className="bg-transparent text-sm py-1.5 px-2 w-56 focus:outline-none placeholder-zinc-600" />
+                    </div>
+                </div>
+                <div className="flex flex-col">
+                    <label className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">From Date</label>
+                    <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
+                        data-testid="filter-from-date"
+                        className="bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm focus:outline-none focus:border-cyan-700" />
+                </div>
+                <div className="flex flex-col">
+                    <label className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">To Date</label>
+                    <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
+                        data-testid="filter-to-date"
+                        className="bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm focus:outline-none focus:border-cyan-700" />
+                </div>
+                <div className="flex flex-col">
+                    <label className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Status</label>
+                    <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+                        data-testid="filter-status"
+                        className="bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm focus:outline-none focus:border-cyan-700">
+                        <option value="">All</option>
+                        <option value="Shortlisted">Shortlisted</option>
+                        <option value="Rejected">Rejected</option>
+                        <option value="On-Hold">On-Hold</option>
+                    </select>
+                </div>
+                <div className="flex flex-col">
+                    <label className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">College</label>
+                    <input type="text" value={collegeFilter} onChange={e => setCollegeFilter(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && applyFilters()}
+                        placeholder="e.g. Anna University"
+                        data-testid="filter-college"
+                        className="bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm w-48 focus:outline-none focus:border-cyan-700 placeholder-zinc-600" />
+                </div>
+                <div className="flex flex-col">
+                    <label className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Job Role</label>
+                    <input type="text" value={roleFilter} onChange={e => setRoleFilter(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && applyFilters()}
+                        placeholder="e.g. AI/ML"
+                        data-testid="filter-role"
+                        className="bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm w-44 focus:outline-none focus:border-cyan-700 placeholder-zinc-600" />
+                </div>
+                <button onClick={applyFilters} data-testid="apply-filters"
+                    className="px-4 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-sm font-medium text-white">Apply</button>
+                <button onClick={resetFilters} data-testid="reset-filters"
+                    className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-sm text-zinc-300">Reset</button>
+            </div>
+
+            <div className="overflow-auto" style={{ maxHeight: 'calc(100vh - 200px)' }}>
                 <table className="text-xs whitespace-nowrap" data-testid="score-round-table">
                     <thead className="sticky top-0 z-20 bg-zinc-900 shadow-md">
                         <tr className="border-b border-zinc-800">
@@ -427,17 +547,38 @@ export default function ScoreRound() {
                             {['Name', 'Schedule Date', 'College', 'Degree', 'Course', 'YOG', 'Email', 'Phone', 'Job Role', 'Status'].map(h => (
                                 <th key={h} className="text-left px-3 py-2 font-medium text-zinc-400 uppercase tracking-wider">{h}</th>
                             ))}
-                            {rounds.map(rn => (
+                            {staticDisplayRounds.map(rn => (
                                 <th key={rn} className="text-left px-3 py-2 font-medium text-cyan-400 uppercase tracking-wider" title={rn}>{rn}</th>
                             ))}
                             <th className="text-left px-3 py-2 font-medium text-amber-400 uppercase tracking-wider">DOJ</th>
                             <th className="text-left px-3 py-2 font-medium text-amber-400 uppercase tracking-wider">DOD</th>
                             <th className="text-left px-3 py-2 font-medium text-amber-400 uppercase tracking-wider">DOI</th>
+                            {/* Iter58 — Extra rounds: 5-col group per round */}
+                            {extraRounds.map(er => (
+                                <th key={`extra-${er.canon}`} colSpan={5}
+                                    className="text-center px-2 py-2 font-medium text-fuchsia-300 uppercase tracking-wider border-l-2 border-fuchsia-700/40 bg-fuchsia-900/10">
+                                    {er.label}
+                                </th>
+                            ))}
                         </tr>
+                        {extraRounds.length > 0 && (
+                            <tr className="border-b border-zinc-800 bg-zinc-900/70" data-testid="extra-subheader">
+                                <th className="sticky left-0 z-30 bg-zinc-900/70" colSpan={baseColCount}></th>
+                                {extraRounds.map(er => (
+                                    <>
+                                        <th key={`${er.canon}-name`} className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase border-l border-fuchsia-700/30">Name</th>
+                                        <th key={`${er.canon}-date`} className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase">Date</th>
+                                        <th key={`${er.canon}-score`} className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase">Score</th>
+                                        <th key={`${er.canon}-cmd`} className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase">Command</th>
+                                        <th key={`${er.canon}-status`} className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase">Status</th>
+                                    </>
+                                ))}
+                            </tr>
+                        )}
                     </thead>
                     <tbody>
-                        {loading && <tr><td colSpan={11 + rounds.length + 3} className="text-center py-8 text-zinc-500">Loading…</td></tr>}
-                        {!loading && rows.length === 0 && <tr><td colSpan={11 + rounds.length + 3} className="text-center py-12 text-zinc-500">No candidates found.</td></tr>}
+                        {loading && <tr><td colSpan={totalColCount} className="text-center py-8 text-zinc-500">Loading…</td></tr>}
+                        {!loading && rows.length === 0 && <tr><td colSpan={totalColCount} className="text-center py-12 text-zinc-500">No candidates match the current filters.</td></tr>}
                         {!loading && rows.map((row, idx) => (
                             <tr key={`${row.email}-${idx}`} className="border-b border-zinc-900 hover:bg-zinc-900/50" data-testid={`row-${idx}`}>
                                 <td className="sticky left-0 bg-[#0a0a0a] hover:bg-zinc-900 px-2 py-1.5 z-10">
@@ -469,12 +610,15 @@ export default function ScoreRound() {
                                 <td className="px-3 py-1.5 text-zinc-400">{row.phone || '—'}</td>
                                 <td className="px-3 py-1.5 text-zinc-400">{row.job_role || '—'}</td>
                                 <td className="px-3 py-1.5"><span className="text-[10px] uppercase bg-zinc-800 text-zinc-300 px-1.5 py-0.5">{row.status || '—'}</span></td>
-                                {rounds.map(rn => (
+                                {staticDisplayRounds.map(rn => (
                                     <td key={rn} className="px-3 py-1.5 text-zinc-300">{cellForRound(row, rn)}</td>
                                 ))}
                                 <td className="px-3 py-1.5 text-amber-200">{fmtDDMMYYYY(row.date_of_joining) || '—'}</td>
                                 <td className="px-3 py-1.5 text-amber-200">{fmtDDMMYYYY(row.date_of_documentation) || '—'}</td>
                                 <td className="px-3 py-1.5 text-amber-200">{fmtDDMMYYYY(row.date_of_induction) || '—'}</td>
+                                {extraRounds.map(er => (
+                                    <Fragment key={`${row.email}-${er.canon}`}>{cellsForExtraRound(row, er.canon)}</Fragment>
+                                ))}
                             </tr>
                         ))}
                     </tbody>
