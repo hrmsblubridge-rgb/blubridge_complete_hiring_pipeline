@@ -443,36 +443,38 @@ export default function ScoreRound() {
         );
     };
 
-    // Iter61 — 5-col group renderer with FIXED widths so each sub-cell
-    // aligns precisely under its sub-header (Name / Date / Score / Command / Status).
+    // Iter62 — 5-col group renderer with EXACT widths (inline style for table-layout
+    // independence). Padding & text-align match the headers (px-3, text-left) so
+    // body cells stack pixel-perfect under their sub-headers.
     const cellsForExtraRound = (row, canon) => {
         const e = row.rounds_map?.[canon] || {};
         const cmd = e.command || '';
+        const w = (i) => ({ width: SUB_WIDTHS[i], minWidth: SUB_WIDTHS[i], maxWidth: SUB_WIDTHS[i] });
         return (
             <>
-                <td className="px-2 py-1.5 text-cyan-300/90 border-l border-fuchsia-700/30 w-[120px] min-w-[120px]" data-testid={`extra-name-${row.email}-${canon}`}>{e.round_name || '—'}</td>
-                <td className="px-2 py-1.5 text-zinc-400 w-[110px] min-w-[110px]">{e.date ? fmtDDMMYYYY(e.date) : '—'}</td>
-                <td className="px-2 py-1.5 font-medium w-[70px] min-w-[70px]">{e.score === null || e.score === undefined || e.score === '' ? '—' : e.score}</td>
-                <td className="px-2 py-1.5 w-[180px] min-w-[180px] max-w-[180px] truncate" title={cmd}>
+                <td style={w(0)} className="px-3 py-1.5 text-cyan-200 font-medium border-l border-fuchsia-500/30 text-left" data-testid={`extra-name-${row.email}-${canon}`}>{e.round_name || '—'}</td>
+                <td style={w(1)} className="px-3 py-1.5 text-zinc-300 text-left">{e.date ? fmtDDMMYYYY(e.date) : '—'}</td>
+                <td style={w(2)} className="px-3 py-1.5 font-medium text-left">{e.score === null || e.score === undefined || e.score === '' ? '—' : e.score}</td>
+                <td style={w(3)} className="px-3 py-1.5 text-left truncate" title={cmd}>
                     {cmd ? (
                         <span className="group relative inline-flex items-center gap-1 cursor-help">
-                            <Eye size={12} className="text-cyan-400 shrink-0" />
-                            <span className="text-zinc-400 truncate">{cmd}</span>
+                            <Eye size={12} className="text-cyan-300 shrink-0" />
+                            <span className="text-zinc-300 truncate">{cmd}</span>
                             <span className="absolute left-0 top-full mt-1 hidden group-hover:block z-30 bg-zinc-950 border border-zinc-700 px-2 py-1 text-[11px] text-white whitespace-pre-wrap min-w-[200px] max-w-[320px] shadow-lg">{cmd}</span>
                         </span>
                     ) : <span className="text-zinc-700">—</span>}
                 </td>
-                <td className="px-2 py-1.5 w-[140px] min-w-[140px]">
-                    {e.status ? <span className="text-[10px] uppercase bg-zinc-800 text-zinc-300 px-1.5 py-0.5">{e.status}</span> : <span className="text-zinc-700">—</span>}
+                <td style={w(4)} className="px-3 py-1.5 text-left">
+                    {e.status ? <span className="text-[10px] uppercase bg-zinc-800 text-zinc-200 px-1.5 py-0.5">{e.status}</span> : <span className="text-zinc-700">—</span>}
                 </td>
             </>
         );
     };
 
-    const baseColCount = 11 + staticDisplayRounds.length + 3 + 1; // basic + static rounds + DOJ/DOD/DOI + Action
+    const baseColCount = 11 + staticDisplayRounds.length + 3 + 1;
     const totalColCount = baseColCount + extraRounds.length * 5;
-    const SUB_WIDTHS = [120, 110, 70, 180, 140]; // matches cellsForExtraRound widths
-    const groupTotalWidth = SUB_WIDTHS.reduce((a, b) => a + b, 0);
+    const SUB_WIDTHS = [120, 110, 80, 200, 130]; // Name, Date, Score, Command, Status — pixel-locked
+    const groupTotalWidth = SUB_WIDTHS.reduce((a, b) => a + b, 0);  // 640px
 
     return (
         <div className="min-h-screen bg-[#0a0a0a] text-white" data-testid="score-round-page">
@@ -555,11 +557,11 @@ export default function ScoreRound() {
                             {staticDisplayRounds.map(rn => (
                                 <th key={rn} className="text-left px-3 py-2 font-medium text-cyan-400 uppercase tracking-wider" title={rn}>{rn}</th>
                             ))}
-                            {/* Iter61 — Extra rounds positioned BETWEEN ZA and DOJ. 5-col groups. */}
+                            {/* Iter62 — Brighter parent group header with locked total width */}
                             {extraRounds.map(er => (
                                 <th key={`extra-${er.canon}`} colSpan={5}
-                                    style={{ width: groupTotalWidth, minWidth: groupTotalWidth }}
-                                    className="text-center px-2 py-2 font-medium text-fuchsia-300 uppercase tracking-wider border-l-2 border-fuchsia-700/40 bg-fuchsia-900/20">
+                                    style={{ width: groupTotalWidth, minWidth: groupTotalWidth, maxWidth: groupTotalWidth }}
+                                    className="text-center px-2 py-2 font-semibold text-fuchsia-200 uppercase tracking-wider border-l-2 border-fuchsia-400/60 bg-fuchsia-700/30">
                                     {er.label}
                                 </th>
                             ))}
@@ -568,20 +570,20 @@ export default function ScoreRound() {
                             <th className="text-left px-3 py-2 font-medium text-amber-400 uppercase tracking-wider">DOI</th>
                         </tr>
                         {extraRounds.length > 0 && (
-                            <tr className="border-b border-zinc-800 bg-zinc-900/70" data-testid="extra-subheader">
+                            <tr className="border-b border-zinc-800 bg-fuchsia-950/30" data-testid="extra-subheader">
                                 <th className="sticky left-0 z-30 bg-zinc-900/70" colSpan={11 + staticDisplayRounds.length + 1}></th>
                                 {extraRounds.map(er => (
                                     <Fragment key={`subhdr-${er.canon}`}>
-                                        <th style={{ width: SUB_WIDTHS[0], minWidth: SUB_WIDTHS[0] }}
-                                            className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase border-l border-fuchsia-700/30">Name</th>
-                                        <th style={{ width: SUB_WIDTHS[1], minWidth: SUB_WIDTHS[1] }}
-                                            className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase">Date</th>
-                                        <th style={{ width: SUB_WIDTHS[2], minWidth: SUB_WIDTHS[2] }}
-                                            className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase">Score</th>
-                                        <th style={{ width: SUB_WIDTHS[3], minWidth: SUB_WIDTHS[3] }}
-                                            className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase">Command</th>
-                                        <th style={{ width: SUB_WIDTHS[4], minWidth: SUB_WIDTHS[4] }}
-                                            className="text-left px-2 py-1.5 text-[10px] text-fuchsia-400/80 uppercase">Status</th>
+                                        <th style={{ width: SUB_WIDTHS[0], minWidth: SUB_WIDTHS[0], maxWidth: SUB_WIDTHS[0] }}
+                                            className="text-left px-3 py-1.5 text-[11px] font-medium text-fuchsia-300 uppercase tracking-wide border-l border-fuchsia-500/30">Name</th>
+                                        <th style={{ width: SUB_WIDTHS[1], minWidth: SUB_WIDTHS[1], maxWidth: SUB_WIDTHS[1] }}
+                                            className="text-left px-3 py-1.5 text-[11px] font-medium text-fuchsia-300 uppercase tracking-wide">Date</th>
+                                        <th style={{ width: SUB_WIDTHS[2], minWidth: SUB_WIDTHS[2], maxWidth: SUB_WIDTHS[2] }}
+                                            className="text-left px-3 py-1.5 text-[11px] font-medium text-fuchsia-300 uppercase tracking-wide">Score</th>
+                                        <th style={{ width: SUB_WIDTHS[3], minWidth: SUB_WIDTHS[3], maxWidth: SUB_WIDTHS[3] }}
+                                            className="text-left px-3 py-1.5 text-[11px] font-medium text-fuchsia-300 uppercase tracking-wide">Command</th>
+                                        <th style={{ width: SUB_WIDTHS[4], minWidth: SUB_WIDTHS[4], maxWidth: SUB_WIDTHS[4] }}
+                                            className="text-left px-3 py-1.5 text-[11px] font-medium text-fuchsia-300 uppercase tracking-wide">Status</th>
                                     </Fragment>
                                 ))}
                                 <th colSpan={3} className="bg-zinc-900/70"></th>
