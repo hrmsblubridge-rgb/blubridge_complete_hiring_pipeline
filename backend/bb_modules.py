@@ -4,7 +4,7 @@ Separate router to avoid modifying existing server.py logic."""
 from fastapi import APIRouter, HTTPException, Request, Query
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 import hashlib, secrets, re, logging, uuid
 
@@ -1841,7 +1841,26 @@ async def verify_applicant_otp(data: OTPVerifyBody, request: Request):
         {"$set": {"otp_verified": "1", "status": "Attended",
                   "last_update": datetime.now(timezone.utc).isoformat()}}
     )
-    return {"success": True, "message": "Applicant Successfully Verified !"}
+
+    # Pull authoritative candidate details from pipeline_data (with bb_registrations
+    # as fallback) so the success card always shows what HR sees.
+    pd = await _db.pipeline_data.find_one(
+        {"$or": [{"phone": phone}, {"email": applicant.get("email", "")}]},
+        {"_id": 0}
+    ) or {}
+    candidate = {
+        "name": pd.get("name") or applicant.get("full_name") or "",
+        "phone": pd.get("phone") or applicant.get("phone") or "",
+        "email": pd.get("email") or applicant.get("email") or "",
+        "job_role": pd.get("job_role") or applicant.get("job_role") or "",
+        "college_type": pd.get("_college_status") or pd.get("college_type") or "N/A",
+        "source": pd.get("source") or pd.get("application_source") or "N/A",
+    }
+    return {
+        "success": True,
+        "message": "Applicant Successfully Verified !",
+        "candidate": candidate,
+    }
 
 
 # ============ PUBLIC ENDPOINTS (NO AUTH) ============
@@ -1921,6 +1940,28 @@ async def register_applicant(data: RegistrationBody):
     form = await _resolve_form_by_slug_or_id(data.form_id)
     if not form:
         raise HTTPException(status_code=404, detail="Form not found")
+
+    # ---- 4-MONTH RE-REGISTRATION BLOCK ----
+    # Any applicant who already attended (otp_verified=True) cannot register
+    # again for 4 months, matched by email OR phone.
+    email_norm = (data.email or "").strip().lower()
+    phone_norm = re.sub(r'[^\d]', '', (data.phone or "").strip())
+    if len(phone_norm) > 10:
+        phone_norm = phone_norm[-10:]
+    four_months_ago = (datetime.now(timezone.utc) - timedelta(days=120)).isoformat()
+    recent_attended = await _db.bb_registrations.find_one({
+        "$or": [{"email": email_norm}, {"phone": phone_norm}],
+        "otp_verified": True,
+        "$or": [
+            {"otp_sent_at": {"$gte": four_months_ago}},
+            {"last_update": {"$gte": four_months_ago}},
+        ],
+    })
+    if recent_attended:
+        raise HTTPException(
+            status_code=409,
+            detail="You have already attended an interview with us. Please try again after 4 months from your last interview."
+        )
 
     cond = form.get("conditions", {})
     job_role = form.get("job_role", "")
@@ -2086,23 +2127,16 @@ async def register_applicant(data: RegistrationBody):
 
     async def _instant_notify():
         try:
-            from messaging import notify_shortlisted, notify_rejected_with_reason
+            from messaging import notify_rejected_with_reason
             now_iso = datetime.now(timezone.utc).isoformat()
             if is_shortlisted:
-                ok = await notify_shortlisted(
-                    data.full_name.strip(), phone_normalized,
-                    data.email.strip().lower(), schedule_token,
-                    is_test=is_test_record,
-                )
-                await _db.bb_registrations.update_one(
-                    {"email": data.email.strip().lower(), "schedule_token": schedule_token},
-                    {"$set": {
-                        "schedule_link_sent": bool(ok),
-                        "schedule_link_sent_at": now_iso if ok else None,
-                        "shortlist_mail_sent": bool(ok),
-                        "shortlist_mail_sent_time": now_iso if ok else None,
-                    }},
-                )
+                # ---- 5-MIN DELAYED SCHEDULE LINK ----
+                # Do NOT send immediately. The Schedule Link Sender worker
+                # (bg_workers.py) picks this up 5+ minutes after registration
+                # and skips the send entirely if the candidate clicked
+                # "Schedule Interview" within the 5-minute window
+                # (pub/schedule-click/{token} sets schedule_initiated=True).
+                _logger.info(f"[Eval] Shortlisted — schedule link deferred 5min for {data.email}")
             else:
                 ok = await notify_rejected_with_reason(
                     data.full_name.strip(), phone_normalized,
@@ -2136,6 +2170,24 @@ async def register_applicant(data: RegistrationBody):
         "schedule_token": schedule_token,
         "rejected_reasons": rejected_reasons,
     }
+
+
+@pub_router.post("/schedule-click/{token}")
+async def schedule_click(token: str):
+    """Candidate clicked the 'Schedule Interview' CTA — mark the flag so the
+    5-min delayed Schedule Link worker skips sending Email/WhatsApp to them.
+    Idempotent; safe to call multiple times."""
+    reg = await _db.bb_registrations.find_one({"schedule_token": token})
+    if not reg:
+        raise HTTPException(status_code=404, detail="Invalid or expired link")
+    await _db.bb_registrations.update_one(
+        {"_id": reg["_id"]},
+        {"$set": {
+            "schedule_initiated": True,
+            "schedule_initiated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    return {"success": True}
 
 
 @pub_router.get("/schedule/{token}")
@@ -2175,6 +2227,15 @@ async def schedule_interview(token: str, data: ScheduleBody):
     reg = await _db.bb_registrations.find_one({"schedule_token": token})
     if not reg:
         raise HTTPException(status_code=404, detail="Invalid or expired link")
+
+    # ---- OTP-VERIFIED LOCK ----
+    # Once the candidate has verified their OTP (i.e. already walked into the
+    # interview), rescheduling is no longer allowed.
+    if reg.get("otp_verified") is True or reg.get("otp_verified") == "1":
+        raise HTTPException(
+            status_code=409,
+            detail="You have already attended the interview. Rescheduling is not allowed."
+        )
 
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     is_reschedule = bool(reg.get("schedule_date"))
@@ -2217,7 +2278,31 @@ async def schedule_interview(token: str, data: ScheduleBody):
     otp = _generate_otp()
     updates["otp"] = otp
 
-    await _db.bb_registrations.update_one({"_id": reg["_id"]}, {"$set": updates})
+    # ---- RESCHEDULE RESET ----
+    # Wipe prior schedule/OTP/message flags so (a) no stale OTP from the old
+    # slot is honoured, (b) the OTP worker re-sends within the NEW window, and
+    # (c) the scheduling confirmation below is the only message candidate sees.
+    unset_fields = {}
+    if is_reschedule:
+        unset_fields = {
+            "otp_sent": "",
+            "otp_sent_at": "",
+            "otpGeneratedAt": "",
+            "otpExpiry": "",
+            "otp_expired": "",
+            "otp_expired_at": "",
+            "interview_mail_sent": "",
+            "interview_mail_sent_at": "",
+            "schedule_message_sent": "",
+            "schedule_message_sent_at": "",
+            "missed_reminder_sent": "",
+            "reminder_24h_sent": "",
+        }
+
+    update_op = {"$set": updates}
+    if unset_fields:
+        update_op["$unset"] = unset_fields
+    await _db.bb_registrations.update_one({"_id": reg["_id"]}, update_op)
 
     # Update HR pipeline_data (source of truth for Summary/View/Attended)
     email = reg.get("email", "")
@@ -2242,7 +2327,7 @@ async def schedule_interview(token: str, data: ScheduleBody):
     try:
         if _is_new_record:
             from messaging import notify_schedule_confirmation
-            await notify_schedule_confirmation(
+            ok = await notify_schedule_confirmation(
                 reg.get("full_name", ""), phone, email,
                 data.date.strip(), time_24, is_test=is_test_record,
             )
@@ -2251,6 +2336,9 @@ async def schedule_interview(token: str, data: ScheduleBody):
                 {"$set": {
                     "interview_mail_sent": True,
                     "interview_mail_sent_at": datetime.now(timezone.utc).isoformat(),
+                    # Canonical flag for "latest schedule info has been communicated"
+                    "schedule_message_sent": bool(ok),
+                    "schedule_message_sent_at": datetime.now(timezone.utc).isoformat(),
                 }},
             )
         else:

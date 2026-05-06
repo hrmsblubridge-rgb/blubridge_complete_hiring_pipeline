@@ -61,7 +61,17 @@ export default function InterviewSchedule() {
             const time24 = convertTo24h(time);
             await axios.post(`${API}/api/pub/schedule/${token}`, { date, time: time24 });
             setDone(true);
-        } catch (e) { alert(e.response?.data?.detail || 'Failed'); }
+        } catch (e) {
+            const status = e.response?.status;
+            const detail = e.response?.data?.detail || 'Failed';
+            if (status === 409) {
+                // OTP already verified — block reschedule with a clear message
+                alert(detail);
+                setError(detail);
+            } else {
+                alert(detail);
+            }
+        }
         finally { setSubmitting(false); }
     };
 

@@ -57,7 +57,17 @@ export default function PublicRegistration() {
             } else {
                 setStep('result');
             }
-        } catch (e) { alert(e.response?.data?.detail || 'Registration failed'); }
+        } catch (e) {
+            // Friendly handling for the 4-month re-registration block (409)
+            const status = e.response?.status;
+            const detail = e.response?.data?.detail || 'Registration failed';
+            if (status === 409) {
+                setResult({ status: 'BLOCKED', is_shortlisted: false, message: detail, reason: 'ALREADY_ATTENDED' });
+                setStep('result');
+            } else {
+                alert(detail);
+            }
+        }
         finally { setSubmitting(false); }
     };
 
@@ -267,6 +277,15 @@ export default function PublicRegistration() {
         const showSchedule = result?.showSchedule || (isShortlisted && result?.schedule_token);
         // Prefer backend-supplied absolute scheduleLink (uses FRONTEND_URL); fall back to relative.
         const scheduleHref = result?.scheduleLink || (result?.schedule_token ? `/schedule-interview/${result.schedule_token}` : '#');
+        // Mark schedule_initiated BEFORE navigating so the 5-min delayed
+        // Schedule Link worker doesn't also email/whatsapp the candidate.
+        const handleScheduleClick = (e) => {
+            const tok = result?.schedule_token;
+            if (tok) {
+                // Fire-and-forget; navigation continues regardless
+                axios.post(`${API}/api/pub/schedule-click/${tok}`).catch(() => {});
+            }
+        };
 
         return (
             <div className="min-h-screen bg-[#f3f1e9] flex flex-col" data-testid={isShortlisted ? 'result-shortlisted' : `result-rejected-${(reason || 'general').toLowerCase()}`}>
@@ -286,7 +305,7 @@ export default function PublicRegistration() {
                                             <p>{message}</p>
                                         </div>
                                         {showSchedule && (
-                                            <a href={scheduleHref} data-testid="schedule-cta-btn"
+                                            <a href={scheduleHref} onClick={handleScheduleClick} data-testid="schedule-cta-btn"
                                                 className="inline-block w-full py-3 bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-bold rounded-lg text-center">
                                                 Schedule Interview
                                             </a>

@@ -158,20 +158,31 @@ async def _worker_otp_generator():
 # ============ WORKER B: Schedule Link Sender (every 60s) ============
 
 async def _worker_schedule_link_sender():
-    """Send schedule link 5-30 min after registration for shortlisted applicants."""
-    _logger.info("Schedule Link Sender worker started")
+    """Send schedule link 5+ minutes after registration for shortlisted applicants
+    who have NOT already clicked 'Schedule Interview' on the result page.
+
+    Behaviour:
+      - Skips if `schedule_initiated=True` (candidate already navigated to the
+        scheduling page within 5 min — no point spamming them).
+      - Skips if `schedule_link_sent=True` (idempotent).
+      - Cutoff-guarded so legacy registrations are never contacted.
+    """
+    _logger.info("Schedule Link Sender worker started (5-min delay, schedule_initiated-aware)")
     while True:
         try:
             now = datetime.now(timezone.utc)
-            five_min_ago = (now - timedelta(minutes=30)).isoformat()
-            thirty_min_future = (now - timedelta(minutes=5)).isoformat()
+            # Pick rows registered >= 5 min ago (the delay window). 24h upper
+            # bound prevents re-sending after restart for very old rows.
+            five_min_ago = (now - timedelta(minutes=5)).isoformat()
+            twenty_four_h_ago = (now - timedelta(hours=24)).isoformat()
 
-            # Find shortlisted registrations submitted 5-30 min ago, link not sent (NEW only)
             cursor = _db.bb_registrations.find({
                 **_cutoff_filter(),
                 "is_shortlisted": True,
                 "schedule_link_sent": {"$ne": True},
-                "registered_at": {"$lte": thirty_min_future, "$gte": max(five_min_ago, MESSAGING_CUTOFF_TS)},
+                "schedule_initiated": {"$ne": True},
+                "registered_at": {"$lte": five_min_ago,
+                                   "$gte": max(twenty_four_h_ago, MESSAGING_CUTOFF_TS)},
             })
             docs = await cursor.to_list(None)
 
@@ -181,7 +192,7 @@ async def _worker_schedule_link_sender():
                     continue
 
                 from messaging import notify_shortlisted
-                await notify_shortlisted(
+                ok = await notify_shortlisted(
                     doc.get("full_name", ""),
                     doc.get("phone", ""),
                     doc.get("email", ""),
@@ -194,18 +205,18 @@ async def _worker_schedule_link_sender():
                     {"$set": {
                         "schedule_link_sent": True,
                         "schedule_link_sent_at": now.isoformat(),
-                        "shortlist_mail_sent": True,
+                        "shortlist_mail_sent": bool(ok),
                         "shortlist_mail_sent_time": now.isoformat(),
                     }}
                 )
-                _logger.info(f"[ScheduleLink] Sent to {doc.get('email')}")
+                _logger.info(f"[ScheduleLink] Sent to {doc.get('email')} (delay window passed, no schedule_initiated)")
 
             # Also send rejection notifications for rejected applicants not yet notified (NEW only)
             rejected_cursor = _db.bb_registrations.find({
                 **_cutoff_filter(),
                 "is_shortlisted": False,
                 "reject_notified": {"$ne": True},
-                "registered_at": {"$lte": thirty_min_future, "$gte": max(five_min_ago, MESSAGING_CUTOFF_TS)},
+                "registered_at": {"$lte": five_min_ago, "$gte": max(twenty_four_h_ago, MESSAGING_CUTOFF_TS)},
             })
             rejected_docs = await rejected_cursor.to_list(None)
 
