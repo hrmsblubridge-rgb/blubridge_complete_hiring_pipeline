@@ -2162,6 +2162,233 @@ async def update_induction_date(body: _InductionDateBody, request: Request):
     return {"success": True, "email": em, "date_of_induction": new_value or None}
 
 
+# ============ ITER55 — SCORE & ROUND TABLE MODULE ============
+# New top-level dashboard module. Table-driven UI showing every candidate
+# with their per-round scores (extended structure: round_name, date, score,
+# command, status) plus dates of joining / documentation / induction.
+#
+# DATA-SAFETY: write paths are append-only / per-round upsert by canonical
+# round name. Existing legacy `scores: [{round_name, score}]` records remain
+# readable — older fields are simply absent in the response and treated as
+# empty in the modal.
+
+STATIC_ROUNDS_ITER55 = [
+    "Accounts 1", "Accounts 2", "BA", "BE", "BP", "C++",
+    "Java", "LA", "Mensa", "Mensa Org", "ZA",
+]
+
+
+@bb_router.get("/score-round/table")
+async def score_round_table(
+    request: Request,
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=500),
+    q: Optional[str] = Query(None),  # free-text search across name/email/phone
+):
+    """Iter55 — Score & Round table data source.
+
+    Returns paginated rows joining `pipeline_data` (basic info + dates) with
+    `bb_applicant_updates` (status + per-round scores). Each row carries a
+    `rounds_map` keyed by canonical round name → full round entry.
+    """
+    await _require_auth(request)
+    match = {}
+    if q:
+        qs = q.strip()
+        if qs:
+            esc = re.escape(qs)
+            match["$or"] = [
+                {"name": {"$regex": esc, "$options": "i"}},
+                {"email": {"$regex": esc, "$options": "i"}},
+                {"phone": {"$regex": esc, "$options": "i"}},
+            ]
+
+    src = _db.pipeline_data
+    total = await src.count_documents(match)
+    skip = (page - 1) * limit
+    docs = await src.find(
+        match,
+        {
+            "_id": 0, "name": 1, "schedule_date": 1, "college": 1,
+            "college_name": 1, "degree": 1, "course": 1, "year_of_graduation": 1,
+            "email": 1, "phone": 1, "job_role": 1, "job_title": 1,
+            "result_status": 1,
+            "date_of_joining": 1, "date_of_documentation": 1, "date_of_induction": 1,
+        },
+    ).sort([("schedule_date", -1), ("name", 1)]).skip(skip).limit(limit).to_list(None)
+
+    # Page-scoped joins on bb_applicant_updates (email primary; phone fallback)
+    page_emails = [(d.get("email") or "").strip().lower() for d in docs if d.get("email")]
+    updates = await _db.bb_applicant_updates.find(
+        {"email": {"$in": page_emails}} if page_emails else {"_id": None},
+        {"_id": 0},
+    ).to_list(None) if page_emails else []
+    update_by_email = {u["email"]: u for u in updates if u.get("email")}
+
+    # Active rounds (for column ordering on FE)
+    rounds_active = await _db.bb_rounds.find(
+        {"active": {"$ne": False}},
+        {"_id": 0, "name": 1, "order": 1},
+    ).sort([("order", 1), ("name", 1)]).to_list(None)
+    ordered_round_names = [r["name"] for r in rounds_active if r.get("name")]
+    # Ensure static rounds always appear (even if not in bb_rounds)
+    for s in STATIC_ROUNDS_ITER55:
+        if not any(_norm_round(s).lower() == _norm_round(r).lower() for r in ordered_round_names):
+            ordered_round_names.append(s)
+
+    rows = []
+    for d in docs:
+        em = (d.get("email") or "").strip().lower()
+        upd = update_by_email.get(em, {})
+        scores_arr = upd.get("scores") or []
+        # Build canonical round-key map. Each entry exposes ALL fields if
+        # present (legacy entries silently fall back to score-only).
+        rounds_map = {}
+        for s in scores_arr:
+            rn = (s.get("round_name") or "").strip()
+            if not rn:
+                continue
+            canon = _norm_round(rn).lower()
+            rounds_map[canon] = {
+                "round_name": rn,
+                "date": s.get("date") or "",
+                "score": s.get("score"),
+                "command": s.get("command") or "",
+                "status": s.get("status") or "",
+            }
+        rows.append({
+            "name": d.get("name") or "",
+            "schedule_date": d.get("schedule_date") or "",
+            "college": d.get("college") or d.get("college_name") or "",
+            "degree": d.get("degree") or "",
+            "course": d.get("course") or "",
+            "year_of_graduation": d.get("year_of_graduation") or "",
+            "email": em,
+            "phone": d.get("phone") or "",
+            "job_role": d.get("job_role") or d.get("job_title") or "",
+            "status": upd.get("status") or d.get("result_status") or "",
+            "rounds_map": rounds_map,
+            "date_of_joining": d.get("date_of_joining") or "",
+            "date_of_documentation": d.get("date_of_documentation") or "",
+            "date_of_induction": d.get("date_of_induction") or "",
+        })
+
+    total_pages = (total + limit - 1) // limit if total else 1
+    return {
+        "data": rows,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "totalPages": total_pages,
+        "rounds": ordered_round_names,
+        "static_rounds": STATIC_ROUNDS_ITER55,
+    }
+
+
+class RoundEntryIn(BaseModel):
+    round_name: str
+    date: Optional[str] = ""
+    score: Optional[float] = None
+    command: Optional[str] = ""
+    status: Optional[str] = ""
+
+
+class SaveRoundsBody(BaseModel):
+    email: str
+    entries: List[RoundEntryIn]
+
+
+@bb_router.post("/score-round/save-scores")
+async def score_round_save_scores(body: SaveRoundsBody, request: Request):
+    """Iter55 — Append-only per-round upsert. For each entry, the canonical
+    round name (whitespace-collapsed, alias-mapped) determines the bucket.
+    Existing entries for OTHER rounds are preserved unchanged."""
+    await _require_auth(request)
+    em = (body.email or "").strip().lower()
+    if not em:
+        raise HTTPException(status_code=400, detail="email required")
+    cur = await _db.bb_applicant_updates.find_one({"email": em}, {"_id": 0, "scores": 1})
+    existing_by_canon = {}
+    for s in (cur.get("scores") or []) if cur else []:
+        canon = _norm_round(s.get("round_name") or "").lower()
+        if canon:
+            existing_by_canon[canon] = s
+
+    saved_rounds = []
+    for ent in body.entries:
+        rn = (ent.round_name or "").strip()
+        if not rn:
+            continue
+        canon = _norm_round(rn).lower()
+        if not canon:
+            continue
+        existing_by_canon[canon] = {
+            "round_name": rn,
+            "date": (ent.date or "").strip(),
+            "score": ent.score if ent.score is not None else 0,
+            "command": (ent.command or "").strip(),
+            "status": (ent.status or "").strip(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        saved_rounds.append(rn)
+        # Auto-register the round into bb_rounds (active) if missing
+        existing_round = await _db.bb_rounds.find_one(
+            {"name": {"$regex": f"^{re.escape(rn)}$", "$options": "i"}},
+            {"_id": 1, "active": 1},
+        )
+        if not existing_round:
+            await _db.bb_rounds.insert_one({
+                "name": rn,
+                "active": True,
+                "order": 999,
+                "source": "score_round_module",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+    await _db.bb_applicant_updates.update_one(
+        {"email": em},
+        {"$set": {
+            "email": em,
+            "scores": list(existing_by_canon.values()),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+        upsert=True,
+    )
+    _logger.info(f"[ScoreRound] save-scores email={em} rounds={saved_rounds}")
+    return {"success": True, "saved": saved_rounds}
+
+
+class SaveDatesBody(BaseModel):
+    email: str
+    date_of_joining: Optional[str] = None
+    date_of_documentation: Optional[str] = None
+    date_of_induction: Optional[str] = None
+
+
+@bb_router.put("/score-round/save-dates")
+async def score_round_save_dates(body: SaveDatesBody, request: Request):
+    """Iter55 — Update Date of Joining / Documentation / Induction for a
+    candidate (matched by email). Only fields explicitly passed are written;
+    null/None means "leave unchanged"; empty string clears."""
+    await _require_auth(request)
+    em = (body.email or "").strip().lower()
+    if not em:
+        raise HTTPException(status_code=400, detail="email required")
+    updates = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    for k in ("date_of_joining", "date_of_documentation", "date_of_induction"):
+        v = getattr(body, k)
+        if v is not None:
+            updates[k] = v.strip()
+    res = await _db.pipeline_data.update_many({"email": em}, {"$set": updates})
+    _logger.info(f"[ScoreRound] save-dates email={em} matched={res.matched_count} fields={list(updates.keys())[:-1]}")
+    return {"success": True, "matched": res.matched_count}
+
+
+# ============ END ITER55 ============
+
+
+
+
 @bb_router.post("/import-scores/preview")
 async def import_scores_preview(request: Request):
     """STEP 1 of 2 — Parse uploaded CSV/XLSX and return rows for user preview.

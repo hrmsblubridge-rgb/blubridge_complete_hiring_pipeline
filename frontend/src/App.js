@@ -21,6 +21,7 @@ import InterviewSchedule from "./pages/InterviewSchedule";
 import CollegeSchedules from "./pages/CollegeSchedules";
 import CollegeRegistration from "./pages/CollegeRegistration";
 import CandidateJourney from "./pages/CandidateJourney";
+import ScoreRound from "./pages/ScoreRound";
 import { Toaster } from "./components/ui/sonner";
 
 function App() {
@@ -45,6 +46,7 @@ function App() {
                         <Route path="/verify-otp" element={<ProtectedRoute><VerifyOTP /></ProtectedRoute>} />
                         <Route path="/college-schedules" element={<ProtectedRoute><CollegeSchedules /></ProtectedRoute>} />
                         <Route path="/candidate-journey" element={<ProtectedRoute><CandidateJourney /></ProtectedRoute>} />
+                        <Route path="/score-round" element={<ProtectedRoute><ScoreRound /></ProtectedRoute>} />
                         <Route path="/register/college" element={<CollegeRegistration />} />
                         <Route path="/register/:formId" element={<PublicRegistration />} />
                         <Route path="/schedule-interview/:token" element={<InterviewSchedule />} />
