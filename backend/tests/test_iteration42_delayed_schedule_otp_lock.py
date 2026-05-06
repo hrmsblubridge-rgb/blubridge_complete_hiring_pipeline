@@ -120,8 +120,9 @@ def test_register_fresh_email_no_immediate_link_sent(mongo_db, cleanup_emails):
     body = r.json()
     assert body.get("success") is True
     assert body.get("status") in ("SHORTLISTED", "REJECTED")
-    # row exists
-    doc = mongo_db.bb_registrations.find_one({"email": email})
+    # row exists — backend lowercases email, so look up by lowered form
+    cleanup_emails.append(email.lower())
+    doc = mongo_db.bb_registrations.find_one({"email": email.lower()})
     assert doc is not None, "registration doc not persisted"
     # mark isTest now (since pydantic strips extras, do via direct update)
     mongo_db.bb_registrations.update_one({"_id": doc["_id"]}, {"$set": {"isTest": True}})

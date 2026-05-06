@@ -1950,12 +1950,14 @@ async def register_applicant(data: RegistrationBody):
         phone_norm = phone_norm[-10:]
     four_months_ago = (datetime.now(timezone.utc) - timedelta(days=120)).isoformat()
     recent_attended = await _db.bb_registrations.find_one({
-        "$or": [{"email": email_norm}, {"phone": phone_norm}],
-        "otp_verified": True,
-        "$or": [
-            {"otp_sent_at": {"$gte": four_months_ago}},
-            {"last_update": {"$gte": four_months_ago}},
-        ],
+        "$and": [
+            {"$or": [{"email": email_norm}, {"phone": phone_norm}]},
+            {"otp_verified": True},
+            {"$or": [
+                {"otp_sent_at": {"$gte": four_months_ago}},
+                {"last_update": {"$gte": four_months_ago}},
+            ]},
+        ]
     })
     if recent_attended:
         raise HTTPException(
@@ -2334,8 +2336,6 @@ async def schedule_interview(token: str, data: ScheduleBody):
             await _db.bb_registrations.update_one(
                 {"_id": reg["_id"]},
                 {"$set": {
-                    "interview_mail_sent": True,
-                    "interview_mail_sent_at": datetime.now(timezone.utc).isoformat(),
                     # Canonical flag for "latest schedule info has been communicated"
                     "schedule_message_sent": bool(ok),
                     "schedule_message_sent_at": datetime.now(timezone.utc).isoformat(),

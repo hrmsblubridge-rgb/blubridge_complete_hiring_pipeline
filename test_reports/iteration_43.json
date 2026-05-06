@@ -1,0 +1,28 @@
+{
+  "summary": "Iteration 43 re-test after iteration 42 fixes. Both fixes verified in bb_modules.py: (a) register_applicant `recent_attended` query now uses a single top-level `$and` with nested `$or` clauses (lines 1952-1961) — no duplicate-key collapse. (b) schedule_interview post-confirmation update now sets ONLY `schedule_message_sent` + `schedule_message_sent_at`; the legacy `interview_mail_sent: True` re-stamp has been removed (lines 2336-2343). All 10 tests in /app/backend/tests/test_iteration42_delayed_schedule_otp_lock.py now PASS (was 8/10). One test required a trivial selector fix (email lookup in Mongo was case-sensitive while backend lowercases) — backend behaviour itself was correct. Worker test (5-min delay + schedule_initiated skip) passed in ~55s of the ~110s budget. No regressions observed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration42_delayed_schedule_otp_lock.py",
+    "/app/test_reports/pytest/iter43.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "VERIFIED FIX 1 (bb_modules.py:1952-1961): `recent_attended` filter correctly wraps a single `$or` for email/phone, the otp_verified flag, and a second `$or` for date window inside one `$and`. No duplicate keys. Confirmed by test_register_fresh_email_no_immediate_link_sent (fresh email → 200) and test_register_succeeds_after_120_days (>120d old → 200), while test_register_blocked_by_recent_attended_record still blocks correctly on same-email within 30d.",
+    "VERIFIED FIX 2 (bb_modules.py:2336-2343): Only `schedule_message_sent` / `schedule_message_sent_at` are set after notify_schedule_confirmation; `interview_mail_sent: True` re-stamp has been removed. test_reschedule_unsets_old_otp_and_message_flags confirms the stale otp/messaging fields stay unset after the reschedule $unset.",
+    "NO NEW REGRESSIONS: delayed-worker, schedule-click endpoint, schedule-on-otp-verified 409, verify-otp candidate payload, and verify-otp expired paths all still pass.",
+    "NIT: backend lowercases email server-side but tests/admin tooling that query Mongo by the original-cased email will miss rows. Code is correct — flagged only for future test writers."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration42_delayed_schedule_otp_lock.py (fixed case-sensitive Mongo lookup in test_register_fresh_email_no_immediate_link_sent — look up by email.lower() to match what the backend persists)"
+  ],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "not tested (backend-only)"},
+  "test_credentials": "Admin User / Admin User (session cookie via POST /api/login)",
+  "seed_data_creation": "Each test seeds isTest:true rows in bb_registrations / pipeline_data and tears them down in finally blocks. After the re-run, a final sweep deleted 3 leftover TEST_iter42_* rows (from the earlier failing run before the test selector fix). Final DB state: 0 TEST_iter42_* docs remain in bb_registrations or pipeline_data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iteration 42 fixes are verified end-to-end. The register 4-month block now matches on same email/phone within 120 days (not a match-all); reschedule only stamps schedule_message_sent. Worker test waits for the 60-s loop tick (keep timeout >=110s). If re-running, ensure `TEST_iter42_*` rows are swept if any previous run interrupted mid-test — the fixture only removes rows tracked via the `cleanup_emails` list, which now correctly uses lower-cased emails."
+}
