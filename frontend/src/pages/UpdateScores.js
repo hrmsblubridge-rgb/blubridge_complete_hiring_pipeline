@@ -125,14 +125,32 @@ export default function UpdateScores() {
 
     const [importPreview, setImportPreview] = useState(null); // {rows, round_columns, errors, total}
 
+    // ---- Iter49: helper to safely format ANY axios error into a string ----
+    // FastAPI sometimes returns `detail` as a list/dict (validation errors);
+    // passing those directly to toast/React caused the "Script error at
+    // handleError..." overlay. We coerce defensively here.
+    const errMsg = (err, fallback = 'Operation failed') => {
+        try {
+            const d = err?.response?.data;
+            if (typeof d === 'string') return d;
+            if (typeof d?.detail === 'string') return d.detail;
+            if (Array.isArray(d?.detail) && d.detail[0]?.msg) return d.detail.map(x => x.msg).join('; ');
+            if (typeof d?.message === 'string') return d.message;
+            if (err?.response) return `${err.response.status} ${err.response.statusText || fallback}`;
+            return err?.message || fallback;
+        } catch { return fallback; }
+    };
+
     // Export — calls backend XLSX endpoint (full schema)
     const handleExport = async (fmt = 'xlsx') => {
+        const tid = toast.loading(`Exporting ${fmt.toUpperCase()}…`);
         try {
             const params = new URLSearchParams({ format: fmt });
             if (startDate) params.append('startDate', startDate);
             if (endDate) params.append('endDate', endDate);
             const res = await axios.get(`${API}/api/bb/export-scores?${params}`, {
                 withCredentials: true, responseType: 'blob',
+                timeout: 5 * 60 * 1000, // 5-min cap for very large exports
             });
             const url = URL.createObjectURL(new Blob([res.data]));
             const a = document.createElement('a');
@@ -140,25 +158,43 @@ export default function UpdateScores() {
             a.download = `applicant_scores_${new Date().toISOString().split('T')[0]}.${fmt}`;
             a.click();
             URL.revokeObjectURL(url);
-        } catch { toast.error('Export failed'); }
+            toast.success('Export ready', { id: tid });
+        } catch (err) {
+            toast.error(errMsg(err, 'Export failed'), { id: tid });
+        }
     };
 
     // Import — STEP 1: preview parsed rows
     const handleImport = async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
+        // Reset the input early so re-selecting the same file works on retry
+        e.target.value = '';
         try {
             const formData = new FormData();
             formData.append('file', file);
             const res = await axios.post(
                 `${API}/api/bb/import-scores/preview`, formData,
-                { withCredentials: true, headers: { 'Content-Type': 'multipart/form-data' } },
+                { withCredentials: true, headers: { 'Content-Type': 'multipart/form-data' }, timeout: 2 * 60 * 1000 },
             );
-            setImportPreview(res.data);
-            if (res.data.errors?.length) toast.warning(`${res.data.errors.length} row(s) had issues`);
-            else toast.success(`Parsed ${res.data.total} rows. Review and confirm.`);
-        } catch (err) { toast.error(err?.response?.data?.detail || 'Import failed'); }
-        e.target.value = '';
+            const data = res?.data || {};
+            // Defensive: ensure shape so the preview modal never crashes on
+            // null/undefined access while iterating fields after "Status".
+            setImportPreview({
+                rows: Array.isArray(data.rows) ? data.rows : [],
+                round_columns: Array.isArray(data.round_columns) ? data.round_columns : [],
+                errors: Array.isArray(data.errors) ? data.errors : [],
+                total: Number.isFinite(data.total) ? data.total : (data.rows?.length || 0),
+            });
+            const issueCount = (data.errors || []).length;
+            if (issueCount) toast.warning(`${issueCount} row(s) had issues`);
+            else toast.success(`Parsed ${data.total || 0} rows. Review and confirm.`);
+        } catch (err) {
+            // Surface the REAL backend error (BOM check, missing column, etc.)
+            // so the user can act on it instead of a generic "Script error".
+            console.error('Import preview failed:', err);
+            toast.error(errMsg(err, 'Import failed'));
+        }
     };
 
     // Import — STEP 2: confirm and save
@@ -168,12 +204,17 @@ export default function UpdateScores() {
             const res = await axios.post(
                 `${API}/api/bb/import-scores/confirm`,
                 { rows: importPreview.rows },
-                { withCredentials: true },
+                { withCredentials: true, timeout: 2 * 60 * 1000 },
             );
-            toast.success(`Imported ${res.data.imported} records (batch=${res.data.batch_id.slice(0, 8)})`);
+            const d = res?.data || {};
+            const bid = typeof d.batch_id === 'string' ? d.batch_id.slice(0, 8) : 'n/a';
+            toast.success(`Imported ${d.imported || 0} records (batch=${bid})`);
             setImportPreview(null);
             fetchApplicants(page, pageSize);
-        } catch { toast.error('Confirm failed'); }
+        } catch (err) {
+            console.error('Import confirm failed:', err);
+            toast.error(errMsg(err, 'Confirm failed'));
+        }
     };
 
     return (
@@ -359,15 +400,16 @@ export default function UpdateScores() {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {importPreview.rows.map((r, i) => (
+                                    {(importPreview.rows || []).map((r, i) => (
                                         <tr key={i} className="border-t border-zinc-800" data-testid={`import-preview-row-${i}`}>
-                                            <td className="px-3 py-1.5">{r.name}</td>
-                                            <td className="px-3 py-1.5">{r.email}</td>
-                                            <td className="px-3 py-1.5">{r.job_role}</td>
-                                            <td className={`px-3 py-1.5 ${r.status === 'Rejected' ? 'text-red-400' : ''}`}>{r.status}</td>
-                                            {importPreview.round_columns?.map(rc => {
-                                                const sc = (r.scores || []).find(s => s.round_name === rc);
-                                                return <td key={rc} className="px-3 py-1.5">{sc?.score ?? '-'}</td>;
+                                            <td className="px-3 py-1.5">{String(r?.name ?? '')}</td>
+                                            <td className="px-3 py-1.5">{String(r?.email ?? '')}</td>
+                                            <td className="px-3 py-1.5">{String(r?.job_role ?? '')}</td>
+                                            <td className={`px-3 py-1.5 ${r?.status === 'Rejected' ? 'text-red-400' : ''}`}>{String(r?.status ?? '')}</td>
+                                            {(importPreview.round_columns || []).map(rc => {
+                                                const sc = (Array.isArray(r?.scores) ? r.scores : []).find(s => s?.round_name === rc);
+                                                const v = sc?.score;
+                                                return <td key={rc} className="px-3 py-1.5">{v === undefined || v === null || v === '' ? '-' : String(v)}</td>;
                                             })}
                                         </tr>
                                     ))}
