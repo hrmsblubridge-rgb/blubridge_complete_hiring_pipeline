@@ -1,12 +1,13 @@
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { ChartBar, FileText, CalendarCheck, PencilLine, Briefcase, FolderOpen, SignOut, CalendarBlank, ShieldCheck, GraduationCap } from '@phosphor-icons/react';
+import { ChartBar, FileText, CalendarCheck, PencilLine, Briefcase, FolderOpen, SignOut, CalendarBlank, ShieldCheck, GraduationCap, MagnifyingGlass } from '@phosphor-icons/react';
 
 const NAV_ITEMS = [
     { label: 'Analytics Dashboard', desc: 'Upload datasets, view summaries and applicants', icon: ChartBar, path: '/dashboard', color: 'amber' },
     { label: 'Hiring Forms', desc: 'Create form types and application forms with conditions', icon: FileText, path: '/hiring-forms', color: 'violet' },
     { label: 'Interview Schedule Reports', desc: 'View and export interview schedule data', icon: CalendarCheck, path: '/interview-reports', color: 'cyan' },
     { label: 'Update Applicants Scores', desc: 'Manage rounds and update candidate scores', icon: PencilLine, path: '/update-scores', color: 'emerald' },
+    { label: 'Candidate Journey', desc: 'View full lifecycle — rounds, scores, status, induction date', icon: MagnifyingGlass, path: '/candidate-journey', color: 'sky' },
     { label: 'Create Job Roles', desc: 'Define and manage job titles', icon: Briefcase, path: '/manage-job-roles', color: 'blue' },
     { label: 'Create Job Openings', desc: 'Publish job openings for recruitment', icon: FolderOpen, path: '/job-openings', color: 'rose' },
     { label: 'College Drives', desc: 'Configure interview schedules per college and role', icon: GraduationCap, path: '/college-schedules', color: 'pink' },
@@ -19,6 +20,7 @@ const COLOR_MAP = {
     violet: { border: 'hover:border-violet-600', icon: 'group-hover:text-violet-500' },
     cyan: { border: 'hover:border-cyan-600', icon: 'group-hover:text-cyan-500' },
     emerald: { border: 'hover:border-emerald-600', icon: 'group-hover:text-emerald-500' },
+    sky: { border: 'hover:border-sky-600', icon: 'group-hover:text-sky-500' },
     blue: { border: 'hover:border-blue-600', icon: 'group-hover:text-blue-500' },
     rose: { border: 'hover:border-rose-600', icon: 'group-hover:text-rose-500' },
     pink: { border: 'hover:border-pink-600', icon: 'group-hover:text-pink-500' },

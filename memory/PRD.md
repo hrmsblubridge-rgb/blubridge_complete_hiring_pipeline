@@ -45,6 +45,10 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter53)** — Candidate Journey module on Home + Richer Interview-Scheduled confirmation:
+  - **New Home module "Candidate Journey"** (sky theme, magnifying-glass icon) routes to new page `/candidate-journey` (`CandidateJourney.js`) — dedicated search card that opens `CandidateJourneyModal` with the same rounds/status/DOI payload. Also still available on `/dashboard` (Score and Round section).
+  - **Interview Scheduled success page replaced** (`InterviewSchedule.js`). Post-submit now shows: title "Your Interview Has Been Scheduled!" (or Rescheduled!), Thank-you line naming Blubridge Technologies, Interview Details block (Date DD-MM-YYYY / Time 12-hour / Location fixed company address), confirmation-email line, ⚠ Spam/Junk warning box, closing "We look forward to meeting you in person!" Date/time pulled from the just-submitted `date`/`time` state with fallback to `info.schedule_date`/`info.schedule_time` for reschedule preview.
+  - Verified live: `15-06-2026 · 04:30PM · 30, Norton Road, Mandavelipakkam, Raja Annamalai Puram, Chennai, Tamil Nadu - 600028`.
 - **Feb 2026 (iter52)** — Candidate Journey (A–Z) row action on Roles + AttendedRoles:
   - **New backend endpoint** `GET /api/bb/candidate-journey?email=&phone=` returns the full structured payload spec'd by the user: `{basic, round_details, latest_round, latest_score, total_score, final_outcome:{status, date_of_induction}}`. Reads only from `pipeline_data`, `bb_applicant_updates`, `score_sheet`. Conflict (email/phone mismatch) → 409 + log.
   - **Round timeline**: rounds ordered by `bb_rounds.order` then alphabetical fallback. Each entry: `{round_name, round_label, score, status, completed_date}`. Custom display labels per spec: *Round 2 → F2F*, *HR Round → HR Interview*, *Round 1 → Technical 1*, *Round 0 → Final Discussion*. Status: `Completed` (score present) / `Rejected` (text reject) / `Pending` (no data). Rounds with no data are skipped per spec.

@@ -77,19 +77,60 @@ export default function InterviewSchedule() {
 
     if (loading) return <div className="min-h-screen bg-[#f3f1e9] flex items-center justify-center text-gray-500">Loading...</div>;
     if (error) return <div className="min-h-screen bg-[#f3f1e9] flex items-center justify-center text-red-500">{error}</div>;
-    if (done) return (
-        <PageShell testid="schedule-success">
-            <div className="w-full max-w-md">
-                <div className="bg-[#fffdf7] rounded-xl shadow-sm overflow-hidden">
-                    <div className="bg-[#1a2332] h-3 rounded-t-xl"></div>
-                    <div className="p-8 text-center space-y-3">
-                        <h2 className="text-xl font-bold text-gray-900">{info?.already_scheduled ? 'Interview Rescheduled!' : 'Interview Scheduled!'}</h2>
-                        <p className="text-gray-600 text-sm">Your interview has been confirmed. You will receive further details via Email/WhatsApp.</p>
+    if (done) {
+        const ddmmyyyy = (iso) => {
+            if (!iso) return '';
+            const [y, m, d] = iso.split('-');
+            return `${d}-${m}-${y}`;
+        };
+        // Prefer freshly-submitted values; fall back to already-scheduled values on reschedule GET.
+        const shownDate = ddmmyyyy(date) || ddmmyyyy(info?.schedule_date);
+        const to12h = (t) => {
+            if (!t) return '';
+            // If already 12-hour (e.g. '04:30 PM'), return as-is
+            if (/AM|PM/i.test(t)) return t.toUpperCase().replace(/\s+/g, '');
+            // Otherwise '16:30' or '16:30:00' → '04:30PM'
+            const [hStr, mStr] = t.split(':');
+            let h = parseInt(hStr, 10);
+            const m = mStr || '00';
+            const period = h >= 12 ? 'PM' : 'AM';
+            h = h % 12 || 12;
+            return `${String(h).padStart(2, '0')}:${m}${period}`;
+        };
+        const shownTime = to12h(time) || to12h(info?.schedule_time);
+        const COMPANY_ADDRESS = '30, Norton Road, Mandavelipakkam, Raja Annamalai Puram, Chennai, Tamil Nadu - 600028';
+        return (
+            <PageShell testid="schedule-success">
+                <div className="w-full max-w-xl">
+                    <div className="bg-[#fffdf7] rounded-xl shadow-sm overflow-hidden">
+                        <div className="bg-[#1a2332] h-3 rounded-t-xl"></div>
+                        <div className="p-8 space-y-5">
+                            <h2 className="text-2xl font-bold text-[#1a2332] text-center" data-testid="sched-success-heading">
+                                {info?.already_scheduled ? 'Your Interview Has Been Rescheduled!' : 'Your Interview Has Been Scheduled!'}
+                            </h2>
+                            <div className="h-px bg-gray-300"></div>
+                            <p className="text-gray-800 text-sm leading-relaxed">
+                                Thank you for scheduling your interview with <b>Blubridge Technologies</b>.
+                            </p>
+                            <div className="space-y-1 text-sm text-gray-800">
+                                <div className="font-bold">Interview Details:</div>
+                                <div><b>Date:</b> <span data-testid="sched-success-date">{shownDate}</span></div>
+                                <div><b>Time:</b> <span data-testid="sched-success-time">{shownTime}</span></div>
+                                <div><b>Location:</b> <span data-testid="sched-success-location">{COMPANY_ADDRESS}</span></div>
+                            </div>
+                            <p className="text-gray-800 text-sm leading-relaxed">
+                                A confirmation email with the above details has been sent to your provided email address.
+                            </p>
+                            <div className="bg-[#fff9e6] border border-[#f5d76e] rounded p-3 text-sm text-gray-800">
+                                <b>⚠ Important:</b> Please ensure you check your <b>Spam/Junk</b> folder if you don't see our email in your inbox, and mark it as "Not Spam" to stay updated.
+                            </div>
+                            <p className="text-gray-800 text-sm font-medium">We look forward to meeting you in person!</p>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </PageShell>
-    );
+            </PageShell>
+        );
+    }
 
     const today = new Date().toISOString().split('T')[0];
 
