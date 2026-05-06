@@ -1064,10 +1064,21 @@ async def register_college_applicant(data: CollegeRegistrationBody):
     if not (data.full_name and data.email and data.phone):
         raise HTTPException(status_code=400, detail="Name, email and phone are required")
 
+    # Iter60 — Multi-role support: a schedule's job_role may be stored as a
+    # joined string ("AI/ML,Administration,HR") or as `job_roles[]` array.
+    # Match if the candidate's selected role is any element of either form
+    # (case-insensitive, whitespace-trimmed). Backward compatible with
+    # single-role legacy rows.
     sched = await _db.bb_college_schedules.find_one({
         "active": {"$ne": False},
         "college_name": {"$regex": f"^{re.escape(college)}$", "$options": "i"},
-        "job_role": {"$regex": f"^{re.escape(role)}$", "$options": "i"},
+        "$or": [
+            # Exact match against array element (preferred)
+            {"job_roles": {"$elemMatch": {"$regex": f"^{re.escape(role)}$", "$options": "i"}}},
+            # Match against legacy joined string: role appears as full token
+            # (anchored on commas/string boundaries to avoid "HR" matching "CHR")
+            {"job_role": {"$regex": f"(^|,)\\s*{re.escape(role)}\\s*(,|$)", "$options": "i"}},
+        ],
     })
     if not sched:
         raise HTTPException(
