@@ -45,6 +45,12 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter47)** — Score Import Sync + WhatsApp Template + Domain-Agnostic URLs:
+  - **Imported rounds → bb_rounds**: `POST /api/bb/import-scores/confirm` now upserts each distinct round name from the imported file into `bb_rounds` (case-insensitive dedupe; restores soft-deleted rounds; tags `source: "imported"`). Frontend tabs/cards UI surfaces them automatically alongside manually-created rounds. Zero / empty / non-numeric scores are skipped per spec.
+  - **Update modal data source**: `/api/bb/attended-for-scores` already returns merged rounds — no change needed; modal now reflects manual + imported rounds correctly.
+  - **WhatsApp `Candidate FollowUp` template**: 4 → **5 params** `[name, role, formattedDate, time, schedule_link]`. Updated `messaging.notify_missed_reminder`. Campaign name unchanged.
+  - **Registration form URLs domain-agnostic**: `HiringForms.js` already uses relative `/register/{slug}` (works on any host). Added a **Copy** button that builds the absolute URL at runtime via `window.location.origin` (`xyz.com/register/ai-ml`, `abc.com/register/ai-ml`, etc.). DB stores only the slug — no full URL persisted.
+  - 15/15 regression tests pass (iter44 + iter45 + iter47). No live data touched.
 - **Feb 2026 (iter46)** — Bulk Upload UX improvements:
   - **Live row-count progress** during processing — worker writes `progress = {processed, total, percent}` to the queue doc every 200 rows; status endpoint surfaces it; frontend modal renders an animated progress bar (`247 / 5,000 rows · 4%`) with auto-polling every 1.5s while a job is active. Verified live: `200/5000 → 400/5000 (4% → 8%)` updates in ~15s.
   - **Real upload errors surfaced** — frontend `BulkUploadModal` now shows the actual server error (`Upload failed: 413 Payload Too Large`, `Upload failed: 401 Unauthorized`, etc.) instead of a generic "Upload failed" toast. Adds 5-min axios timeout for large multi-file uploads + soft warning toast for files >50 MB.

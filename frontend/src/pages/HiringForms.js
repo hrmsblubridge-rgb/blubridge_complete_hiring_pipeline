@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { ArrowLeft, Plus, PencilSimple, Trash, X, Link as LinkIcon } from '@phosphor-icons/react';
+import { ArrowLeft, Plus, PencilSimple, Trash, X, Link as LinkIcon, Copy } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -147,7 +147,22 @@ export default function HiringForms() {
                                         )}
                                     </div>
                                     <div className="flex gap-2 shrink-0">
-                                        <a href={`/register/${f.slug || f.id}`} target="_blank" rel="noreferrer" data-testid={`link-${f.id}`} className="p-2 text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800" title="Registration Link"><LinkIcon size={16} /></a>
+                                        <a href={`/register/${f.slug || f.id}`} target="_blank" rel="noreferrer" data-testid={`link-${f.id}`} className="p-2 text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800" title="Open Registration Link"><LinkIcon size={16} /></a>
+                                        <button
+                                            onClick={() => {
+                                                // Iter47 — build the absolute URL at runtime from the
+                                                // current origin so the link always matches whatever
+                                                // domain/subdomain HR is on (xyz.com, abc.com, xyz.ai).
+                                                // DB stores only the slug; the URL is constructed here.
+                                                const url = `${window.location.origin}/register/${f.slug || f.id}`;
+                                                navigator.clipboard.writeText(url)
+                                                    .then(() => toast.success(`Copied: ${url}`))
+                                                    .catch(() => toast.error('Clipboard write failed'));
+                                            }}
+                                            data-testid={`copy-link-${f.id}`}
+                                            title="Copy Registration URL"
+                                            className="p-2 text-zinc-500 hover:text-emerald-400 hover:bg-zinc-800"
+                                        ><Copy size={16} /></button>
                                         <button onClick={() => openEditForm(f)} className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800"><PencilSimple size={16} /></button>
                                         <button onClick={() => deleteForm(f.id)} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800"><Trash size={16} /></button>
                                     </div>

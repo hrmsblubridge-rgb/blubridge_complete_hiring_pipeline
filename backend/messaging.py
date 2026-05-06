@@ -279,9 +279,18 @@ async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str,
 
 
 async def notify_missed_reminder(name: str, phone: str, email: str, role: str, date: str, time: str, schedule_token: str, is_test: bool = False):
-    """Send missed interview reminder with reschedule link."""
+    """Send missed interview reminder with reschedule link.
+
+    Iter47 — WhatsApp template "Candidate FollowUp" now accepts 5 params
+    ([name, role, formattedDate, time, schedule_link]) so the message carries
+    the reschedule CTA directly, matching the updated PHP template.
+    """
     schedule_link = f"{FRONTEND_URL}/schedule-interview/{schedule_token}"
-    await send_whatsapp("Candidate FollowUp", phone, email, [name, role, date, time], is_test=is_test)
+    await send_whatsapp(
+        "Candidate FollowUp", phone, email,
+        [name, role, date, time, schedule_link],
+        is_test=is_test,
+    )
     html = f"""
     <p>Hi {name},</p>
     <p>We noticed you missed your scheduled interview at Blubridge. We understand unexpected situations may occur, so we'd like to offer you one final opportunity to reschedule.</p>

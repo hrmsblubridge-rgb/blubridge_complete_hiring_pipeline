@@ -1939,13 +1939,32 @@ async def import_scores_confirm(data: dict, request: Request):
     batch_id = str(uuid.uuid4())
     now_iso = datetime.now(timezone.utc).isoformat()
     imported = 0
+    # Collect every distinct round name seen across this batch so we can
+    # upsert them into bb_rounds (Iter47 — scores+rounds sync). Frontend
+    # renders rounds as tabs/cards directly from bb_rounds, so this is the
+    # only step needed to surface "imported rounds" in the UI alongside
+    # manually-created ones.
+    batch_round_names: set = set()
     for r in rows:
         email = str(r.get("email", "") or "").strip().lower()
         if not email:
             continue
         scores_in = r.get("scores", []) or []
-        scores = [{"round_name": s.get("round_name"), "score": s.get("score")}
-                  for s in scores_in if s.get("round_name")]
+        scores = []
+        for s in scores_in:
+            rn = (s.get("round_name") or "").strip()
+            if not rn:
+                continue
+            # Skip zero / empty / non-numeric-zero values per spec
+            val = s.get("score")
+            try:
+                num = float(val) if val not in (None, "", "-") else None
+            except (TypeError, ValueError):
+                num = None
+            if num is None or num == 0:
+                continue
+            scores.append({"round_name": rn, "score": num})
+            batch_round_names.add(rn)
         await _db.bb_applicant_updates.update_one(
             {"email": email},
             {"$set": {
@@ -1965,7 +1984,38 @@ async def import_scores_confirm(data: dict, request: Request):
             upsert=True,
         )
         imported += 1
-    return {"success": True, "imported": imported, "batch_id": batch_id}
+
+    # ---- Auto-register imported rounds into bb_rounds (Iter47) ----
+    # Case-insensitive dedupe against existing rounds so we never create
+    # "Round 1" + "round 1" as two separate entries.
+    rounds_created = 0
+    for rn in sorted(batch_round_names):
+        existing = await _db.bb_rounds.find_one(
+            {"name": {"$regex": f"^{re.escape(rn)}$", "$options": "i"}},
+            {"_id": 1, "active": 1},
+        )
+        if existing:
+            # Re-activate if a recruiter had soft-deleted it previously.
+            if existing.get("active") is False:
+                await _db.bb_rounds.update_one(
+                    {"_id": existing["_id"]},
+                    {"$set": {"active": True,
+                              "restored_at": datetime.now(timezone.utc).isoformat()}},
+                )
+            continue
+        await _db.bb_rounds.insert_one({
+            "name": rn,
+            "active": True,
+            "order": 0,
+            "source": "imported",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        rounds_created += 1
+
+    return {"success": True, "imported": imported,
+            "batch_id": batch_id,
+            "rounds_registered": rounds_created,
+            "round_names": sorted(batch_round_names)}
 
 
 @bb_router.post("/import-scores")
