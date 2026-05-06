@@ -984,6 +984,35 @@ async def pub_list_roles_for_college(college: str = Query(...)):
     return {"roles": sorted([r for r in roles if r])}
 
 
+@pub_router.get("/college-form/schedule")
+async def pub_latest_schedule_for_college(college: str = Query(...)):
+    """Iter54 — Public-form helper for College Drives Req 2.
+    Returns the LATEST ACTIVE schedule (by created_at, then schedule_date) for the
+    given college so the public registration form can dynamically populate the
+    Schedule Date, Schedule Time and Job Role fields on college selection.
+    Returns {"schedule": null} if nothing matches — caller must clear its fields.
+    """
+    name = (college or "").strip()
+    if not name:
+        return {"schedule": None}
+    doc = await _db.bb_college_schedules.find_one(
+        {
+            "active": {"$ne": False},
+            "college_name": {"$regex": f"^{re.escape(name)}$", "$options": "i"},
+        },
+        {"_id": 0, "college_name": 1, "job_role": 1, "schedule_date": 1, "schedule_time": 1, "created_at": 1},
+        sort=[("created_at", -1), ("schedule_date", -1)],
+    )
+    if not doc:
+        return {"schedule": None}
+    return {"schedule": {
+        "college_name": doc.get("college_name", ""),
+        "job_role": doc.get("job_role", "") or "",
+        "schedule_date": doc.get("schedule_date", "") or "",
+        "schedule_time": doc.get("schedule_time", "") or "",
+    }}
+
+
 class CollegeRegistrationBody(BaseModel):
     full_name: str
     email: str

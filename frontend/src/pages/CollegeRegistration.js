@@ -35,14 +35,13 @@ const formatDateDDMMYYYY = (d) => {
 
 export default function CollegeRegistration() {
     const [colleges, setColleges] = useState([]);
-    const [roles, setRoles] = useState([]);
     const [scheduleInfo, setScheduleInfo] = useState(null);
-    const [loadingRoles, setLoadingRoles] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [done, setDone] = useState(null);
     const [f, setF] = useState({
         full_name: '', email: '', phone: '', age: '', gender: '',
         college: '', job_role: '',
+        schedule_date: '', schedule_time: '',  // Iter54 Req2 — auto-populated read-only
         degree: '', course: '', year_of_graduation: '',
         current_location_state: '', preferred_location_city: '',
     });
@@ -51,27 +50,39 @@ export default function CollegeRegistration() {
         axios.get(`${API}/api/pub/college-form/colleges`).then(r => setColleges(r.data.colleges || [])).catch(() => {});
     }, []);
 
-    // Refetch roles + schedule when college or role changes
+    // Iter54 Req2 — On COLLEGE CHANGE only (not on page load): fetch latest active
+    // schedule and populate Schedule Date, Schedule Time, Job Role. No-data → clear silently.
     useEffect(() => {
-        if (!f.college) { setRoles([]); setScheduleInfo(null); return; }
-        setLoadingRoles(true);
-        axios.get(`${API}/api/pub/college-form/roles`, { params: { college: f.college } })
-            .then(r => setRoles(r.data.roles || []))
-            .catch(() => setRoles([]))
-            .finally(() => setLoadingRoles(false));
-        // Reset role + schedule when college changes
-        setF(p => ({ ...p, job_role: '' }));
-        setScheduleInfo(null);
-    }, [f.college]); // eslint-disable-line react-hooks/exhaustive-deps
-
-    // Lookup the schedule once both college + role are picked
-    useEffect(() => {
-        if (!f.college || !f.job_role) { setScheduleInfo(null); return; }
-        // We don't have a dedicated endpoint, so re-use roles call won't give date/time.
-        // Instead: hit the register preview endpoint? Cleaner to add a tiny GET.
-        // For now we just show "Schedule will be confirmed after submission".
-        setScheduleInfo({ pending: true });
-    }, [f.college, f.job_role]);
+        if (!f.college) {
+            setScheduleInfo(null);
+            setF(p => ({ ...p, job_role: '', schedule_date: '', schedule_time: '' }));
+            return;
+        }
+        let cancelled = false;
+        axios.get(`${API}/api/pub/college-form/schedule`, { params: { college: f.college } })
+            .then(r => {
+                if (cancelled) return;
+                const s = r.data?.schedule;
+                if (!s) {
+                    setScheduleInfo(null);
+                    setF(p => ({ ...p, job_role: '', schedule_date: '', schedule_time: '' }));
+                    return;
+                }
+                setScheduleInfo({ found: true });
+                setF(p => ({
+                    ...p,
+                    job_role: s.job_role || '',
+                    schedule_date: s.schedule_date || '',
+                    schedule_time: s.schedule_time || '',
+                }));
+            })
+            .catch(() => {
+                if (cancelled) return;
+                setScheduleInfo(null);
+                setF(p => ({ ...p, job_role: '', schedule_date: '', schedule_time: '' }));
+            });
+        return () => { cancelled = true; };
+    }, [f.college]);
 
     const handleSubmit = async () => {
         if (!f.full_name.trim() || !f.email.trim() || !f.phone.trim()) { alert('Name, Email and Phone are required'); return; }
@@ -157,12 +168,25 @@ export default function CollegeRegistration() {
                             </div>
                             <div>
                                 <label className="text-xs text-gray-600 font-medium">Job Role *</label>
-                                <select value={f.job_role} onChange={e => setF(p => ({ ...p, job_role: e.target.value }))} disabled={!f.college || loadingRoles}
+                                <input type="text" value={f.job_role} readOnly placeholder={f.college ? 'Auto-filled from college schedule' : 'Select college first'}
                                     data-testid="reg-role"
-                                    className="w-full mt-1 bg-[#f5f5f5] border border-gray-200 rounded px-3 py-2.5 text-sm focus:outline-none focus:border-blue-400 focus:bg-white disabled:opacity-60 disabled:cursor-not-allowed">
-                                    <option value="">{loadingRoles ? 'Loading…' : (f.college ? 'Select role' : 'Select college first')}</option>
-                                    {roles.map(r => <option key={r} value={r}>{r}</option>)}
-                                </select>
+                                    className="w-full mt-1 bg-gray-100 border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-700 cursor-not-allowed" />
+                            </div>
+
+                            {/* Iter54 Req2 — Schedule Date & Time auto-filled (read-only) on college selection */}
+                            <div>
+                                <label className="text-xs text-gray-600 font-medium">Schedule Date</label>
+                                <input type="text" value={f.schedule_date ? formatDateDDMMYYYY(f.schedule_date) : ''} readOnly
+                                    placeholder={f.college ? 'Auto-filled from college schedule' : 'Select college first'}
+                                    data-testid="reg-schedule-date"
+                                    className="w-full mt-1 bg-gray-100 border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-700 cursor-not-allowed" />
+                            </div>
+                            <div>
+                                <label className="text-xs text-gray-600 font-medium">Schedule Time</label>
+                                <input type="text" value={f.schedule_time ? formatTime(f.schedule_time) : ''} readOnly
+                                    placeholder={f.college ? 'Auto-filled from college schedule' : 'Select college first'}
+                                    data-testid="reg-schedule-time"
+                                    className="w-full mt-1 bg-gray-100 border border-gray-200 rounded px-3 py-2.5 text-sm text-gray-700 cursor-not-allowed" />
                             </div>
 
                             <div>
@@ -195,9 +219,9 @@ export default function CollegeRegistration() {
                             </div>
                         </div>
 
-                        {scheduleInfo?.pending && (
-                            <div className="bg-blue-50 border border-blue-200 rounded p-3 text-xs text-blue-800" data-testid="schedule-notice">
-                                Your interview slot will be auto-assigned by HR based on your college + role selection. You'll see it on the confirmation page.
+                        {f.college && !scheduleInfo?.found && (
+                            <div className="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-amber-800" data-testid="schedule-notice">
+                                No active schedule found for this college yet. Please contact HR.
                             </div>
                         )}
 

@@ -48,16 +48,28 @@ export default function CollegeSchedules() {
     };
 
     const save = async () => {
-        if (!form.college_name.trim() || !form.job_role.trim() || !form.schedule_date || !form.schedule_time) {
+        // Iter54 Req1 — Job Role multi-value: split by comma, trim, dedupe (case-insensitive),
+        // re-join as "AI/ML,Administration,HR" (no spaces). Single value still works.
+        const rawRole = (form.job_role || '').trim();
+        const roleParts = rawRole.split(',').map(p => p.trim()).filter(Boolean);
+        const seen = new Set();
+        const dedupedRoles = [];
+        for (const p of roleParts) {
+            const k = p.toLowerCase();
+            if (!seen.has(k)) { seen.add(k); dedupedRoles.push(p); }
+        }
+        const normalizedRole = dedupedRoles.join(',');
+        if (!form.college_name.trim() || !normalizedRole || !form.schedule_date || !form.schedule_time) {
             toast.error('All fields except Notes are required');
             return;
         }
+        const payload = { ...form, job_role: normalizedRole };
         try {
             if (editId) {
-                await axios.put(`${API}/api/bb/college-schedules/${editId}`, form, { withCredentials: true });
+                await axios.put(`${API}/api/bb/college-schedules/${editId}`, payload, { withCredentials: true });
                 toast.success('Updated');
             } else {
-                await axios.post(`${API}/api/bb/college-schedules`, form, { withCredentials: true });
+                await axios.post(`${API}/api/bb/college-schedules`, payload, { withCredentials: true });
                 toast.success('Created');
             }
             setShowModal(false);
@@ -178,8 +190,9 @@ export default function CollegeSchedules() {
                             <div>
                                 <label className="text-xs text-zinc-500 uppercase tracking-wider">Job Role</label>
                                 <input type="text" value={form.job_role} onChange={e => setForm(p => ({ ...p, job_role: e.target.value }))}
-                                    placeholder="e.g. AI/ML Engineer" data-testid="role-input"
+                                    placeholder="e.g. AI/ML, Administration, HR" data-testid="role-input"
                                     className="w-full mt-1 bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
+                                <p className="text-[11px] text-zinc-500 mt-1">Tip: enter multiple roles separated by commas. They'll be saved as <code className="text-zinc-400">AI/ML,Administration,HR</code>.</p>
                             </div>
                             <div className="grid grid-cols-2 gap-3">
                                 <div>
