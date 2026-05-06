@@ -161,7 +161,7 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str, is
 
 # ============ HIGH-LEVEL NOTIFICATION FUNCTIONS ============
 
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://applicant-details.preview.emergentagent.com")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://messaging-allowlist.preview.emergentagent.com")
 
 
 async def notify_shortlisted(name: str, phone: str, email: str, schedule_token: str, is_test: bool = False):

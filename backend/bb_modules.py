@@ -73,6 +73,142 @@ async def _require_auth(request: Request):
     return await _auth_fn(request)
 
 
+# ============ CANDIDATE MATCHING & ENRICHMENT HELPERS ============
+# Smart cross-source resolver used by:
+#   - verify_applicant_otp  (runtime fallback for the success card)
+#   - register_applicant / register_college_applicant (preserve existing values)
+#   - backfill_pipeline_extras.py (one-time legacy cleanup)
+
+def _norm_email(e) -> str:
+    return (str(e or "").strip().lower())
+
+def _norm_phone(p) -> str:
+    digits = re.sub(r"[^\d]", "", str(p or ""))
+    return digits[-10:] if len(digits) >= 10 else digits
+
+def _is_blank(v) -> bool:
+    """Treat None / '' / 'NULL' / 'N/A' as missing (case-insensitive)."""
+    if v is None:
+        return True
+    s = str(v).strip()
+    return s == "" or s.upper() in ("NULL", "N/A", "NONE")
+
+
+async def _classify_college_type(college_str: str) -> str:
+    """Return 'NIRF - #N' or 'Non NIRF' for a college name; '' if no college given."""
+    college = (college_str or "").strip()
+    if not college:
+        return ""
+    rank_lookup = await _build_college_rank_lookup_fn()
+    cc = _classify_college_fn(
+        {"ug_university": college, "pg_university": "", "college": college},
+        rank_lookup,
+    )
+    status = cc.get("college_status") or ""
+    return status if status.startswith("NIRF - #") else ("Non NIRF" if college else "")
+
+
+async def _resolve_candidate_extras(email: str, phone: str) -> dict:
+    """Look up `college_type`, `source`, and `college` for a candidate from the
+    other authoritative sources (bb_registrations -> naukri_applies). Read-only,
+    used as a runtime fallback. Returns only fields we could resolve.
+
+    Priority order per the master matching rule:
+        1. bb_registrations (latest registered_at)
+        2. naukri_applies   (matched profile)
+    Email is the primary identifier, phone is secondary. Empty strings are
+    treated as missing.
+    """
+    out: dict = {}
+    em = _norm_email(email)
+    ph = _norm_phone(phone)
+    if not em and not ph:
+        return out
+    or_clauses = []
+    if em:
+        or_clauses.append({"email": em})
+    if ph:
+        or_clauses.append({"phone": ph})
+    match = {"$or": or_clauses}
+
+    # ---- bb_registrations ----
+    try:
+        reg = await _db.bb_registrations.find(match, {"_id": 0}).sort("registered_at", -1).limit(1).to_list(1)
+        reg = reg[0] if reg else None
+    except Exception:
+        reg = None
+    if reg:
+        # college (name) → derive college_type via NIRF lookup
+        if "college_type" not in out:
+            ct = await _classify_college_type(reg.get("college") or "")
+            if ct:
+                out["college_type"] = ct
+        if "source" not in out:
+            # bb_registrations is the public registration form pipeline
+            form_name = (reg.get("form_name") or "").lower()
+            if "college" in form_name:
+                out["source"] = "college_form"
+            else:
+                out["source"] = "registration_form"
+        if "college" not in out and not _is_blank(reg.get("college")):
+            out["college"] = reg.get("college")
+
+    # ---- naukri_applies ----
+    if "college_type" not in out or "source" not in out or "college" not in out:
+        try:
+            nk = await _db.naukri_applies.find_one(match, {"_id": 0})
+        except Exception:
+            nk = None
+        if nk:
+            if "college_type" not in out:
+                pg = (nk.get("pg_university") or "").strip()
+                ug = (nk.get("ug_university") or "").strip()
+                rank_lookup = await _build_college_rank_lookup_fn()
+                cc = _classify_college_fn(
+                    {"ug_university": ug, "pg_university": pg,
+                     "college": pg or ug},
+                    rank_lookup,
+                )
+                status = cc.get("college_status") or ""
+                ct = status if status.startswith("NIRF - #") else ("Non NIRF" if (ug or pg) else "")
+                if ct:
+                    out["college_type"] = ct
+            if "source" not in out:
+                # Naukri ATS uploads. Preserve original sub-source if present.
+                raw_src = (nk.get("source") or "").strip()
+                out["source"] = f"naukri:{raw_src}" if raw_src else "naukri"
+            if "college" not in out:
+                pg = (nk.get("pg_university") or "").strip()
+                ug = (nk.get("ug_university") or "").strip()
+                col = pg or ug
+                if col:
+                    out["college"] = col
+
+    return out
+
+
+async def _detect_match_conflict(email: str, phone: str) -> Optional[str]:
+    """If the same phone is associated with a *different* email (or vice versa)
+    across pipeline_data / bb_registrations / naukri_applies, return a short
+    reason string. Used by the backfill script to safely skip ambiguous rows.
+    """
+    em = _norm_email(email)
+    ph = _norm_phone(phone)
+    if not em or not ph:
+        return None
+    for col in ("pipeline_data", "bb_registrations", "naukri_applies"):
+        try:
+            doc = await _db[col].find_one({"phone": ph}, {"_id": 0, "email": 1, "phone": 1})
+        except Exception:
+            doc = None
+        if doc:
+            other_em = _norm_email(doc.get("email"))
+            if other_em and other_em != em:
+                return f"phone {ph} matches different email {other_em} in {col}"
+    return None
+
+
+
 def _oid(id_str: str) -> ObjectId:
     try:
         return ObjectId(id_str)
@@ -763,9 +899,38 @@ async def register_college_applicant(data: CollegeRegistrationBody):
         "_match_confidence": cc.get("match_confidence") or None,
         "_normalized_job_role": role,
     }
+    # Upsert with NON-DESTRUCTIVE merge for existing candidates (see
+    # register_applicant for full rationale). Dynamic fields (schedule_date,
+    # schedule_time, job_role, email_type, submitted_at, last_update) always
+    # update; profile fields are preserved if already populated.
+    PROFILE_FIELDS = {
+        "name", "email", "phone", "age", "gender", "college", "college_type",
+        "degree", "course", "location", "year_of_graduation", "source",
+        "_college_status", "_nirf_category", "_college_resolved", "_match_confidence",
+    }
+    DYNAMIC_FIELDS = {
+        "job_role", "job_title", "email_type", "submitted_at", "last_update",
+        "_normalized_job_role", "schedule_date", "schedule_time",
+        "otp_verified", "result_status",
+    }
+    existing = await _db.pipeline_data.find_one(
+        {"$or": [{"email": data.email.strip().lower()}, {"phone": phone_normalized}]},
+        {"_id": 0},
+    )
+    set_fields = {}
+    for k, v in pipeline_doc_set.items():
+        if k in DYNAMIC_FIELDS:
+            set_fields[k] = v
+        elif k in PROFILE_FIELDS:
+            if not existing or _is_blank(existing.get(k)):
+                set_fields[k] = v
+        else:
+            set_fields[k] = v
+    set_fields["last_update"] = submitted_at
+    set_fields["updated_at"] = submitted_at
     await _db.pipeline_data.update_one(
         {"email": data.email.strip().lower()},
-        {"$set": pipeline_doc_set, "$setOnInsert": {"last_update": submitted_at}},
+        {"$set": set_fields, "$setOnInsert": {"created_at": submitted_at}},
         upsert=True,
     )
 
@@ -1848,13 +2013,37 @@ async def verify_applicant_otp(data: OTPVerifyBody, request: Request):
         {"$or": [{"phone": phone}, {"email": applicant.get("email", "")}]},
         {"_id": 0}
     ) or {}
+
+    # Initial values from pipeline_data (treat NULL/N/A/empty as missing)
+    college_type = pd.get("_college_status") or pd.get("college_type")
+    source = pd.get("source") or pd.get("application_source")
+    college = pd.get("college") or pd.get("_college_resolved")
+    college_type = "" if _is_blank(college_type) else college_type
+    source = "" if _is_blank(source) else source
+    college = "" if _is_blank(college) else college
+
+    # Runtime fallback: if anything is still missing, resolve from
+    # bb_registrations / naukri_applies. Read-only — never writes.
+    if not college_type or not source or not college:
+        extras = await _resolve_candidate_extras(
+            applicant.get("email", "") or pd.get("email", ""),
+            phone or pd.get("phone", ""),
+        )
+        if not college_type and extras.get("college_type"):
+            college_type = extras["college_type"]
+        if not source and extras.get("source"):
+            source = extras["source"]
+        if not college and extras.get("college"):
+            college = extras["college"]
+
     candidate = {
         "name": pd.get("name") or applicant.get("full_name") or "",
         "phone": pd.get("phone") or applicant.get("phone") or "",
         "email": pd.get("email") or applicant.get("email") or "",
         "job_role": pd.get("job_role") or applicant.get("job_role") or "",
-        "college_type": pd.get("_college_status") or pd.get("college_type") or "N/A",
-        "source": pd.get("source") or pd.get("application_source") or "N/A",
+        "college": college or "N/A",
+        "college_type": college_type or "N/A",
+        "source": source or "N/A",
     }
     return {
         "success": True,
@@ -2099,10 +2288,42 @@ async def register_applicant(data: RegistrationBody):
         "_match_confidence": cc.get("match_confidence") or None,
         "_normalized_job_role": job_role,
     }
+    # ---- Upsert into pipeline_data (HR source-of-truth) with NON-DESTRUCTIVE merge ----
+    # If the candidate already exists (matched by email or phone), profile fields
+    # (college_type, college, source, age, etc.) are PRESERVED — only missing
+    # fields are filled. Dynamic fields (job_role, schedule, last_update) always
+    # update.
+    PROFILE_FIELDS = {
+        "name", "email", "phone", "age", "college", "college_type", "degree",
+        "course", "location", "year_of_graduation", "source",
+        "_college_status", "_nirf_category", "_college_resolved",
+        "_match_confidence",
+    }
+    DYNAMIC_FIELDS = {
+        "job_role", "job_title", "email_type", "submitted_at", "last_update",
+        "_normalized_job_role", "schedule_date", "schedule_time",
+        "otp_verified", "result_status",
+    }
+    existing = await _db.pipeline_data.find_one(
+        {"$or": [{"email": data.email.strip().lower()}, {"phone": phone_normalized}]},
+        {"_id": 0},
+    )
+    set_fields = {}
+    for k, v in pipeline_doc_set.items():
+        if k in DYNAMIC_FIELDS:
+            set_fields[k] = v
+        elif k in PROFILE_FIELDS:
+            # Fill only when existing is missing (None / '' / NULL / N/A)
+            if not existing or _is_blank(existing.get(k)):
+                set_fields[k] = v
+        else:
+            set_fields[k] = v
+    set_fields["last_update"] = submitted_at
+    set_fields["updated_at"] = submitted_at
     await _db.pipeline_data.update_one(
         {"email": data.email.strip().lower()},
-        {"$set": pipeline_doc_set,
-         "$setOnInsert": {"last_update": submitted_at}},
+        {"$set": set_fields,
+         "$setOnInsert": {"created_at": submitted_at}},
         upsert=True,
     )
 

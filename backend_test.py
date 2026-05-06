@@ -5,7 +5,7 @@ from datetime import datetime
 import io
 
 class RecruitmentAPITester:
-    def __init__(self, base_url="https://applicant-details.preview.emergentagent.com"):
+    def __init__(self, base_url="https://messaging-allowlist.preview.emergentagent.com"):
         self.base_url = base_url
         self.session = requests.Session()
         self.tests_run = 0

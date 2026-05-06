@@ -117,6 +117,7 @@ export default function VerifyOTP() {
                                 <Detail label="Phone" value={candidate?.phone} testid="cand-phone" />
                                 <Detail label="Email" value={candidate?.email} testid="cand-email" />
                                 <Detail label="Job Role" value={candidate?.job_role} testid="cand-jobrole" />
+                                <Detail label="College" value={candidate?.college || 'N/A'} testid="cand-college" />
                                 <Detail label="College Type" value={candidate?.college_type || 'N/A'} testid="cand-collegetype" />
                                 <Detail label="Source" value={candidate?.source || 'N/A'} testid="cand-source" />
                             </div>

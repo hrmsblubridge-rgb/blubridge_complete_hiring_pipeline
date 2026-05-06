@@ -14,7 +14,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 from pymongo import MongoClient
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://applicant-details.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://messaging-allowlist.preview.emergentagent.com").rstrip("/")
 MONGO_URL = os.environ.get("MONGO_URL") or "mongodb+srv://rishinayak_db_user:wZklvHcJ14pCK5x6@cluster0.ek8almy.mongodb.net/hr_analytics?retryWrites=true&w=majority"
 DB_NAME = os.environ.get("DB_NAME") or "hr_analytics"
 
