@@ -2262,6 +2262,35 @@ def _is_otp_verified_DEPRECATED(value) -> bool:
     return False  # superseded by definition above
 
 
+@bb_router.get("/score-round/result-statuses")
+async def score_round_result_statuses(request: Request):
+    """Iter65 — Returns distinct `result_status` values from pipeline_data
+    so the Status filter dropdown shows actual DB values. Case-insensitive
+    dedupe — for each lowercase key, the cleanest casing variant wins
+    (Title-Cased > original case > UPPER > lower)."""
+    await _require_auth(request)
+    vals = await _db.pipeline_data.distinct("result_status", {"result_status": {"$nin": [None, ""]}})
+    by_lower: dict[str, str] = {}
+    for v in vals:
+        if not v: continue
+        s = str(v).strip()
+        if not s: continue
+        k = s.lower()
+        existing = by_lower.get(k)
+        if existing is None:
+            by_lower[k] = s
+            continue
+        # Prefer Title-Case > the existing > UPPER > lower
+        s_is_title = s == s.title() or (s[:1].isupper() and not s.isupper())
+        e_is_title = existing == existing.title() or (existing[:1].isupper() and not existing.isupper())
+        if s_is_title and not e_is_title:
+            by_lower[k] = s
+        elif s.isupper() and existing.islower():
+            by_lower[k] = s
+    cleaned = sorted(by_lower.values(), key=lambda s: s.lower())
+    return {"statuses": cleaned}
+
+
 @bb_router.get("/score-round/table")
 async def score_round_table(
     request: Request,
@@ -2273,17 +2302,17 @@ async def score_round_table(
     status: Optional[str] = Query(None),
     college: Optional[str] = Query(None),
     job_role: Optional[str] = Query(None),
-    tab: Optional[str] = Query("shortlisted"),  # iter64
 ):
-    """Iter55/iter58/iter64 — Score & Round table data source.
+    """Iter55/iter58/iter64/iter65 — Score & Round table data source.
 
-    Iter64 — Adds pipeline-based filter tabs:
-      shortlisted | attended | not_attended | rejected | pending | selected | joined
-    Default is `shortlisted`. Each tab response includes `tab_counts` so the
-    frontend can show "All Shortlisted (125)" style chips.
+    Iter65 — `status` filter now applies to `pipeline_data.result_status`
+    directly (case-insensitive exact match). The previous tab-based filter
+    strip and `bb_applicant_updates.status` join were removed — any value
+    returned by the new `/score-round/result-statuses` endpoint is a valid
+    `status` query param. Tab-counts removed.
     """
     await _require_auth(request)
-    match = dict(_tab_match(tab))  # Iter64 — tab forms the BASE match
+    match = {}
     if q:
         qs = q.strip()
         if qs:
@@ -2317,10 +2346,9 @@ async def score_round_table(
             ],
         })
     if status:
+        # Iter65 — exact case-insensitive match on pipeline_data.result_status
         st = status.strip()
-        emails_match = await _db.bb_applicant_updates.distinct("email",
-            {"status": {"$regex": f"^{re.escape(st)}$", "$options": "i"}})
-        match.setdefault("$and", []).append({"email": {"$in": emails_match}})
+        match["result_status"] = {"$regex": f"^{re.escape(st)}$", "$options": "i"}
 
     src = _db.pipeline_data
     total = await src.count_documents(match)
@@ -2443,15 +2471,6 @@ async def score_round_table(
     # Sort extras alphabetically by label for predictable column ordering
     extra_rounds.sort(key=lambda r: r["label"].lower())
 
-    # Iter64 — Per-tab counts so the UI can render "Shortlisted (125)" chips.
-    tab_keys = ["shortlisted", "attended", "not_attended", "rejected", "pending", "selected", "joined"]
-    tab_counts = {}
-    for tk in tab_keys:
-        try:
-            tab_counts[tk] = await _db.pipeline_data.count_documents(_tab_match(tk))
-        except Exception:
-            tab_counts[tk] = 0
-
     return {
         "data": rows,
         "total": total,
@@ -2461,8 +2480,6 @@ async def score_round_table(
         "rounds": ordered_round_names,
         "static_rounds": STATIC_ROUNDS_ITER55,
         "extra_rounds": extra_rounds,
-        "tab": tab,
-        "tab_counts": tab_counts,
     }
 
 

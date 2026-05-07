@@ -361,32 +361,28 @@ export default function ScoreRound() {
     const [search, setSearch] = useState('');
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
-    const [statusFilter, setStatusFilter] = useState('');
+    const [statusFilter, setStatusFilter] = useState('Shortlisted'); // Iter65 — default per user
+    const [statusOptions, setStatusOptions] = useState([]);          // Iter65 — DB-driven
     const [collegeFilter, setCollegeFilter] = useState('');
     const [roleFilter, setRoleFilter] = useState('');
-    const [appliedFilters, setAppliedFilters] = useState({});
+    const [appliedFilters, setAppliedFilters] = useState({ status: 'Shortlisted' });
     // ---
     const [showManage, setShowManage] = useState(false);
     const [scoreRow, setScoreRow] = useState(null);
     const [dateRow, setDateRow] = useState(null);
-    // Iter64 — Pipeline filter tab
-    const [tab, setTab] = useState('shortlisted');
-    const [tabCounts, setTabCounts] = useState({});
-
-    const TABS = [
-        { key: 'shortlisted', label: 'All Shortlisted', tone: 'cyan' },
-        { key: 'attended', label: 'Attended', tone: 'emerald' },
-        { key: 'not_attended', label: 'Not Attended', tone: 'amber' },
-        { key: 'rejected', label: 'Rejected', tone: 'rose' },
-        { key: 'pending', label: 'Pending', tone: 'zinc' },
-        { key: 'selected', label: 'Selected', tone: 'violet' },
-        { key: 'joined', label: 'Joined', tone: 'sky' },
-    ];
+    // Iter65 — DB-driven status options. Refetch once if first attempt
+    // raced the auth cookie (statusOptions still empty after first load).
+    const fetchStatusOptions = useCallback(() => {
+        axios.get(`${API}/api/bb/score-round/result-statuses`, { withCredentials: true })
+            .then(r => setStatusOptions(r.data.statuses || []))
+            .catch(() => setStatusOptions([]));
+    }, []);
+    useEffect(() => { fetchStatusOptions(); }, [fetchStatusOptions]);
 
     const load = useCallback(async () => {
         setLoading(true);
         try {
-            const params = { page, limit, tab };
+            const params = { page, limit };
             if (search) params.q = search;
             if (appliedFilters.startDate) params.startDate = appliedFilters.startDate;
             if (appliedFilters.endDate) params.endDate = appliedFilters.endDate;
@@ -402,13 +398,12 @@ export default function ScoreRound() {
             setExtraRounds(r.data.extra_rounds || []);
             setTotal(r.data.total || 0);
             setTotalPages(r.data.totalPages || 1);
-            setTabCounts(r.data.tab_counts || {});
+            // Top-up status options if the dedicated fetch failed (auth race)
+            if (statusOptions.length === 0) fetchStatusOptions();
         } catch (e) { toast.error('Failed to load'); }
         finally { setLoading(false); }
-    }, [page, limit, search, appliedFilters, tab]);
+    }, [page, limit, search, appliedFilters, statusOptions.length, fetchStatusOptions]);
     useEffect(() => { load(); }, [load]);
-
-    const switchTab = (key) => { setTab(key); setPage(1); };
 
     const applyFilters = () => {
         setPage(1);
@@ -424,8 +419,8 @@ export default function ScoreRound() {
     const resetFilters = () => {
         setSearchInput(''); setSearch('');
         setStartDate(''); setEndDate('');
-        setStatusFilter(''); setCollegeFilter(''); setRoleFilter('');
-        setAppliedFilters({});
+        setStatusFilter('Shortlisted'); setCollegeFilter(''); setRoleFilter('');
+        setAppliedFilters({ status: 'Shortlisted' });
         setPage(1);
     };
 
@@ -504,29 +499,7 @@ export default function ScoreRound() {
                 </button>
             </header>
 
-            {/* Iter64 — Pipeline filter tabs */}
-            <div className="border-b border-zinc-800 px-6 py-3 flex flex-wrap gap-2 bg-[#0c0c0c]" data-testid="filter-tabs">
-                {TABS.map(t => {
-                    const active = tab === t.key;
-                    const count = tabCounts[t.key] ?? 0;
-                    const toneClasses = {
-                        cyan: 'border-cyan-600 bg-cyan-600/20 text-cyan-200',
-                        emerald: 'border-emerald-600 bg-emerald-600/20 text-emerald-200',
-                        amber: 'border-amber-600 bg-amber-600/20 text-amber-200',
-                        rose: 'border-rose-600 bg-rose-600/20 text-rose-200',
-                        zinc: 'border-zinc-600 bg-zinc-600/20 text-zinc-200',
-                        violet: 'border-violet-600 bg-violet-600/20 text-violet-200',
-                        sky: 'border-sky-600 bg-sky-600/20 text-sky-200',
-                    }[t.tone];
-                    return (
-                        <button key={t.key} onClick={() => switchTab(t.key)}
-                            data-testid={`tab-${t.key}`}
-                            className={`px-3.5 py-1.5 text-sm border transition-all ${active ? `${toneClasses} font-medium` : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'}`}>
-                            {t.label} <span className="ml-1.5 opacity-70 text-[11px]">({count.toLocaleString()})</span>
-                        </button>
-                    );
-                })}
-            </div>
+            {/* Iter65 — Filter tabs strip removed (was iter64). Status dropdown below is now DB-driven. */}
 
             {/* Iter58 — Filter bar */}
             <div className="border-b border-zinc-800 px-6 py-3 flex flex-wrap items-end gap-3 bg-zinc-950/50" data-testid="filter-bar">
@@ -557,11 +530,9 @@ export default function ScoreRound() {
                     <label className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Status</label>
                     <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
                         data-testid="filter-status"
-                        className="bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm focus:outline-none focus:border-cyan-700">
+                        className="bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm focus:outline-none focus:border-cyan-700 min-w-[150px]">
                         <option value="">All</option>
-                        <option value="Shortlisted">Shortlisted</option>
-                        <option value="Rejected">Rejected</option>
-                        <option value="On-Hold">On-Hold</option>
+                        {statusOptions.map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
                 </div>
                 <div className="flex flex-col">
