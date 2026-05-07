@@ -2262,33 +2262,24 @@ def _is_otp_verified_DEPRECATED(value) -> bool:
     return False  # superseded by definition above
 
 
+# Iter66 — Status filter is restricted to 3 canonical groups. Each group maps
+# to all known DB variants (including legacy typos) so filtering catches every
+# matching record regardless of how it was originally entered.
+SCORE_ROUND_STATUS_GROUPS = {
+    "Shortlisted": ["shortlist", "shortlisted", "shortlsited"],
+    "Rejected":    ["reject", "rejected", "rejeceted"],
+    "On-Hold":     ["hold", "on-hold", "on hold", "onhold"],
+}
+
+
 @bb_router.get("/score-round/result-statuses")
 async def score_round_result_statuses(request: Request):
-    """Iter65 — Returns distinct `result_status` values from pipeline_data
-    so the Status filter dropdown shows actual DB values. Case-insensitive
-    dedupe — for each lowercase key, the cleanest casing variant wins
-    (Title-Cased > original case > UPPER > lower)."""
+    """Iter66 — Status dropdown is restricted to 3 canonical groups only:
+    Shortlisted, Rejected, On-Hold. The `/score-round/table` endpoint maps
+    each canonical label to its full variant set (including typos) when
+    filtering."""
     await _require_auth(request)
-    vals = await _db.pipeline_data.distinct("result_status", {"result_status": {"$nin": [None, ""]}})
-    by_lower: dict[str, str] = {}
-    for v in vals:
-        if not v: continue
-        s = str(v).strip()
-        if not s: continue
-        k = s.lower()
-        existing = by_lower.get(k)
-        if existing is None:
-            by_lower[k] = s
-            continue
-        # Prefer Title-Case > the existing > UPPER > lower
-        s_is_title = s == s.title() or (s[:1].isupper() and not s.isupper())
-        e_is_title = existing == existing.title() or (existing[:1].isupper() and not existing.isupper())
-        if s_is_title and not e_is_title:
-            by_lower[k] = s
-        elif s.isupper() and existing.islower():
-            by_lower[k] = s
-    cleaned = sorted(by_lower.values(), key=lambda s: s.lower())
-    return {"statuses": cleaned}
+    return {"statuses": list(SCORE_ROUND_STATUS_GROUPS.keys())}
 
 
 @bb_router.get("/score-round/table")
@@ -2346,9 +2337,20 @@ async def score_round_table(
             ],
         })
     if status:
-        # Iter65 — exact case-insensitive match on pipeline_data.result_status
+        # Iter66 — map canonical label to variant set (groups Shortlist/Shortlisted,
+        # Reject/Rejected, Hold/On-Hold/On hold + legacy typos). Falls back to
+        # exact case-insensitive match for any other label.
         st = status.strip()
-        match["result_status"] = {"$regex": f"^{re.escape(st)}$", "$options": "i"}
+        variants = None
+        for canon, vlist in SCORE_ROUND_STATUS_GROUPS.items():
+            if st.lower() == canon.lower():
+                variants = vlist
+                break
+        if variants:
+            alts = "|".join(re.escape(v) for v in variants)
+            match["result_status"] = {"$regex": f"^({alts})$", "$options": "i"}
+        else:
+            match["result_status"] = {"$regex": f"^{re.escape(st)}$", "$options": "i"}
 
     src = _db.pipeline_data
     total = await src.count_documents(match)
