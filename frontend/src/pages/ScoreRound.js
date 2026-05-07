@@ -369,11 +369,24 @@ export default function ScoreRound() {
     const [showManage, setShowManage] = useState(false);
     const [scoreRow, setScoreRow] = useState(null);
     const [dateRow, setDateRow] = useState(null);
+    // Iter64 — Pipeline filter tab
+    const [tab, setTab] = useState('shortlisted');
+    const [tabCounts, setTabCounts] = useState({});
+
+    const TABS = [
+        { key: 'shortlisted', label: 'All Shortlisted', tone: 'cyan' },
+        { key: 'attended', label: 'Attended', tone: 'emerald' },
+        { key: 'not_attended', label: 'Not Attended', tone: 'amber' },
+        { key: 'rejected', label: 'Rejected', tone: 'rose' },
+        { key: 'pending', label: 'Pending', tone: 'zinc' },
+        { key: 'selected', label: 'Selected', tone: 'violet' },
+        { key: 'joined', label: 'Joined', tone: 'sky' },
+    ];
 
     const load = useCallback(async () => {
         setLoading(true);
         try {
-            const params = { page, limit };
+            const params = { page, limit, tab };
             if (search) params.q = search;
             if (appliedFilters.startDate) params.startDate = appliedFilters.startDate;
             if (appliedFilters.endDate) params.endDate = appliedFilters.endDate;
@@ -389,10 +402,13 @@ export default function ScoreRound() {
             setExtraRounds(r.data.extra_rounds || []);
             setTotal(r.data.total || 0);
             setTotalPages(r.data.totalPages || 1);
+            setTabCounts(r.data.tab_counts || {});
         } catch (e) { toast.error('Failed to load'); }
         finally { setLoading(false); }
-    }, [page, limit, search, appliedFilters]);
+    }, [page, limit, search, appliedFilters, tab]);
     useEffect(() => { load(); }, [load]);
+
+    const switchTab = (key) => { setTab(key); setPage(1); };
 
     const applyFilters = () => {
         setPage(1);
@@ -471,7 +487,7 @@ export default function ScoreRound() {
         );
     };
 
-    const baseColCount = 11 + staticDisplayRounds.length + 3 + 1;
+    const baseColCount = 11 + 4 + staticDisplayRounds.length + 3 + 1; // basic(10) + 4 new + status(1) + static rounds + DOJ/DOD/DOI + Action
     const totalColCount = baseColCount + extraRounds.length * 5;
     const SUB_WIDTHS = [120, 110, 80, 200, 130]; // Name, Date, Score, Command, Status — pixel-locked
     const groupTotalWidth = SUB_WIDTHS.reduce((a, b) => a + b, 0);  // 640px
@@ -487,6 +503,30 @@ export default function ScoreRound() {
                     <Sliders size={16} /> Add Rounds
                 </button>
             </header>
+
+            {/* Iter64 — Pipeline filter tabs */}
+            <div className="border-b border-zinc-800 px-6 py-3 flex flex-wrap gap-2 bg-[#0c0c0c]" data-testid="filter-tabs">
+                {TABS.map(t => {
+                    const active = tab === t.key;
+                    const count = tabCounts[t.key] ?? 0;
+                    const toneClasses = {
+                        cyan: 'border-cyan-600 bg-cyan-600/20 text-cyan-200',
+                        emerald: 'border-emerald-600 bg-emerald-600/20 text-emerald-200',
+                        amber: 'border-amber-600 bg-amber-600/20 text-amber-200',
+                        rose: 'border-rose-600 bg-rose-600/20 text-rose-200',
+                        zinc: 'border-zinc-600 bg-zinc-600/20 text-zinc-200',
+                        violet: 'border-violet-600 bg-violet-600/20 text-violet-200',
+                        sky: 'border-sky-600 bg-sky-600/20 text-sky-200',
+                    }[t.tone];
+                    return (
+                        <button key={t.key} onClick={() => switchTab(t.key)}
+                            data-testid={`tab-${t.key}`}
+                            className={`px-3.5 py-1.5 text-sm border transition-all ${active ? `${toneClasses} font-medium` : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'}`}>
+                            {t.label} <span className="ml-1.5 opacity-70 text-[11px]">({count.toLocaleString()})</span>
+                        </button>
+                    );
+                })}
+            </div>
 
             {/* Iter58 — Filter bar */}
             <div className="border-b border-zinc-800 px-6 py-3 flex flex-wrap items-end gap-3 bg-zinc-950/50" data-testid="filter-bar">
@@ -551,7 +591,7 @@ export default function ScoreRound() {
                     <thead className="sticky top-0 z-20 bg-zinc-900 shadow-md">
                         <tr className="border-b border-zinc-800">
                             <th className="sticky left-0 z-30 bg-zinc-900 text-left px-3 py-2 font-medium text-zinc-400 uppercase tracking-wider">Action</th>
-                            {['Name', 'Schedule Date', 'College', 'Degree', 'Course', 'YOG', 'Email', 'Phone', 'Job Role', 'Status'].map(h => (
+                            {['Name', 'Schedule Date', 'College', 'Degree', 'Course', 'YOG', 'Email', 'Phone', 'Job Role', 'Status', 'Attendance', 'Current Round', 'Total Score', 'Last Updated'].map(h => (
                                 <th key={h} className="text-left px-3 py-2 font-medium text-zinc-400 uppercase tracking-wider">{h}</th>
                             ))}
                             {staticDisplayRounds.map(rn => (
@@ -597,27 +637,34 @@ export default function ScoreRound() {
                         {!loading && rows.map((row, idx) => (
                             <tr key={`${row.email}-${idx}`} className="border-b border-zinc-900 hover:bg-zinc-900/50" data-testid={`row-${idx}`}>
                                 <td className="sticky left-0 bg-[#0a0a0a] hover:bg-zinc-900 px-2 py-1.5 z-10">
-                                    <DropdownMenu>
-                                        <DropdownMenuTrigger asChild>
-                                            <button data-testid={`action-btn-${idx}`}
-                                                className="flex items-center gap-1 px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-[11px] text-white focus:outline-none">
-                                                Action <CaretDown size={10} />
-                                            </button>
-                                        </DropdownMenuTrigger>
-                                        <DropdownMenuContent align="start" sideOffset={4}
-                                            className="bg-zinc-900 border-zinc-700 text-white min-w-[180px] z-[100]">
-                                            <DropdownMenuItem onSelect={() => setScoreRow(row)}
-                                                data-testid={`action-update-score-${idx}`}
-                                                className="text-xs cursor-pointer focus:bg-zinc-800 focus:text-white">
-                                                1. Update Score
-                                            </DropdownMenuItem>
-                                            <DropdownMenuItem onSelect={() => setDateRow(row)}
-                                                data-testid={`action-update-date-${idx}`}
-                                                className="text-xs cursor-pointer focus:bg-zinc-800 focus:text-white">
-                                                2. Update Date
-                                            </DropdownMenuItem>
-                                        </DropdownMenuContent>
-                                    </DropdownMenu>
+                                    {row.otp_verified ? (
+                                        <DropdownMenu>
+                                            <DropdownMenuTrigger asChild>
+                                                <button data-testid={`action-btn-${idx}`}
+                                                    className="flex items-center gap-1 px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-[11px] text-white focus:outline-none">
+                                                    Action <CaretDown size={10} />
+                                                </button>
+                                            </DropdownMenuTrigger>
+                                            <DropdownMenuContent align="start" sideOffset={4}
+                                                className="bg-zinc-900 border-zinc-700 text-white min-w-[180px] z-[100]">
+                                                <DropdownMenuItem onSelect={() => setScoreRow(row)}
+                                                    data-testid={`action-update-score-${idx}`}
+                                                    className="text-xs cursor-pointer focus:bg-zinc-800 focus:text-white">
+                                                    1. Update Score
+                                                </DropdownMenuItem>
+                                                <DropdownMenuItem onSelect={() => setDateRow(row)}
+                                                    data-testid={`action-update-date-${idx}`}
+                                                    className="text-xs cursor-pointer focus:bg-zinc-800 focus:text-white">
+                                                    2. Update Date
+                                                </DropdownMenuItem>
+                                            </DropdownMenuContent>
+                                        </DropdownMenu>
+                                    ) : (
+                                        <button title="Candidate attendance not verified" disabled data-testid={`action-btn-disabled-${idx}`}
+                                            className="flex items-center gap-1 px-2 py-1 bg-zinc-900 text-zinc-600 text-[11px] cursor-not-allowed border border-zinc-800">
+                                            Action <CaretDown size={10} />
+                                        </button>
+                                    )}
                                 </td>
                                 <td className="px-3 py-1.5 font-medium">{row.name || '—'}</td>
                                 <td className="px-3 py-1.5 text-zinc-400">{fmtDDMMYYYY(row.schedule_date) || '—'}</td>
@@ -628,7 +675,15 @@ export default function ScoreRound() {
                                 <td className="px-3 py-1.5 text-zinc-400">{row.email || '—'}</td>
                                 <td className="px-3 py-1.5 text-zinc-400">{row.phone || '—'}</td>
                                 <td className="px-3 py-1.5 text-zinc-400">{row.job_role || '—'}</td>
-                                <td className="px-3 py-1.5"><span className="text-[10px] uppercase bg-zinc-800 text-zinc-300 px-1.5 py-0.5">{row.status || '—'}</span></td>
+                                <td className="px-3 py-1.5"><span className="text-[10px] uppercase bg-zinc-800 text-zinc-300 px-1.5 py-0.5">{row.status || row.result_status || '—'}</span></td>
+                                <td className="px-3 py-1.5">
+                                    {row.otp_verified
+                                        ? <span data-testid="att-badge-yes" className="text-[10px] uppercase bg-emerald-700/30 text-emerald-200 border border-emerald-600/40 px-1.5 py-0.5">Attended</span>
+                                        : <span data-testid="att-badge-no" className="text-[10px] uppercase bg-amber-700/30 text-amber-200 border border-amber-600/40 px-1.5 py-0.5">Not Attended</span>}
+                                </td>
+                                <td className="px-3 py-1.5 text-zinc-300">{row.current_round || '—'}</td>
+                                <td className="px-3 py-1.5 font-medium">{row.total_score || '—'}</td>
+                                <td className="px-3 py-1.5 text-zinc-500 text-[11px]">{row.last_updated ? fmtDDMMYYYY((row.last_updated || '').slice(0, 10)) : '—'}</td>
                                 {staticDisplayRounds.map(rn => (
                                     <td key={rn} className="px-3 py-1.5 text-zinc-300">{cellForRound(row, rn)}</td>
                                 ))}

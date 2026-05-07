@@ -2212,34 +2212,78 @@ STATIC_ROUNDS_ITER55 = [
 ]
 
 
+# Iter64 — Score & Round Filter Tabs (pipeline-based candidate filtering)
+# Maps each tab to a (label, mongo match for pipeline_data) pair.
+TRUTHY_OTP = [1, 1.0, "1", "1.0", True, "true", "True", "yes", "Yes"]
+SHORTLIST_VALUES_REGEX = "^(shortlist|shortlisted)$"
+
+
+def _is_otp_verified(value) -> bool:
+    """Loose truthy check across the various otp_verified storage shapes
+    (bool, int 1, float 1.0, '1', '1.0', 'yes', 'true', etc.)."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value) == 1.0
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "1.0", "true", "yes")
+    return False
+
+def _tab_match(tab: str) -> dict:
+    """Return the pipeline_data match dict for a given filter tab."""
+    t = (tab or "shortlisted").strip().lower()
+    if t == "shortlisted":
+        return {"result_status": {"$regex": SHORTLIST_VALUES_REGEX, "$options": "i"}}
+    if t == "attended":
+        return {
+            "result_status": {"$regex": SHORTLIST_VALUES_REGEX, "$options": "i"},
+            "otp_verified": {"$in": TRUTHY_OTP},
+        }
+    if t == "not_attended":
+        return {
+            "result_status": {"$regex": SHORTLIST_VALUES_REGEX, "$options": "i"},
+            "$or": [{"otp_verified": {"$nin": TRUTHY_OTP}}, {"otp_verified": {"$exists": False}}],
+        }
+    if t == "rejected":
+        return {"result_status": {"$regex": "^rejected$", "$options": "i"}}
+    if t == "pending":
+        return {"result_status": {"$regex": "^pending$", "$options": "i"}}
+    if t == "selected":
+        return {"result_status": {"$regex": "^selected$", "$options": "i"}}
+    if t == "joined":
+        return {"result_status": {"$regex": "^joined$", "$options": "i"}}
+    # Default safety net
+    return {"result_status": {"$regex": SHORTLIST_VALUES_REGEX, "$options": "i"}}
+
+
+def _is_otp_verified_DEPRECATED(value) -> bool:
+    return False  # superseded by definition above
+
+
 @bb_router.get("/score-round/table")
 async def score_round_table(
     request: Request,
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=500),
-    q: Optional[str] = Query(None),       # free-text search across name/email/phone
-    startDate: Optional[str] = Query(None),  # ISO YYYY-MM-DD inclusive
-    endDate: Optional[str] = Query(None),    # ISO YYYY-MM-DD inclusive
-    status: Optional[str] = Query(None),     # OVERALL status: Shortlisted | Rejected | On-Hold | …
+    q: Optional[str] = Query(None),
+    startDate: Optional[str] = Query(None),
+    endDate: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
     college: Optional[str] = Query(None),
     job_role: Optional[str] = Query(None),
+    tab: Optional[str] = Query("shortlisted"),  # iter64
 ):
-    """Iter55/iter58 — Score & Round table data source.
+    """Iter55/iter58/iter64 — Score & Round table data source.
 
-    Returns paginated rows joining `pipeline_data` (basic info + dates) with
-    `bb_applicant_updates` (status + per-round scores). Each row carries a
-    `rounds_map` keyed by canonical round name → full round entry.
-
-    Iter58 — supports filters: date range on schedule_date, OVERALL status
-    (recruiter-set wins over pipeline result_status), college, job_role, q.
-    All filters are AND-combined.
-
-    Performance: status filter does a single distinct() round-trip on
-    bb_applicant_updates (small collection) so the main pipeline_data query
-    stays index-friendly even at 100K+ documents.
+    Iter64 — Adds pipeline-based filter tabs:
+      shortlisted | attended | not_attended | rejected | pending | selected | joined
+    Default is `shortlisted`. Each tab response includes `tab_counts` so the
+    frontend can show "All Shortlisted (125)" style chips.
     """
     await _require_auth(request)
-    match = {}
+    match = dict(_tab_match(tab))  # Iter64 — tab forms the BASE match
     if q:
         qs = q.strip()
         if qs:
@@ -2249,7 +2293,6 @@ async def score_round_table(
                 {"email": {"$regex": esc, "$options": "i"}},
                 {"phone": {"$regex": esc, "$options": "i"}},
             ]
-    # Schedule Date range — inclusive on both ends
     if startDate or endDate:
         sd_q = {}
         if startDate:
@@ -2257,7 +2300,6 @@ async def score_round_table(
         if endDate:
             sd_q["$lte"] = endDate.strip()
         match["schedule_date"] = sd_q
-    # College — case-insensitive substring against either field name
     if college:
         c = re.escape(college.strip())
         match.setdefault("$and", []).append({
@@ -2266,7 +2308,6 @@ async def score_round_table(
                 {"college_name": {"$regex": c, "$options": "i"}},
             ],
         })
-    # Job Role — case-insensitive substring against job_role or job_title
     if job_role:
         jr = re.escape(job_role.strip())
         match.setdefault("$and", []).append({
@@ -2275,11 +2316,6 @@ async def score_round_table(
                 {"job_title": {"$regex": jr, "$options": "i"}},
             ],
         })
-    # OVERALL status — recruiter override (bb_applicant_updates.status) wins.
-    # Single fast distinct() on bb_applicant_updates email index.
-    # Trade-off: candidates with NO bb_applicant_updates doc but a matching
-    # pipeline_data.result_status are NOT included. Acceptable: any recruiter
-    # action upserts an update doc, so unfiltered candidates have null state.
     if status:
         st = status.strip()
         emails_match = await _db.bb_applicant_updates.distinct("email",
@@ -2295,8 +2331,9 @@ async def score_round_table(
             "_id": 0, "name": 1, "schedule_date": 1, "college": 1,
             "college_name": 1, "degree": 1, "course": 1, "year_of_graduation": 1,
             "email": 1, "phone": 1, "job_role": 1, "job_title": 1,
-            "result_status": 1,
+            "result_status": 1, "otp_verified": 1,
             "date_of_joining": 1, "date_of_documentation": 1, "date_of_induction": 1,
+            "updated_at": 1, "last_update": 1,
         },
     ).sort([("schedule_date", -1), ("name", 1)]).skip(skip).limit(limit).to_list(None)
 
@@ -2339,6 +2376,31 @@ async def score_round_table(
                 "command": s.get("command") or "",
                 "status": s.get("status") or "",
             }
+        # Iter64 — derive otp_verified, current_round, total_score, last_updated
+        otp_verified_flag = _is_otp_verified(d.get("otp_verified"))
+        # Current round = round with the latest date in scores; falls back to last array entry
+        current_round = ""
+        latest_dt = ""
+        total_score = 0.0
+        for s in scores_arr:
+            sc = s.get("score")
+            if isinstance(sc, (int, float)):
+                total_score += float(sc)
+            elif isinstance(sc, str) and sc.strip():
+                try:
+                    total_score += float(sc.strip())
+                except ValueError:
+                    pass
+            sd = s.get("date") or ""
+            if sd > latest_dt:
+                latest_dt = sd
+                current_round = s.get("round_name") or current_round
+        if not current_round and scores_arr:
+            current_round = scores_arr[-1].get("round_name") or ""
+        last_updated = (
+            upd.get("updated_at") or upd.get("last_update")
+            or d.get("updated_at") or d.get("last_update") or ""
+        )
         rows.append({
             "name": d.get("name") or "",
             "schedule_date": d.get("schedule_date") or "",
@@ -2349,7 +2411,12 @@ async def score_round_table(
             "email": em,
             "phone": d.get("phone") or "",
             "job_role": d.get("job_role") or d.get("job_title") or "",
+            "result_status": d.get("result_status") or "",
             "status": upd.get("status") or d.get("result_status") or "",
+            "otp_verified": otp_verified_flag,
+            "current_round": current_round,
+            "total_score": round(total_score, 2) if total_score else 0,
+            "last_updated": last_updated,
             "rounds_map": rounds_map,
             "date_of_joining": d.get("date_of_joining") or "",
             "date_of_documentation": d.get("date_of_documentation") or "",
@@ -2376,6 +2443,15 @@ async def score_round_table(
     # Sort extras alphabetically by label for predictable column ordering
     extra_rounds.sort(key=lambda r: r["label"].lower())
 
+    # Iter64 — Per-tab counts so the UI can render "Shortlisted (125)" chips.
+    tab_keys = ["shortlisted", "attended", "not_attended", "rejected", "pending", "selected", "joined"]
+    tab_counts = {}
+    for tk in tab_keys:
+        try:
+            tab_counts[tk] = await _db.pipeline_data.count_documents(_tab_match(tk))
+        except Exception:
+            tab_counts[tk] = 0
+
     return {
         "data": rows,
         "total": total,
@@ -2385,6 +2461,8 @@ async def score_round_table(
         "rounds": ordered_round_names,
         "static_rounds": STATIC_ROUNDS_ITER55,
         "extra_rounds": extra_rounds,
+        "tab": tab,
+        "tab_counts": tab_counts,
     }
 
 
@@ -2403,13 +2481,17 @@ class SaveRoundsBody(BaseModel):
 
 @bb_router.post("/score-round/save-scores")
 async def score_round_save_scores(body: SaveRoundsBody, request: Request):
-    """Iter55 — Append-only per-round upsert. For each entry, the canonical
-    round name (whitespace-collapsed, alias-mapped) determines the bucket.
-    Existing entries for OTHER rounds are preserved unchanged."""
+    """Iter55 — Append-only per-round upsert. Iter64 — Hard-gates on
+    `pipeline_data.otp_verified == 1` to prevent updates for un-attended
+    candidates. Returns 403 when the candidate has not verified attendance."""
     await _require_auth(request)
     em = (body.email or "").strip().lower()
     if not em:
         raise HTTPException(status_code=400, detail="email required")
+    # Iter64 — attendance gate
+    pd_doc = await _db.pipeline_data.find_one({"email": em}, {"_id": 0, "otp_verified": 1})
+    if not pd_doc or not _is_otp_verified(pd_doc.get("otp_verified")):
+        raise HTTPException(status_code=403, detail="Candidate attendance not verified")
     cur = await _db.bb_applicant_updates.find_one({"email": em}, {"_id": 0, "scores": 1})
     existing_by_canon = {}
     for s in (cur.get("scores") or []) if cur else []:
@@ -2470,13 +2552,15 @@ class SaveDatesBody(BaseModel):
 
 @bb_router.put("/score-round/save-dates")
 async def score_round_save_dates(body: SaveDatesBody, request: Request):
-    """Iter55 — Update Date of Joining / Documentation / Induction for a
-    candidate (matched by email). Only fields explicitly passed are written;
-    null/None means "leave unchanged"; empty string clears."""
+    """Iter55/iter64 — Update Date of Joining / Documentation / Induction.
+    Iter64 — Gated on otp_verified=1 to mirror score-update protection."""
     await _require_auth(request)
     em = (body.email or "").strip().lower()
     if not em:
         raise HTTPException(status_code=400, detail="email required")
+    pd_doc = await _db.pipeline_data.find_one({"email": em}, {"_id": 0, "otp_verified": 1})
+    if not pd_doc or not _is_otp_verified(pd_doc.get("otp_verified")):
+        raise HTTPException(status_code=403, detail="Candidate attendance not verified")
     updates = {"updated_at": datetime.now(timezone.utc).isoformat()}
     for k in ("date_of_joining", "date_of_documentation", "date_of_induction"):
         v = getattr(body, k)
