@@ -161,7 +161,9 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str, is
 
 # ============ HIGH-LEVEL NOTIFICATION FUNCTIONS ============
 
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://score-round-staging.preview.emergentagent.com")
+# Hard-required env: omit the silent default so misconfiguration fails fast at
+# startup (raises KeyError instead of silently mailing a wrong staging URL).
+FRONTEND_URL = os.environ["FRONTEND_URL"]
 
 
 async def notify_shortlisted(name: str, phone: str, email: str, schedule_token: str, is_test: bool = False):

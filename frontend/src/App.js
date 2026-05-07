@@ -7,7 +7,9 @@ import Home from "./pages/Home";
 import Dashboard from "./pages/Dashboard";
 import Summary from "./pages/Summary";
 import Applicants from "./pages/Roles";
+import RoleDrillDown from "./pages/RoleDrillDown";
 import AttendedApplicants from "./pages/AttendedRoles";
+import AttendedDrillDown from "./pages/AttendedDrillDown";
 import JobsKeywords from "./pages/JobsKeywords";
 import ManageJobRoles from "./pages/ManageJobRoles";
 import HiringForms from "./pages/HiringForms";
@@ -37,7 +39,9 @@ function App() {
                         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                         <Route path="/summary" element={<ProtectedRoute><Summary /></ProtectedRoute>} />
                         <Route path="/roles" element={<ProtectedRoute><Applicants /></ProtectedRoute>} />
+                        <Route path="/roles/:jobRole" element={<ProtectedRoute><RoleDrillDown /></ProtectedRoute>} />
                         <Route path="/attended-roles" element={<ProtectedRoute><AttendedApplicants /></ProtectedRoute>} />
+                        <Route path="/attended-roles/:jobRole" element={<ProtectedRoute><AttendedDrillDown /></ProtectedRoute>} />
                         <Route path="/jobs-keywords" element={<ProtectedRoute><JobsKeywords /></ProtectedRoute>} />
                         <Route path="/manage-job-roles" element={<ProtectedRoute><ManageJobRoles /></ProtectedRoute>} />
                         <Route path="/hiring-forms" element={<ProtectedRoute><HiringForms /></ProtectedRoute>} />
