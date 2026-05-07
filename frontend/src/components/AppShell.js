@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import {
     SquaresFour, ChartBar, FileText, CalendarCheck, PencilLine, Table,
     MagnifyingGlass, Briefcase, FolderOpen, GraduationCap, CalendarBlank,
-    ShieldCheck, SignOut, List, X, UserCircle,
+    ShieldCheck, SignOut, List, X, UserCircle, WhatsappLogo,
 } from '@phosphor-icons/react';
 
 const NAV = [
@@ -15,6 +15,7 @@ const NAV = [
     { label: 'Update Applicants Scores', icon: PencilLine, path: '/update-scores' },
     { label: 'Score & Round', icon: Table, path: '/score-round' },
     { label: 'Candidate Journey', icon: MagnifyingGlass, path: '/candidate-journey' },
+    { label: 'WhatsApp Resend', icon: WhatsappLogo, path: '/whatsapp-resend' },
     { label: 'Create Job Roles', icon: Briefcase, path: '/manage-job-roles' },
     { label: 'Create Job Openings', icon: FolderOpen, path: '/job-openings' },
     { label: 'College Drives', icon: GraduationCap, path: '/college-schedules' },

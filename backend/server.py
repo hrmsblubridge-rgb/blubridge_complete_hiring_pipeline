@@ -2885,6 +2885,11 @@ init_bb(db, get_current_user, _build_college_rank_lookup, _classify_college)
 app.include_router(bb_router)
 app.include_router(pub_router)
 
+# Include WhatsApp Resend module (iter67)
+from bb_resend import resend_router, init_resend
+init_resend(db, get_current_user)
+app.include_router(resend_router)
+
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,

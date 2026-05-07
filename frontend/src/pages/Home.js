@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { ChartBar, FileText, CalendarCheck, PencilLine, Briefcase, FolderOpen, CalendarBlank, ShieldCheck, GraduationCap, MagnifyingGlass, Table, ArrowRight } from '@phosphor-icons/react';
+import { ChartBar, FileText, CalendarCheck, PencilLine, Briefcase, FolderOpen, CalendarBlank, ShieldCheck, GraduationCap, MagnifyingGlass, Table, ArrowRight, WhatsappLogo } from '@phosphor-icons/react';
 
 const NAV_ITEMS = [
     { label: 'Analytics Dashboard', desc: 'Upload datasets, view summaries and applicants', icon: ChartBar, path: '/dashboard', tone: 'blue' },
@@ -9,6 +9,7 @@ const NAV_ITEMS = [
     { label: 'Update Applicants Scores', desc: 'Manage rounds and update candidate scores', icon: PencilLine, path: '/update-scores', tone: 'emerald' },
     { label: 'Score & Round', desc: 'Excel-like table — per-round scores, status, induction dates', icon: Table, path: '/score-round', tone: 'sky' },
     { label: 'Candidate Journey', desc: 'View full lifecycle — rounds, scores, status, induction date', icon: MagnifyingGlass, path: '/candidate-journey', tone: 'indigo' },
+    { label: 'WhatsApp Missed Schedule Link Resend', desc: 'Resend interview schedules and meeting links to candidates', icon: WhatsappLogo, path: '/whatsapp-resend', tone: 'whatsapp' },
     { label: 'Create Job Roles', desc: 'Define and manage job titles', icon: Briefcase, path: '/manage-job-roles', tone: 'navy' },
     { label: 'Create Job Openings', desc: 'Publish job openings for recruitment', icon: FolderOpen, path: '/job-openings', tone: 'rose' },
     { label: 'College Drives', desc: 'Configure interview schedules per college and role', icon: GraduationCap, path: '/college-schedules', tone: 'pink' },
@@ -28,6 +29,7 @@ const TONE = {
     pink:    { bg: 'bg-pink-50',    fg: 'text-pink-600',    ring: 'ring-pink-100' },
     orange:  { bg: 'bg-orange-50',  fg: 'text-orange-600',  ring: 'ring-orange-100' },
     teal:    { bg: 'bg-teal-50',    fg: 'text-teal-600',    ring: 'ring-teal-100' },
+    whatsapp:{ bg: 'bg-[#25D366]/10', fg: 'text-[#128C7E]', ring: 'ring-[#25D366]/20' },
 };
 
 export default function Home() {
