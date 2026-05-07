@@ -22,6 +22,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Depends, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -688,3 +689,99 @@ async def template_preview():
         ),
         "params": ["name", "job_role", "schedule_date", "schedule_time", "schedule_link"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Export — Download preview as CSV / XLSX
+# ---------------------------------------------------------------------------
+_EXPORT_COLUMNS = [
+    "Candidate Name", "Email", "Phone",
+    "Match Status", "Match Confidence", "Priority Used",
+    "Job Role", "Interview Round",
+    "Schedule Date", "Schedule Time",
+    "Schedule Link", "Schedule Token",
+    "WhatsApp Status", "Last Sent At", "Retry Count", "Failure Reason",
+    "Source Collection",
+]
+
+
+def _row_to_export_record(r: dict) -> dict:
+    c = r.get("candidate") or {}
+    s = r.get("schedule") or {}
+    w = r.get("whatsapp") or {}
+    return {
+        "Candidate Name":   c.get("name") or c.get("input_name") or "",
+        "Email":            c.get("email") or c.get("input_email") or "",
+        "Phone":            c.get("phone") or c.get("input_phone") or "",
+        "Match Status":     r.get("match_status") or "",
+        "Match Confidence": r.get("match_confidence") or 0,
+        "Priority Used":    r.get("priority_used") or 0,
+        "Job Role":         s.get("job_role") or "",
+        "Interview Round":  s.get("interview_round") or "",
+        "Schedule Date":    _fmt_date(s.get("schedule_date")) or "",
+        "Schedule Time":    s.get("schedule_time") or "",
+        "Schedule Link":    s.get("schedule_link") or "",
+        "Schedule Token":   s.get("schedule_token") or "",
+        "WhatsApp Status":  w.get("last_status") or "pending",
+        "Last Sent At":     w.get("last_sent_at") or "",
+        "Retry Count":      w.get("retry_count") or 0,
+        "Failure Reason":   w.get("failure_reason") or "",
+        "Source Collection":r.get("source_collection") or "",
+    }
+
+
+@resend_router.get("/export/{upload_id}")
+async def export_preview(
+    upload_id: str,
+    request: Request,
+    fmt: str = Query("xlsx", regex="^(xlsx|csv)$"),
+    match_status: Optional[str] = None,
+    whatsapp_status: Optional[str] = None,
+):
+    """Download the preview table (with current filters applied) as CSV or XLSX."""
+    await _get_user(request)
+    doc = await _db.bb_resend_uploads.find_one({"upload_id": upload_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Upload not found")
+
+    rows = doc.get("rows", [])
+    if match_status:
+        rows = [r for r in rows if r.get("match_status") == match_status]
+    if whatsapp_status:
+        rows = [r for r in rows if (r.get("whatsapp") or {}).get("last_status") == whatsapp_status]
+
+    records = [_row_to_export_record(r) for r in rows]
+    df = pd.DataFrame(records, columns=_EXPORT_COLUMNS)
+
+    base_name = (doc.get("filename") or "whatsapp-resend").rsplit(".", 1)[0]
+    fname = f"{base_name}-results.{fmt}"
+
+    buf = io.BytesIO()
+    if fmt == "csv":
+        df.to_csv(buf, index=False, encoding="utf-8-sig")
+        media = "text/csv; charset=utf-8"
+    else:
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            df.to_excel(writer, sheet_name="Resend Results", index=False)
+            ws = writer.sheets["Resend Results"]
+            from openpyxl.styles import Font, PatternFill, Alignment
+            hdr_fill = PatternFill(start_color="1D3A8A", end_color="1D3A8A", fill_type="solid")
+            hdr_font = Font(bold=True, color="FFFFFF", size=11)
+            for col_idx in range(1, len(_EXPORT_COLUMNS) + 1):
+                cell = ws.cell(row=1, column=col_idx)
+                cell.fill = hdr_fill
+                cell.font = hdr_font
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            # Auto-fit columns (approximate)
+            widths = [22, 30, 16, 16, 14, 12, 22, 16, 14, 12, 60, 32, 14, 22, 10, 32, 18]
+            from openpyxl.utils import get_column_letter
+            for i, w in enumerate(widths, 1):
+                ws.column_dimensions[get_column_letter(i)].width = w
+            ws.freeze_panes = "A2"
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    buf.seek(0)
+    return StreamingResponse(
+        buf, media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )

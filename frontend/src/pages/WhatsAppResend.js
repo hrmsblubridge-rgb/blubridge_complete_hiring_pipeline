@@ -12,7 +12,7 @@ import { toast } from 'sonner';
 import {
     ArrowLeft, Upload, WhatsappLogo, MagnifyingGlass, Funnel, ArrowsClockwise,
     PaperPlaneTilt, Eye, CheckCircle, XCircle, Warning, ClockCountdown, X,
-    FileText, ListChecks,
+    FileText, ListChecks, FileXls, FileCsv, Download,
 } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -224,6 +224,33 @@ export default function WhatsAppResend() {
         } catch (e) { toast.error('Test failed'); }
     };
 
+    const exportResults = async (fmt) => {
+        if (!upload?.upload_id) return;
+        try {
+            const resp = await axios.get(`${API}/api/bb/resend/export/${upload.upload_id}`, {
+                withCredentials: true,
+                responseType: 'blob',
+                params: {
+                    fmt,
+                    match_status: matchFilter || undefined,
+                    whatsapp_status: waFilter || undefined,
+                },
+            });
+            const blobUrl = window.URL.createObjectURL(new Blob([resp.data]));
+            const a = document.createElement('a');
+            const base = (upload.filename || 'whatsapp-resend').replace(/\.(csv|xlsx?|xls)$/i, '');
+            a.href = blobUrl;
+            a.download = `${base}-results.${fmt}`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(blobUrl);
+            toast.success(`Downloaded ${fmt.toUpperCase()}`);
+        } catch (e) {
+            toast.error(e.response?.data?.detail || 'Export failed');
+        }
+    };
+
     const sendable = useMemo(() => rows.filter(r => r.match_status !== 'No Match' && r.schedule?.has_active_schedule), [rows]);
     const sendBulkAll = () => sendRows(sendable.map(r => r.row_id), 'Bulk resend');
     const sendSelected = () => sendRows([...selected], 'Selected resend');
@@ -311,6 +338,18 @@ export default function WhatsAppResend() {
                             </button>
 
                             <div className="ml-auto flex items-center gap-2">
+                                <div className="flex items-center gap-1 mr-1 pl-1 border-l border-[#e5e3d8]">
+                                    <button onClick={() => exportResults('xlsx')} data-testid="resend-export-xlsx-btn"
+                                        title="Download as Excel"
+                                        className="px-3 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-sm font-semibold flex items-center gap-1.5 hover:bg-emerald-100">
+                                        <FileXls size={14} weight="duotone" /> Excel
+                                    </button>
+                                    <button onClick={() => exportResults('csv')} data-testid="resend-export-csv-btn"
+                                        title="Download as CSV"
+                                        className="px-3 py-2 rounded-lg border border-[#e5e3d8] bg-[#fffdf7] text-[#1a2332] text-sm font-semibold flex items-center gap-1.5 hover:bg-[#efede5]">
+                                        <FileCsv size={14} weight="duotone" /> CSV
+                                    </button>
+                                </div>
                                 <button disabled={sending || !sendable.length} onClick={sendBulkAll} data-testid="resend-bulk-all-btn"
                                     className="px-4 py-2 rounded-lg text-white text-sm font-semibold flex items-center gap-1.5 disabled:opacity-50"
                                     style={{ backgroundColor: WA_GREEN }}>
