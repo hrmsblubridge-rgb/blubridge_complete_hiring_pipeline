@@ -2191,6 +2191,14 @@ _worker_running = False
 _reprocess_lock = asyncio.Lock()
 _reprocess_pending = False
 
+# ---- iter67 — Per-host queue isolation ----
+# The Mongo queue is shared across deployments (preview + production), but each
+# host has its OWN /app/uploads filesystem. If a worker from host A claims a job
+# uploaded on host B, the file is "not found" on host A's disk. We tag every
+# upload row with HOST_ID and only allow workers to claim rows for their host.
+import socket as _socket
+HOST_ID = os.environ.get("HOST_ID") or _socket.gethostname() or "unknown-host"
+
 
 async def _bg_queue_worker():
     """Persistent background worker: continuously polls bulk_upload_queue for pending jobs.
@@ -2215,16 +2223,27 @@ async def _bg_queue_worker():
     try:
         while True:
             try:
-                # ATOMIC CLAIM: pick the oldest queued/pending row AND mark it processing
-                # in a single Mongo round-trip. We use status="queued" (our private
-                # discriminator) primarily; legacy "pending" is also accepted for
-                # backward-compat with rows created before this fix.
+                # iter67 — claim only our host-private rows. Legacy "queued"/
+                # "pending" rows are also accepted ONLY when stamped with our
+                # host_id (or unset, for very old rows we created before this
+                # fix). This prevents a legacy worker on another deployment
+                # (sharing the same Mongo) from sniping our rows.
                 now_iso = datetime.now(timezone.utc).isoformat()
                 job = await db.bulk_upload_queue.find_one_and_update(
-                    {"status": {"$in": ["queued", "pending"]}, "owner": {"$in": [None, "e1_recruitment_app"]}},
+                    {
+                        "$or": [
+                            {"status": "queued_local", "host_id": HOST_ID},
+                            {
+                                "status": {"$in": ["queued", "pending"]},
+                                "owner": {"$in": [None, "e1_recruitment_app"]},
+                                "$or": [{"host_id": HOST_ID}, {"host_id": {"$exists": False}}, {"host_id": None}],
+                            },
+                        ],
+                    },
                     {"$set": {
                         "status": "processing",
                         "owner": "e1_recruitment_app",
+                        "host_id": HOST_ID,
                         "updated_at": now_iso,
                         "worker_pid": worker_pid,
                         "claimed_at": now_iso,
@@ -2303,6 +2322,19 @@ async def _bg_queue_worker():
                                 except Exception:
                                     content_blob = content_blob.encode("utf-8", errors="ignore")
                             path.write_bytes(content_blob)
+                        elif (job.get("host_id") and job.get("host_id") != HOST_ID):
+                            # Cross-host orphan — file lives on another deployment.
+                            # Release the claim back to queued so the correct host
+                            # can pick it up. Do NOT mark failed.
+                            logger.info(f"Queue: releasing cross-host job {file_name} back to queued (owned by host_id={job.get('host_id')})")
+                            await db.bulk_upload_queue.update_one(
+                                {"_id": job_id},
+                                {"$set": {
+                                    "status": "queued_local",
+                                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                                }, "$unset": {"worker_pid": "", "claimed_at": ""}},
+                            )
+                            continue
                         else:
                             raise FileNotFoundError(f"File not found on disk: {file_path}")
 
@@ -2401,7 +2433,7 @@ async def bulk_upload_status(user: str = Depends(get_current_user)):
         # Pending + Processing from DB (queued is our discriminator; pending kept
         # for backward-compat)
         active = await db.bulk_upload_queue.find(
-            {"file_type": utype, "status": {"$in": ["queued", "pending", "processing"]}},
+            {"file_type": utype, "status": {"$in": ["queued", "queued_local", "pending", "processing"]}, "host_id": HOST_ID},
             {"_id": 1, "file_name": 1, "file_path": 1, "status": 1, "created_at": 1,
              "error_message": 1, "progress": 1}
         ).sort("created_at", 1).to_list(None)
@@ -2488,7 +2520,7 @@ async def bulk_upload_files(
             skipped.append({"name": f.filename, "reason": "Empty file"})
             logger.warning(f"BulkUpload: skipped {f.filename} (empty)")
             continue
-        safe_name = f"{int(datetime.now(timezone.utc).timestamp())}_{f.filename}"
+        safe_name = f"{int(datetime.now(timezone.utc).timestamp() * 1000)}_{ObjectId()}_{f.filename}"
         dest = upload_dir / safe_name
         try:
             dest.write_bytes(content)
@@ -2505,8 +2537,13 @@ async def bulk_upload_files(
                 "file_path": str(dest),
                 "file_type": upload_type,
                 "file_size": len(content),
-                "status": "queued",
+                # iter67 — use a host-private status so a legacy worker on
+                # another deployment (which scans for {"queued","pending"})
+                # cannot snipe our row and falsely fail it as "file not found"
+                # (the file lives only on our local /app/uploads filesystem).
+                "status": "queued_local",
                 "owner": "e1_recruitment_app",
+                "host_id": HOST_ID,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
                 "error_message": None,
@@ -2932,11 +2969,11 @@ async def startup_event():
     await backfill_form_slugs()
     
     # Resume: reset any stuck "processing" records (from our own worker) back
-    # to "queued". Only touches rows we own to avoid resurrecting legacy/phantom
-    # rows.
+    # to "queued_local". Only touches rows we own (this host) to avoid resurrecting
+    # legacy/phantom rows from other deployments.
     stuck = await db.bulk_upload_queue.update_many(
-        {"status": "processing", "owner": "e1_recruitment_app"},
-        {"$set": {"status": "queued", "updated_at": datetime.now(timezone.utc).isoformat()}}
+        {"status": "processing", "owner": "e1_recruitment_app", "host_id": HOST_ID},
+        {"$set": {"status": "queued_local", "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
     if stuck.modified_count > 0:
         logger.info(f"Reset {stuck.modified_count} stuck processing jobs to queued")
@@ -2950,6 +2987,51 @@ async def startup_event():
     )
     if legacy.modified_count > 0:
         logger.info(f"Archived {legacy.modified_count} legacy phantom failed records")
+
+    # Iter67 — Archive orphan failed rows whose file no longer exists on disk
+    # AND that belong to this host. Failed rows from OTHER hosts must not be
+    # touched (those files only exist on the other deployment's filesystem).
+    orphan_count = 0
+    async for row in db.bulk_upload_queue.find(
+        {"status": "failed", "host_id": HOST_ID},
+        {"_id": 1, "file_path": 1}
+    ):
+        fp = row.get("file_path")
+        if fp and not Path(fp).exists():
+            await db.bulk_upload_queue.update_one(
+                {"_id": row["_id"]},
+                {"$set": {
+                    "status": "archived",
+                    "archive_reason": "orphan_file_missing_on_disk",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+            orphan_count += 1
+    if orphan_count > 0:
+        logger.info(f"Archived {orphan_count} orphan failed rows (file missing on disk)")
+
+    # Iter67 — Reclaim cross-host failed rows that belong to us. The other
+    # deployment's legacy worker may have sniped one of our jobs and falsely
+    # marked it failed with "File not found on disk". If the file still exists
+    # on OUR disk, restore the row to queued_local so we can retry.
+    reclaimed = 0
+    async for row in db.bulk_upload_queue.find(
+        {"status": "failed", "host_id": HOST_ID, "error_message": {"$regex": "^File not found on disk"}},
+        {"_id": 1, "file_path": 1}
+    ):
+        fp = row.get("file_path")
+        if fp and Path(fp).exists():
+            await db.bulk_upload_queue.update_one(
+                {"_id": row["_id"]},
+                {"$set": {
+                    "status": "queued_local",
+                    "error_message": None,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }, "$unset": {"worker_pid": "", "claimed_at": ""}},
+            )
+            reclaimed += 1
+    if reclaimed > 0:
+        logger.info(f"Reclaimed {reclaimed} cross-host falsely-failed rows back to queued_local")
 
     # Write test credentials
     try:

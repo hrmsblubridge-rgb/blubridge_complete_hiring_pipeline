@@ -1,5 +1,5 @@
 /**
- * WhatsApp Missed Schedule Link Resend (iter67)
+ * WhatsApp Missed Export (iter67)
  * --------------------------------------------
  * Upload candidate list → auto-match against pipeline_data + bb_registrations
  * → preview latest active schedule → bulk resend via AiSensy "Candidate

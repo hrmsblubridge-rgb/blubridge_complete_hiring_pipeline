@@ -45,36 +45,59 @@ export default function BulkUploadModal({ type, onClose }) {
     const handleUpload = async (e) => {
         const files = e.target.files;
         if (!files || files.length === 0) return;
-        // Soft size warning — Kubernetes ingress + Atlas pipeline get unhappy
-        // above ~50 MB. We still attempt the upload.
+
+        // Soft size warning per-file — Kubernetes ingress + Atlas pipeline get
+        // unhappy above ~50 MB.
         const big = Array.from(files).find(f => f.size > 50 * 1024 * 1024);
         if (big) {
             toast.warning(`${big.name} is ${(big.size / (1024 * 1024)).toFixed(1)} MB — upload may be slow or rejected by ingress`);
         }
+
         setUploading(true);
-        try {
-            const formData = new FormData();
-            for (let i = 0; i < files.length; i++) formData.append('files', files[i]);
-            await axios.post(`${API}/api/bulk-upload/${type}`, formData, {
-                withCredentials: true,
-                timeout: 5 * 60 * 1000,  // 5-minute timeout for large multi-file uploads
-            });
-            toast.success(`${files.length} file(s) added to queue`);
-            fetchStatus();
-        } catch (err) {
-            // Surface the actual server error so debugging isn't a guessing
-            // game. Falls back to status text or network message.
-            const detail =
-                err.response?.data?.detail ||
-                err.response?.data?.message ||
-                (err.response ? `${err.response.status} ${err.response.statusText || 'error'}` : null) ||
-                err.message ||
-                'Upload failed';
-            toast.error(`Upload failed: ${detail}`);
-        } finally {
-            setUploading(false);
-            if (fileRef.current) fileRef.current.value = '';
+        let succeeded = 0;
+        const failures = [];
+
+        // ----- BUG FIX (iter67) -----
+        // Send each file in its OWN POST, sequentially. Sending many files in a
+        // single multipart request was hitting K8s ingress body-size / timeout
+        // limits and creating orphan queue rows whose file never reached disk.
+        // Sequential per-file uploads:
+        //   • one small payload per request (well below ingress limits)
+        //   • each file is queued the instant the POST returns
+        //   • backend worker still processes them strictly one-by-one (queue)
+        //   • a single failure no longer aborts the whole batch
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            setUploadProgress({ current: i + 1, total: files.length, name: file.name });
+            try {
+                const formData = new FormData();
+                formData.append('files', file);
+                await axios.post(`${API}/api/bulk-upload/${type}`, formData, {
+                    withCredentials: true,
+                    timeout: 5 * 60 * 1000,
+                });
+                succeeded += 1;
+                fetchStatus(); // refresh after each enqueue so user sees live queue
+            } catch (err) {
+                const detail =
+                    err.response?.data?.detail ||
+                    err.response?.data?.message ||
+                    (err.response ? `${err.response.status} ${err.response.statusText || 'error'}` : null) ||
+                    err.message ||
+                    'Upload failed';
+                failures.push({ name: file.name, reason: detail });
+            }
         }
+
+        if (succeeded > 0) toast.success(`${succeeded}/${files.length} file(s) added to queue`);
+        if (failures.length) {
+            failures.forEach(f => toast.error(`${f.name}: ${f.reason}`));
+        }
+
+        setUploadProgress(null);
+        setUploading(false);
+        if (fileRef.current) fileRef.current.value = '';
+        fetchStatus();
     };
 
     const handleDelete = async (queueId) => {
@@ -84,6 +107,18 @@ export default function BulkUploadModal({ type, onClose }) {
             fetchStatus();
         } catch (err) {
             toast.error(err.response?.data?.detail || 'Failed to delete');
+        }
+    };
+
+    const handleClearFailed = async () => {
+        if (!failed.length) return;
+        if (!window.confirm(`Archive all ${failed.length} failed file(s)? They will be hidden from this list.`)) return;
+        try {
+            const r = await axios.post(`${API}/api/bulk-upload/${type}/clear-failed`, {}, { withCredentials: true });
+            toast.success(`${r.data.archived || 0} failed file(s) cleared`);
+            fetchStatus();
+        } catch (err) {
+            toast.error(err.response?.data?.detail || 'Failed to clear');
         }
     };
 
@@ -126,17 +161,23 @@ export default function BulkUploadModal({ type, onClose }) {
                 </div>
 
                 {/* Upload + Refresh */}
-                <div className="flex items-center gap-3 px-6 py-4 border-b border-zinc-800">
+                <div className="flex items-center gap-3 px-6 py-4 border-b border-zinc-800 flex-wrap">
                     <label className="flex items-center gap-2 px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm font-medium cursor-pointer transition-colors" data-testid="bulk-file-input-label">
                         {uploading ? <SpinnerGap size={16} className="animate-spin" /> : <Upload size={16} />}
                         Upload File(s)
-                        <input ref={fileRef} type="file" multiple accept=".csv,.xlsx" onChange={handleUpload} className="hidden" data-testid="bulk-file-input" />
+                        <input ref={fileRef} type="file" multiple accept=".csv,.xlsx" onChange={handleUpload} className="hidden" data-testid="bulk-file-input" disabled={uploading} />
                     </label>
                     <button onClick={handleRefresh} data-testid="refresh-btn"
                         className="flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium transition-colors">
                         <ArrowClockwise size={16} /> Refresh
                     </button>
-                    <span className="ml-auto text-xs text-zinc-500">Processing is automatic & sequential</span>
+                    {uploadProgress ? (
+                        <span className="ml-auto text-xs text-cyan-400 font-medium" data-testid="upload-progress">
+                            Uploading {uploadProgress.current}/{uploadProgress.total} · {uploadProgress.name}
+                        </span>
+                    ) : (
+                        <span className="ml-auto text-xs text-zinc-500">Each file uploads & queues separately · processed one-by-one</span>
+                    )}
                 </div>
 
                 {/* Content */}
@@ -197,11 +238,17 @@ export default function BulkUploadModal({ type, onClose }) {
                     {/* Failed Files (expand/collapse) */}
                     {failed.length > 0 && (
                         <div>
-                            <button onClick={() => setShowFailed(p => !p)} data-testid="toggle-failed-btn"
-                                className="flex items-center gap-2 text-sm font-medium text-red-400/80 uppercase tracking-wider hover:text-red-300 transition-colors w-full text-left mb-3">
-                                {showFailed ? <FolderOpen size={18} /> : <Folder size={18} />}
-                                Failed ({failed.length})
-                            </button>
+                            <div className="flex items-center justify-between mb-3">
+                                <button onClick={() => setShowFailed(p => !p)} data-testid="toggle-failed-btn"
+                                    className="flex items-center gap-2 text-sm font-medium text-red-400/80 uppercase tracking-wider hover:text-red-300 transition-colors text-left">
+                                    {showFailed ? <FolderOpen size={18} /> : <Folder size={18} />}
+                                    Failed ({failed.length})
+                                </button>
+                                <button onClick={handleClearFailed} data-testid="clear-failed-btn"
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-400 hover:text-white hover:bg-red-700 border border-red-900/40 rounded transition-colors">
+                                    <Trash size={14} /> Clear All
+                                </button>
+                            </div>
                             {showFailed && (
                                 <div className="space-y-2 pl-2" data-testid="failed-list">
                                     {failed.map(f => (
@@ -209,6 +256,11 @@ export default function BulkUploadModal({ type, onClose }) {
                                             <div className="flex items-center gap-3">
                                                 <WarningCircle size={16} className="text-red-400 shrink-0" />
                                                 <span className="text-sm truncate flex-1 text-red-300">{f.name}</span>
+                                                <button onClick={() => handleDelete(f.id)} data-testid={`delete-failed-${f.id}`}
+                                                    title="Remove this entry"
+                                                    className="p-1 hover:bg-red-900/40 transition-colors text-red-400/70 hover:text-red-300">
+                                                    <Trash size={14} />
+                                                </button>
                                             </div>
                                             {f.error && <p className="text-xs text-red-400/70 mt-1 pl-7">{f.error}</p>}
                                         </div>
