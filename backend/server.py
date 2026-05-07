@@ -2890,6 +2890,10 @@ from bb_resend import resend_router, init_resend
 init_resend(db, get_current_user)
 app.include_router(resend_router)
 
+# Include Help / Templates module (iter67)
+from bb_help import help_router
+app.include_router(help_router)
+
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,

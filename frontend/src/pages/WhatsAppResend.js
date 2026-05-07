@@ -244,7 +244,7 @@ export default function WhatsAppResend() {
                             <WhatsappLogo size={22} weight="fill" color={WA_GREEN_DARK} />
                         </div>
                         <div>
-                            <h1 className="text-xl lg:text-2xl font-bold text-[#1a2332] tracking-tight">WhatsApp Missed Schedule Link Resend</h1>
+                            <h1 className="text-xl lg:text-2xl font-bold text-[#1a2332] tracking-tight">WhatsApp Missed Export</h1>
                             <p className="text-xs text-[#6b7280] mt-0.5">Re-deliver interview schedules + meeting links</p>
                         </div>
                     </div>

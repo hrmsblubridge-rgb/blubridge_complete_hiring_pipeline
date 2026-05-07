@@ -23,6 +23,7 @@ import CollegeRegistration from "./pages/CollegeRegistration";
 import CandidateJourney from "./pages/CandidateJourney";
 import ScoreRound from "./pages/ScoreRound";
 import WhatsAppResend from "./pages/WhatsAppResend";
+import Help from "./pages/Help";
 import { Toaster } from "./components/ui/sonner";
 
 function App() {
@@ -49,6 +50,7 @@ function App() {
                         <Route path="/candidate-journey" element={<ProtectedRoute><CandidateJourney /></ProtectedRoute>} />
                         <Route path="/score-round" element={<ProtectedRoute><ScoreRound /></ProtectedRoute>} />
                         <Route path="/whatsapp-resend" element={<ProtectedRoute><WhatsAppResend /></ProtectedRoute>} />
+                        <Route path="/help" element={<ProtectedRoute><Help /></ProtectedRoute>} />
                         <Route path="/register/college" element={<CollegeRegistration />} />
                         <Route path="/register/:formId" element={<PublicRegistration />} />
                         <Route path="/schedule-interview/:token" element={<InterviewSchedule />} />

@@ -1,5 +1,5 @@
 """
-WhatsApp Missed Schedule Link Resend (iter67)
+WhatsApp Missed Export (iter67)
 ============================================
 Resend interview schedule details + meeting links via WhatsApp for candidates
 who missed/deleted their original message.

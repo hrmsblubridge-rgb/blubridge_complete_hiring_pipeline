@@ -9,7 +9,7 @@ const NAV_ITEMS = [
     { label: 'Update Applicants Scores', desc: 'Manage rounds and update candidate scores', icon: PencilLine, path: '/update-scores', tone: 'emerald' },
     { label: 'Score & Round', desc: 'Excel-like table — per-round scores, status, induction dates', icon: Table, path: '/score-round', tone: 'sky' },
     { label: 'Candidate Journey', desc: 'View full lifecycle — rounds, scores, status, induction date', icon: MagnifyingGlass, path: '/candidate-journey', tone: 'indigo' },
-    { label: 'WhatsApp Missed Schedule Link Resend', desc: 'Resend interview schedules and meeting links to candidates', icon: WhatsappLogo, path: '/whatsapp-resend', tone: 'whatsapp' },
+    { label: 'WhatsApp Missed Export', desc: 'Resend interview schedules and meeting links to candidates', icon: WhatsappLogo, path: '/whatsapp-resend', tone: 'whatsapp' },
     { label: 'Create Job Roles', desc: 'Define and manage job titles', icon: Briefcase, path: '/manage-job-roles', tone: 'navy' },
     { label: 'Create Job Openings', desc: 'Publish job openings for recruitment', icon: FolderOpen, path: '/job-openings', tone: 'rose' },
     { label: 'College Drives', desc: 'Configure interview schedules per college and role', icon: GraduationCap, path: '/college-schedules', tone: 'pink' },
