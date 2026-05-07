@@ -4,7 +4,7 @@ import io
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://messaging-allowlist.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://score-round-staging.preview.emergentagent.com").rstrip("/")
 ADMIN_USER = "Admin User"
 ADMIN_PASS = "Admin User"
 
