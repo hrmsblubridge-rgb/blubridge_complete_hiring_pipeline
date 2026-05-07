@@ -87,6 +87,31 @@ body {
 .app-shell .placeholder-zinc-500::placeholder,
 .app-shell .placeholder-zinc-400::placeholder { color: #9ca3af !important; }
 
+/* Status badge remap — dark-translucent bg + light text combos (designed for dark theme)
+   are remapped to clean light bg + saturated text for the cream theme. */
+.app-shell .bg-emerald-900\/40 { background-color: #d1fae5 !important; }
+.app-shell .bg-orange-900\/40  { background-color: #ffedd5 !important; }
+.app-shell .bg-red-900\/40     { background-color: #fee2e2 !important; }
+.app-shell .bg-cyan-900\/40    { background-color: #cffafe !important; }
+.app-shell .bg-amber-900\/40   { background-color: #fef3c7 !important; }
+.app-shell .bg-amber-900\/20   { background-color: #fef3c7 !important; }
+.app-shell .bg-blue-900\/40    { background-color: #dbeafe !important; }
+.app-shell .bg-violet-900\/40  { background-color: #ede9fe !important; }
+
+.app-shell .text-emerald-400 { color: #047857 !important; }
+.app-shell .text-orange-400  { color: #c2410c !important; }
+.app-shell .text-red-400     { color: #b91c1c !important; }
+.app-shell .text-cyan-400    { color: #0e7490 !important; }
+.app-shell .text-amber-400   { color: #b45309 !important; }
+.app-shell .text-blue-400    { color: #1d4ed8 !important; }
+.app-shell .text-violet-400  { color: #6d28d9 !important; }
+
+.app-shell .border-emerald-800\/50 { border-color: #6ee7b7 !important; }
+.app-shell .border-orange-800\/50  { border-color: #fdba74 !important; }
+.app-shell .border-red-800\/50     { border-color: #fca5a5 !important; }
+.app-shell .border-cyan-800\/50    { border-color: #67e8f9 !important; }
+.app-shell .border-amber-800\/50   { border-color: #fcd34d !important; }
+
 /* Sticky table headers using zinc bg */
 .app-shell thead .bg-zinc-900,
 .app-shell thead.bg-zinc-900,

@@ -40,7 +40,7 @@ export default function Home() {
         <div className="min-h-screen" data-testid="home-page">
             {/* Page header */}
             <header className="bg-[#faf9f1] border-b border-[#e5e3d8] px-6 lg:px-10 py-6">
-                <div className="max-w-7xl mx-auto flex items-center justify-between flex-wrap gap-4">
+                <div className="mx-auto flex items-center justify-between flex-wrap gap-4">
                     <div className="pl-12 lg:pl-0">
                         <h1 className="text-2xl lg:text-3xl font-bold text-[#1a2332] tracking-tight">Welcome{user ? `, ${user.split(' ')[0]}` : ''}</h1>
                         <p className="text-sm text-[#6b7280] mt-1">{today}</p>
@@ -52,7 +52,7 @@ export default function Home() {
                 </div>
             </header>
 
-            <main className="max-w-7xl mx-auto px-6 lg:px-10 py-8">
+            <main className="mx-auto px-6 lg:px-10 py-8">
                 <div className="mb-6">
                     <p className="text-[11px] font-semibold tracking-[0.2em] text-[#9b9787] uppercase">Modules</p>
                     <h2 className="text-xl font-semibold text-[#1a2332] mt-1">Choose a workspace to get started</h2>
