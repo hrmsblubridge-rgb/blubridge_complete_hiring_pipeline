@@ -12,6 +12,7 @@ export default function BulkUploadModal({ type, onClose }) {
     const [processed, setProcessed] = useState([]);
     const [failed, setFailed] = useState([]);
     const [uploading, setUploading] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(null); // { current, total, name }
     const [showPending, setShowPending] = useState(true);   // expanded by default
     const [showFailed, setShowFailed] = useState(true);     // expanded by default when present
     const [showProcessed, setShowProcessed] = useState(false);
