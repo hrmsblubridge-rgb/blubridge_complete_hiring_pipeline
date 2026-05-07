@@ -10,9 +10,90 @@ body {
     font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    background-color: #FFFFFF;
-    color: #0A0A0A;
+    background-color: #efede5;
+    color: #1a2332;
 }
+
+/* ============================================================
+   Cream Light Theme — Global overrides for legacy dark utility
+   classes used across pages. Applied only inside .app-shell so
+   public/login pages remain unaffected.
+   Site BG: #efede5 | Header: #faf9f1 | Container: #fffdf7
+   Accent (navy): #1d3a8a
+   ============================================================ */
+.app-shell .bg-\[\#0a0a0a\] { background-color: #efede5 !important; color: #1a2332 !important; }
+.app-shell .bg-black { background-color: #efede5 !important; }
+.app-shell .bg-zinc-950 { background-color: #efede5 !important; }
+.app-shell .bg-zinc-950\/50 { background-color: #faf9f1 !important; }
+.app-shell .bg-zinc-950\/80 { background-color: #f5f3eb !important; }
+.app-shell .bg-zinc-900 { background-color: #fffdf7 !important; }
+.app-shell .bg-zinc-900\/80 { background-color: #fbfaf2 !important; }
+.app-shell .bg-zinc-900\/50 { background-color: #fbfaf2 !important; }
+.app-shell .bg-zinc-800 { background-color: #f5f3eb !important; }
+.app-shell .bg-zinc-800\/40 { background-color: #faf9f1 !important; }
+.app-shell .bg-zinc-800\/50 { background-color: #faf9f1 !important; }
+.app-shell .bg-zinc-800\/60 { background-color: #f0eee2 !important; }
+.app-shell .bg-zinc-800\/80 { background-color: #f0eee2 !important; }
+.app-shell .bg-zinc-700 { background-color: #e9e7dc !important; }
+.app-shell .bg-zinc-700\/40 { background-color: #efede5 !important; }
+.app-shell .bg-zinc-700\/50 { background-color: #efede5 !important; }
+.app-shell .border-zinc-700\/50 { border-color: #d6d4c8 !important; }
+.app-shell .border-zinc-800\/50 { border-color: #e5e3d8 !important; }
+
+.app-shell aside .text-white { color: #ffffff !important; }
+.app-shell .text-white { color: #1a2332 !important; }
+.app-shell .text-zinc-100 { color: #1a2332 !important; }
+.app-shell .text-zinc-200 { color: #1a2332 !important; }
+.app-shell .text-zinc-300 { color: #3f4655 !important; }
+.app-shell .text-zinc-400 { color: #6b7280 !important; }
+.app-shell .text-zinc-500 { color: #6b7280 !important; }
+.app-shell .text-zinc-600 { color: #9ca3af !important; }
+
+.app-shell .border-zinc-800 { border-color: #e5e3d8 !important; }
+.app-shell .border-zinc-700 { border-color: #d6d4c8 !important; }
+.app-shell .border-zinc-600 { border-color: #c8c6ba !important; }
+.app-shell .border-zinc-900 { border-color: #ece9dc !important; }
+.app-shell .divide-zinc-800 > * + * { border-color: #e5e3d8 !important; }
+.app-shell .divide-zinc-700 > * + * { border-color: #d6d4c8 !important; }
+
+.app-shell .hover\:bg-zinc-800:hover { background-color: #efede5 !important; }
+.app-shell .hover\:bg-zinc-900\/80:hover { background-color: #fbfaf2 !important; }
+.app-shell .hover\:bg-zinc-800\/50:hover { background-color: #f5f3eb !important; }
+.app-shell .hover\:bg-zinc-700:hover { background-color: #e9e7dc !important; }
+.app-shell .hover\:text-white:hover { color: #0a0a0a !important; }
+.app-shell .hover\:border-zinc-700:hover { border-color: #1d3a8a !important; }
+.app-shell .hover\:border-zinc-600:hover { border-color: #1d3a8a !important; }
+
+/* Inputs / placeholders inside legacy dark-style fields */
+.app-shell input.bg-zinc-900,
+.app-shell input.bg-zinc-950,
+.app-shell select.bg-zinc-900,
+.app-shell select.bg-zinc-950,
+.app-shell textarea.bg-zinc-900,
+.app-shell textarea.bg-zinc-950 {
+    background-color: #fffdf7 !important;
+    color: #1a2332 !important;
+    border-color: #e5e3d8 !important;
+}
+.app-shell input.bg-zinc-800,
+.app-shell select.bg-zinc-800,
+.app-shell textarea.bg-zinc-800 {
+    background-color: #faf9f1 !important;
+    color: #1a2332 !important;
+}
+.app-shell input::placeholder,
+.app-shell textarea::placeholder { color: #9ca3af !important; }
+.app-shell .placeholder-zinc-600::placeholder,
+.app-shell .placeholder-zinc-500::placeholder,
+.app-shell .placeholder-zinc-400::placeholder { color: #9ca3af !important; }
+
+/* Sticky table headers using zinc bg */
+.app-shell thead .bg-zinc-900,
+.app-shell thead.bg-zinc-900,
+.app-shell tr.bg-zinc-900 { background-color: #faf9f1 !important; }
+.app-shell tr.hover\:bg-zinc-900\/50:hover,
+.app-shell .hover\:bg-zinc-900\/50:hover { background-color: #faf9f1 !important; }
+
 
 code {
     font-family: 'JetBrains Mono', source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
@@ -61,10 +142,7 @@ h1, h2, h3, h4, h5, h6 {
     }
 }
 
-/* Remove border radius globally for Swiss design */
-.rounded-md, .rounded-lg, .rounded-xl, .rounded-2xl {
-    border-radius: 0 !important;
-}
+/* Border radius preserved for new cream theme */
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {

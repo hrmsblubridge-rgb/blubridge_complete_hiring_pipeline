@@ -1,5 +1,6 @@
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import AppShell from './AppShell';
 
 export function ProtectedRoute({ children }) {
     const { user, loading } = useAuth();
@@ -7,7 +8,7 @@ export function ProtectedRoute({ children }) {
 
     if (loading) {
         return (
-            <div className="min-h-screen flex items-center justify-center bg-white">
+            <div className="min-h-screen flex items-center justify-center bg-[#efede5]">
                 <div className="flex flex-col items-center gap-4">
                     <div className="spinner"></div>
                     <p className="label-small">Loading...</p>
@@ -20,5 +21,5 @@ export function ProtectedRoute({ children }) {
         return <Navigate to="/login" state={{ from: location }} replace />;
     }
 
-    return children;
+    return <AppShell>{children}</AppShell>;
 }
