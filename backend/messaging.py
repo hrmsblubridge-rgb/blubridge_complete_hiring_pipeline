@@ -324,14 +324,17 @@ async def notify_missed_reminder(name: str, phone: str, email: str, role: str, d
     """Send missed interview reminder with reschedule link.
     Returns (wa_ok, em_ok).
 
-    Iter47 — WhatsApp template "Candidate FollowUp" now accepts 5 params
-    ([name, role, formattedDate, time, schedule_link]) so the message carries
-    the reschedule CTA directly, matching the updated PHP template.
+    AiSensy "Candidate FollowUp" template expects exactly 4 params:
+    [name, role, formattedDate, time]. The reschedule CTA URL is embedded
+    in the template body / button at the AiSensy dashboard side, NOT a
+    template variable. Sending more or fewer params returns
+    `{"message":"Template params does not match the campaign"}` → silent drop.
+    Verified empirically against AiSensy on 2026-05-08.
     """
     schedule_link = f"{FRONTEND_URL}/schedule-interview/{schedule_token}"
     wa_ok = await send_whatsapp(
         "Candidate FollowUp", phone, email,
-        [name, role, date, time, schedule_link],
+        [name, role, date, time],
         is_test=is_test,
     )
     html = f"""

@@ -1151,15 +1151,38 @@ async def register_college_applicant(data: CollegeRegistrationBody):
     }
     try:
         target_email = data.email.strip().lower()
+        # iter69 — Tester credentials full-overwrite path. When the registrant
+        # matches an entry in bb_test_credentials (email OR phone), do a
+        # `replace_one` so no stale fields survive from prior submissions.
+        tc_doc = await _db.bb_test_credentials.find_one(
+            {"$or": [{"email": target_email}, {"phone": phone_normalized}]}
+        )
+        is_tester = bool(tc_doc)
+
         existing = await _db.pipeline_data.find_one(
             {"$or": [{"email": target_email}, {"phone": phone_normalized}]},
-            {"_id": 0, "email": 1, "phone": 1, **{f: 1 for f in PROFILE_FIELDS}},
+            {"_id": 1, "email": 1, "phone": 1, **{f: 1 for f in PROFILE_FIELDS}},
         )
-        # Conflict detection: same phone but a different stored email → log + skip.
-        # Per spec: "If both exist but mismatch → log conflict, skip auto update"
-        if existing:
+        if existing and is_tester:
+            replacement = dict(pipeline_doc_set)
+            replacement["last_update"] = submitted_at
+            replacement["updated_at"] = submitted_at
+            replacement["created_at"] = submitted_at
+            replacement["stage"] = "registered"
+            replacement["pipeline_synced_at"] = submitted_at
+            await _db.pipeline_data.replace_one(
+                {"_id": existing["_id"]},
+                replacement,
+            )
+            _logger.info(
+                f"[Pipeline:tester] college_drive FULL_OVERWRITE "
+                f"email={target_email} phone={phone_normalized} _id={existing['_id']}"
+            )
+        elif existing:
             ex_email = (existing.get("email") or "").strip().lower()
             ex_phone = (existing.get("phone") or "").strip()
+            # Conflict detection: same phone but a different stored email → log + skip.
+            # Per spec: "If both exist but mismatch → log conflict, skip auto update"
             if ex_email and ex_phone and ex_email != target_email and ex_phone == phone_normalized:
                 _logger.warning(
                     f"[Pipeline] CONFLICT skip — phone {phone_normalized} already maps "
@@ -1178,7 +1201,7 @@ async def register_college_applicant(data: CollegeRegistrationBody):
                 set_fields["last_update"] = submitted_at
                 set_fields["updated_at"] = submitted_at
                 await _db.pipeline_data.update_one(
-                    {"email": target_email},
+                    {"_id": existing["_id"]},
                     {"$set": set_fields,
                      # Insert-only fields per spec
                      "$setOnInsert": {"created_at": submitted_at,
@@ -3306,8 +3329,8 @@ async def register_applicant(data: RegistrationBody):
     tc = await _db.bb_test_credentials.find_one(
         {"$or": [{"email": email_norm}, {"phone": phone_norm}]}
     )
-    bypass = bool(tc)
-    if bypass:
+    is_tester = bool(tc)
+    if is_tester:
         _logger.info(
             f"[Cooldown] BYPASS for tester email={email_norm} phone={phone_norm}"
         )
@@ -3502,10 +3525,26 @@ async def register_applicant(data: RegistrationBody):
         set_fields["hr_team"] = form_type_name
 
     if existing:
-        await _db.pipeline_data.update_one(
-            {"_id": existing["_id"]},
-            {"$set": set_fields},
-        )
+        if is_tester:
+            # iter69 — Tester credentials FULL OVERWRITE: replace the entire
+            # pipeline_data document with the latest registration payload (per
+            # spec: "completely overwrite old record"). Drops residual fields
+            # like stale schedule_*, otp_*, scores, result_status.
+            replacement = dict(set_fields)
+            replacement["created_at"] = submitted_at  # treat as a fresh record
+            await _db.pipeline_data.replace_one(
+                {"_id": existing["_id"]},
+                replacement,
+            )
+            _logger.info(
+                f"[Pipeline:tester] FULL_OVERWRITE email={data.email.strip().lower()} "
+                f"phone={phone_normalized} _id={existing['_id']}"
+            )
+        else:
+            await _db.pipeline_data.update_one(
+                {"_id": existing["_id"]},
+                {"$set": set_fields},
+            )
     else:
         await _db.pipeline_data.update_one(
             {"email": data.email.strip().lower()},
@@ -3737,15 +3776,22 @@ async def schedule_interview(token: str, data: ScheduleBody):
     try:
         if _is_new_record:
             from messaging import notify_schedule_confirmation
-            ok = await notify_schedule_confirmation(
+            wa_ok, em_ok = await notify_schedule_confirmation(
                 reg.get("full_name", ""), phone, email,
                 data.date.strip(), time_24, is_test=is_test_record,
+            )
+            ok = bool(wa_ok or em_ok)
+            _logger.info(
+                f"[ScheduleConfirm] email={email} phone={phone} "
+                f"date={data.date.strip()} time={time_24} wa_ok={wa_ok} em_ok={em_ok}"
             )
             await _db.bb_registrations.update_one(
                 {"_id": reg["_id"]},
                 {"$set": {
                     # Canonical flag for "latest schedule info has been communicated"
-                    "schedule_message_sent": bool(ok),
+                    "schedule_message_sent": ok,
+                    "schedule_message_wa_ok": bool(wa_ok),
+                    "schedule_message_em_ok": bool(em_ok),
                     "schedule_message_sent_at": datetime.now(timezone.utc).isoformat(),
                 }},
             )
