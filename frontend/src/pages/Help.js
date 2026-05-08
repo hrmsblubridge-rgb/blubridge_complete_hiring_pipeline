@@ -11,7 +11,8 @@ import {
     ArrowLeft, Book, Question, Download, MagnifyingGlass, CaretRight,
     ChartBar, FileText, CalendarCheck, PencilLine, Table, Briefcase,
     FolderOpen, GraduationCap, CalendarBlank, ShieldCheck, WhatsappLogo,
-    Lightbulb, ListChecks, FileXls,
+    Lightbulb, ListChecks, FileXls, FileDoc, EnvelopeSimple, Flask,
+    Sparkle,
 } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -19,7 +20,7 @@ const API = process.env.REACT_APP_BACKEND_URL;
 const ICONS = {
     ChartBar, FileText, CalendarCheck, PencilLine, Table,
     MagnifyingGlass, Briefcase, FolderOpen, GraduationCap,
-    CalendarBlank, ShieldCheck, WhatsappLogo,
+    CalendarBlank, ShieldCheck, WhatsappLogo, EnvelopeSimple, Flask, Question, Book,
 };
 
 const TONE = {
@@ -100,13 +101,22 @@ export default function Help() {
                             <p className="text-xs text-[#6b7280] mt-0.5">Guides · Templates · FAQs · Match logic</p>
                         </div>
                     </div>
-                    <button
-                        onClick={() => handleDownload('/api/bb/help/template/whatsapp-resend', 'BluBridge-WhatsApp-Resend-Template.xlsx')}
-                        data-testid="help-download-master-btn"
-                        className="px-4 py-2.5 rounded-lg bg-[#1d3a8a] hover:bg-[#162d6e] text-white text-sm font-semibold flex items-center gap-2"
-                    >
-                        <Download size={16} weight="bold" /> Download Sample Template (.xlsx)
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => handleDownload('/api/bb/help/documentation/xlsx', 'BluBridge-Documentation.xlsx')}
+                            data-testid="help-download-xlsx-btn"
+                            className="px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold flex items-center gap-2"
+                        >
+                            <FileXls size={16} weight="duotone" /> Full Documentation (.xlsx)
+                        </button>
+                        <button
+                            onClick={() => handleDownload('/api/bb/help/documentation/docx', 'BluBridge-Documentation.docx')}
+                            data-testid="help-download-docx-btn"
+                            className="px-4 py-2.5 rounded-lg bg-[#1d3a8a] hover:bg-[#162d6e] text-white text-sm font-semibold flex items-center gap-2"
+                        >
+                            <FileDoc size={16} weight="duotone" /> Full Documentation (.docx)
+                        </button>
+                    </div>
                 </div>
             </header>
 
@@ -156,6 +166,25 @@ export default function Help() {
                     {active ? <ModuleDetail mod={active} onDownload={handleDownload} /> : (
                         <div className="bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl p-10 text-center text-[#9b9787]">
                             Select a module from the left to view its guide.
+                        </div>
+                    )}
+
+                    {/* What's New */}
+                    {manifest?.whats_new?.length > 0 && (
+                        <div className="bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl p-6" data-testid="help-whats-new">
+                            <div className="flex items-center gap-2 mb-4">
+                                <Sparkle size={18} weight="duotone" className="text-amber-600" />
+                                <h2 className="text-base font-semibold text-[#1a2332]">What's New</h2>
+                                <span className="ml-auto text-[10px] font-semibold tracking-[0.16em] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full uppercase">iter67</span>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                {manifest.whats_new.map((w, i) => (
+                                    <div key={i} className="bg-amber-50/40 border border-amber-100 rounded-lg px-3 py-2 text-sm">
+                                        <p className="font-semibold text-[#1a2332]">{w.item}</p>
+                                        <p className="text-[#3f4655] text-[12px] leading-relaxed mt-0.5">{w.desc}</p>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     )}
 
