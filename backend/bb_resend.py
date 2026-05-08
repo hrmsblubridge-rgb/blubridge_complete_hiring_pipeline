@@ -26,7 +26,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from messaging import send_whatsapp, is_allowed_recipient, FRONTEND_URL
+from messaging import send_whatsapp, can_send_message, FRONTEND_URL
 
 _logger = logging.getLogger("bb_resend")
 
@@ -535,9 +535,10 @@ async def _send_one(row: dict, user: str, upload_id: str) -> Tuple[str, Optional
     if not schedule_link:
         return "failed", "Schedule link missing"
 
-    # ---- Allowlist check (informational; send_whatsapp also enforces) ----
-    if not is_allowed_recipient(email, phone):
-        return "blocked", "Recipient not on allowlist"
+    # ---- TEST_MODE gate (informational; send_whatsapp also enforces) ----
+    allowed, reason = await can_send_message(email, phone)
+    if not allowed:
+        return "blocked", f"Recipient blocked by gate ({reason})"
 
     formatted_date = _fmt_date(sched.get("schedule_date"))
     formatted_time = _fmt_time(sched.get("schedule_time"))

@@ -60,9 +60,10 @@ export default function ManualAlerts() {
                 { withCredentials: true }
             );
             if (r.data?.success) toast.success(`${btn.label} — sent`);
-            else toast.error(`${btn.label} — failed (allowlist or messaging error)`);
+            else toast.error(`${btn.label} — failed`);
         } catch (e) {
-            toast.error(e.response?.data?.detail || `${btn.label} failed`);
+            const detail = e.response?.data?.detail || `${btn.label} failed`;
+            toast.error(detail);
         } finally { setSending(''); }
     };
 
@@ -149,7 +150,7 @@ export default function ManualAlerts() {
                             ))}
                         </div>
                         <p className="text-[11px] text-[#9b9787] mt-3 leading-relaxed">
-                            ⓘ Manual alerts bypass the global allowlist and send to the actual applicant email/phone shown above. Success is reported only when at least one channel (WhatsApp / Email) succeeds.
+                            ⓘ Outbound messages obey the global TEST MODE gate. While TEST MODE is ON, sends succeed only when the recipient (email OR phone) is on the Tester Credentials list. Add testers in the <strong>Tester Credentials</strong> page; failures here mean the candidate is not yet a tester.
                         </p>
                     </div>
                 )}

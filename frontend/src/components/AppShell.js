@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import {
     SquaresFour, ChartBar, FileText, CalendarCheck, PencilLine, Table,
@@ -7,6 +8,8 @@ import {
     ShieldCheck, SignOut, List, X, UserCircle, WhatsappLogo, Question,
     EnvelopeSimple, Flask,
 } from '@phosphor-icons/react';
+
+const API = process.env.REACT_APP_BACKEND_URL;
 
 const NAV = [
     { label: 'Modules', icon: SquaresFour, path: '/home' },
@@ -32,6 +35,15 @@ export default function AppShell({ children }) {
     const { user, logout } = useAuth();
     const navigate = useNavigate();
     const [open, setOpen] = useState(false);
+    const [testMode, setTestMode] = useState(null);
+
+    useEffect(() => {
+        let mounted = true;
+        axios.get(`${API}/api/messaging/status`, { withCredentials: true })
+            .then((r) => { if (mounted) setTestMode(!!r.data?.test_mode); })
+            .catch(() => { if (mounted) setTestMode(null); });
+        return () => { mounted = false; };
+    }, []);
 
     const handleLogout = async () => {
         await logout();
@@ -120,6 +132,15 @@ export default function AppShell({ children }) {
 
             {/* Main content */}
             <div className="lg:pl-[260px] min-h-screen">
+                {testMode === true && (
+                    <div
+                        className="sticky top-0 z-30 w-full bg-amber-100 border-b border-amber-300 text-amber-900 text-[12px] font-semibold py-1.5 px-4 flex items-center justify-center gap-2"
+                        data-testid="test-mode-banner"
+                    >
+                        <Flask size={14} weight="fill" />
+                        TEST MODE ACTIVE — outbound WhatsApp / Email is delivered only to recipients on the Tester Credentials list.
+                    </div>
+                )}
                 {children}
             </div>
         </div>

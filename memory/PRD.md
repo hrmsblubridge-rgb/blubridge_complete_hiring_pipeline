@@ -45,6 +45,16 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter69)** — Centralized TEST MODE gate (single source of truth):
+  - **NEW: `messaging.can_send_message(email, phone)`** is now the only gate. When `TEST_MODE=true` (default — fail-safe), a recipient is allowed iff their email OR phone exists in the live `bb_test_credentials` collection (managed via the Tester Credentials admin UI). When `TEST_MODE=false` it always returns allowed (production). NO auto-substitution — actual recipient is used as-is or blocked.
+  - **Removed**: hard-coded `_ALLOWED_PAIRS` static allowlist, `_resolve_recipient` test-route override, the `bypass_allowlist` parameter, and the `TEST_PHONE` / `TEST_EMAIL` / `FORCE_TEST_MODE` env vars (dead code paths). `is_allowed_recipient` is kept only as a deprecated stub.
+  - **Wired** `init_messaging(db)` at server startup; default testers (`rishi.nayak@blubridge.com`, `rajlearn@gmail.com`) seeded eagerly on startup so the gate has a non-empty allowlist on first boot. Logs `[TEST_MODE] is_on=True testers_in_db=2`.
+  - **Migrated callers**: `bb_manual.py`, `bb_resend.py`, `bb_modules.py` (cooldown bypass) all use `can_send_message` / `bb_test_credentials` directly.
+  - **New endpoint** `GET /api/messaging/status` → `{test_mode: bool}` powering the **amber "TEST MODE ACTIVE" banner** rendered globally in `AppShell.js` for any authenticated page.
+  - **Logs every decision**: `[Gate:WA]` / `[Gate:Email]` lines record `test_mode`, `allowed`, `reason` (codes: `production` | `test_mode:tester_allowed` | `blocked:test_mode:not_in_testers` | `blocked:test_mode:empty_recipient`).
+  - **Verified live**: tester `rajlearn@gmail.com / 8883847098` → WhatsApp 200 + Email SENT. Non-tester `aashoksai306@gmail.com / 9500557167` → blocked, gate logs `reason=blocked:test_mode:not_in_testers`, UI gets HTTP 502 (no false success).
+  - **Disabling TEST_MODE** is now a manual ops decision: edit `/app/backend/.env` (`TEST_MODE=false`) and `sudo supervisorctl restart backend`. No code path turns it off automatically.
+
 - **Feb 2026 (iter68)** — Manual flows hardened (no destructive DB updates):
   - **Manual Applicant Alerts** now actually send to the real applicant. Added `bypass_allowlist` flag on `messaging.send_whatsapp` / `send_email` (default False — automated flows still gated). All 5 high-level `notify_*` functions accept and propagate the flag and now return `(wa_ok, em_ok)` tuples. `bb_manual.py` alert handlers pass `bypass_allowlist=True`, log recipient + channel results, and raise HTTP 502 (truthful failure) when both channels fail. UI no longer shows false success.
   - **Manual OTP Verify** turned into a 2-step flow. New lookup payload exposes `schedule_date_iso` (`%Y-%m-%d`) + `interview_status` ('today' | 'past' | 'future' | 'unknown') computed against LOCAL SYSTEM DATE (date-only compare, ignores time). Frontend conditionally renders Verify button only on `today` / `unknown`; shows "Your interview is over !" (past) / "Your interview is in future !" (future). Backend `/manual/otp/verify` enforces the same guard server-side (HTTP 400) so UI bypass is impossible.

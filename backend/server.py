@@ -2932,9 +2932,19 @@ from bb_help import help_router
 app.include_router(help_router)
 
 # Include Manual Operations module (iter67)
-from bb_manual import manual_router, init_manual
+from bb_manual import manual_router, init_manual, _ensure_default_test_credentials
 init_manual(db, get_current_user)
 app.include_router(manual_router)
+
+# Wire centralized messaging gate (TEST_MODE → bb_test_credentials lookup)
+from messaging import init_messaging, is_test_mode
+init_messaging(db)
+
+
+@app.get("/api/messaging/status")
+async def messaging_status(user: str = Depends(get_current_user)):
+    """Surface the current TEST_MODE status to the UI banner."""
+    return {"test_mode": is_test_mode()}
 
 # CORS Configuration
 app.add_middleware(
@@ -3048,6 +3058,15 @@ async def startup_event():
             f.write("- Password: `Admin User`\n")
     except Exception as e:
         logger.error(f"Failed to write test credentials: {e}")
+
+    # iter68 — Seed default tester credentials BEFORE messaging workers start
+    # so the centralized TEST_MODE gate has a non-empty allow list on first run.
+    try:
+        await _ensure_default_test_credentials()
+        count = await db.bb_test_credentials.count_documents({})
+        logger.info(f"[TEST_MODE] is_on={is_test_mode()} testers_in_db={count}")
+    except Exception as e:
+        logger.error(f"Failed to seed default tester credentials: {e}")
 
     # Start persistent background queue worker
     asyncio.create_task(_bg_queue_worker())

@@ -1,5 +1,9 @@
 """Centralized messaging service — WhatsApp (AiSensy) + Email (SMTP).
-All recipient overrides for TEST_MODE happen HERE and only here."""
+
+Single source of truth for the outbound gate (TEST_MODE). NEVER call AiSensy
+or SMTP directly from anywhere else — always go through `send_whatsapp` /
+`send_email` so the test-mode rules are enforced uniformly.
+"""
 
 import os
 import logging
@@ -29,15 +33,32 @@ def _is_enabled(flag: str) -> bool:
     return os.environ.get(flag, "false").lower() == "true"
 
 
-# ============ STRICT ALLOWLIST ============
-# Hard gate applied to every WhatsApp + Email send. Blocks messages to any
-# recipient whose (email, phone) pair does not match one of the allowed pairs.
-# The caller's email AND phone must BOTH match a single pair. No fallback,
-# no auto-replacement. Blocked attempts are logged at INFO level.
-_ALLOWED_PAIRS = (
-    ("rishi.nayak@blubridge.com", "9443109903"),
-    ("rajlearn@gmail.com", "8883847098"),
-)
+# ============ TEST MODE GATE (single source of truth) ============
+# When TEST_MODE=true (default — fail-safe), the only recipients that may
+# receive WhatsApp/Email are those whose email OR phone exists in the
+# `bb_test_credentials` collection (managed via the Tester Credentials admin
+# UI). The actual recipient is used as-is; we NEVER auto-substitute another
+# tester's contact info.
+#
+# When TEST_MODE=false (production), the gate is open — every send goes to
+# the real recipient.
+#
+# Disabling TEST_MODE is a manual ops decision: edit /app/backend/.env and
+# restart the backend. There is NO code path that turns it off automatically.
+
+_db = None  # injected by server.py via init_messaging(db) at startup
+
+
+def init_messaging(db):
+    """Wire the Mongo handle so `can_send_message` can read tester credentials."""
+    global _db
+    _db = db
+
+
+def is_test_mode() -> bool:
+    """Default TRUE — fail-safe. Only `TEST_MODE=false` (case-insensitive)
+    in /app/backend/.env disables test mode."""
+    return os.environ.get("TEST_MODE", "true").strip().lower() == "true"
 
 
 def _norm_email(v: str) -> str:
@@ -46,61 +67,70 @@ def _norm_email(v: str) -> str:
 
 def _norm_phone(v: str) -> str:
     digits = "".join(ch for ch in (v or "") if ch.isdigit())
-    # Normalise to last 10 digits (strip "91" / "+91" country code)
     if len(digits) > 10:
         digits = digits[-10:]
     return digits
 
 
-def is_allowed_recipient(email: str, phone: str) -> bool:
-    """True iff (email, phone) exactly matches one allowlisted pair."""
+async def can_send_message(email: str, phone: str) -> tuple:
+    """Central messaging gate. Returns `(allowed: bool, reason: str)`.
+
+    TEST_MODE=true  → allowed only if (email OR phone) exists in bb_test_credentials.
+    TEST_MODE=false → always allowed (production).
+
+    Reason codes:
+      - "production"                       : test mode off
+      - "test_mode:tester_allowed"         : recipient matched a tester row
+      - "blocked:test_mode:not_in_testers" : recipient not in tester list
+      - "blocked:test_mode:empty_recipient": both email and phone blank
+      - "blocked:test_mode:db_not_initialized" : startup race (unexpected)
+    """
+    if not is_test_mode():
+        return True, "production"
     e = _norm_email(email)
     p = _norm_phone(phone)
-    for a_email, a_phone in _ALLOWED_PAIRS:
-        if e == _norm_email(a_email) and p == _norm_phone(a_phone):
-            return True
+    if not (e or p):
+        return False, "blocked:test_mode:empty_recipient"
+    if _db is None:
+        return False, "blocked:test_mode:db_not_initialized"
+    clauses = []
+    if e:
+        clauses.append({"email": e})
+    if p:
+        clauses.append({"phone": p})
+    doc = await _db.bb_test_credentials.find_one({"$or": clauses}, {"_id": 1})
+    if doc:
+        return True, "test_mode:tester_allowed"
+    return False, "blocked:test_mode:not_in_testers"
+
+
+# Deprecated — retained only because two legacy callers (bb_resend, bb_modules)
+# imported the symbol. Both now use `can_send_message` instead.
+def is_allowed_recipient(email: str, phone: str) -> bool:
+    """DEPRECATED. Always returns False. Use `can_send_message` (async) instead."""
+    _logger.warning("is_allowed_recipient() is deprecated — use can_send_message()")
     return False
-
-
-def _resolve_recipient(phone: str, email: str, is_test: bool = False) -> tuple:
-    """Resolve real vs test recipient.
-
-    Test override triggers ONLY when:
-      - the record/caller passes `is_test=True`, OR
-      - env FORCE_TEST_MODE=true (emergency kill-switch).
-
-    Previously TEST_MODE=true re-routed ALL messages — causing real applicants
-    to never receive their own communications. That behaviour is now opt-in
-    per-record only.
-    """
-    if is_test or _is_enabled("FORCE_TEST_MODE"):
-        test_phone = os.environ.get("TEST_PHONE", "9443109903")
-        test_email = os.environ.get("TEST_EMAIL", "rishi.nayak@blubridge.com")
-        _logger.info(f"[TEST_ROUTE] Overriding: phone={phone}->{test_phone}, email={email}->{test_email}")
-        return test_phone, test_email
-    return phone, email
 
 
 # ============ WHATSAPP (AiSensy) ============
 
-async def send_whatsapp(campaign_name: str, phone: str, email: str, template_params: list, is_test: bool = False, bypass_allowlist: bool = False):
+async def send_whatsapp(campaign_name: str, phone: str, email: str, template_params: list, is_test: bool = False):
     """Send WhatsApp via AiSensy API. Returns True on success.
-    `is_test=True` re-routes the message to TEST_PHONE (dev/test records only).
-    `bypass_allowlist=True` is reserved for admin-initiated manual alerts where
-    the recipient is explicitly entered by an authenticated operator. Automated
-    pipeline workers must NEVER set this flag."""
-    _logger.info(f"[Send:WA] campaign={campaign_name} email={email} phone={phone} bypass_allowlist={bypass_allowlist}")
-    # ── STRICT ALLOWLIST GATE (skipped only for manual admin triggers) ──
-    if not bypass_allowlist and not is_allowed_recipient(email, phone):
-        _logger.info(f"[ALLOWLIST:BLOCK] WhatsApp campaign={campaign_name} phone={phone} email={email} — recipient not on allowlist")
+    `is_test` is accepted for backward compatibility but is ignored — gating
+    is centralised in `can_send_message`."""
+    allowed, reason = await can_send_message(email, phone)
+    _logger.info(
+        f"[Gate:WA] campaign={campaign_name} email={email} phone={phone} "
+        f"test_mode={is_test_mode()} allowed={allowed} reason={reason}"
+    )
+    if not allowed:
         return False
 
     if not _is_enabled("ENABLE_WHATSAPP"):
         _logger.info(f"[SKIP] WhatsApp disabled: campaign={campaign_name}")
         return False
 
-    safe_phone, _ = _resolve_recipient(phone, email, is_test=is_test)
-    # Ensure 91 prefix for Indian numbers
+    safe_phone = _norm_phone(phone)
     if len(safe_phone) == 10:
         safe_phone = "91" + safe_phone
 
@@ -131,38 +161,37 @@ async def send_whatsapp(campaign_name: str, phone: str, email: str, template_par
 
 # ============ EMAIL (SMTP) ============
 
-async def send_email(to_email: str, phone: str, subject: str, html_body: str, is_test: bool = False, bypass_allowlist: bool = False):
+async def send_email(to_email: str, phone: str, subject: str, html_body: str, is_test: bool = False):
     """Send email via SMTP SSL. Returns True on success.
-    `is_test=True` re-routes the message to TEST_EMAIL (dev/test records only).
-    `bypass_allowlist=True` is reserved for admin-initiated manual alerts (see
-    `send_whatsapp` for the same caveat)."""
-    _logger.info(f"[Send:Email] subject={subject!r} email={to_email} phone={phone} bypass_allowlist={bypass_allowlist}")
-    # ── STRICT ALLOWLIST GATE (skipped only for manual admin triggers) ──
-    if not bypass_allowlist and not is_allowed_recipient(to_email, phone):
-        _logger.info(f"[ALLOWLIST:BLOCK] Email subject={subject!r} phone={phone} email={to_email} — recipient not on allowlist")
+    `is_test` is accepted for backward compatibility but is ignored — gating
+    is centralised in `can_send_message`."""
+    allowed, reason = await can_send_message(to_email, phone)
+    _logger.info(
+        f"[Gate:Email] subject={subject!r} email={to_email} phone={phone} "
+        f"test_mode={is_test_mode()} allowed={allowed} reason={reason}"
+    )
+    if not allowed:
         return False
 
     if not _is_enabled("ENABLE_EMAIL"):
         _logger.info(f"[SKIP] Email disabled: to={to_email}, subject={subject}")
         return False
 
-    _, safe_email = _resolve_recipient(phone, to_email, is_test=is_test)
-
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"] = FROM_EMAIL
-        msg["To"] = safe_email
+        msg["To"] = to_email
         msg.attach(MIMEText(html_body, "html"))
 
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=15) as server:
             server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(FROM_EMAIL, safe_email, msg.as_string())
-        _logger.info(f"[Email] SENT to={safe_email} subject={subject}")
+            server.sendmail(FROM_EMAIL, to_email, msg.as_string())
+        _logger.info(f"[Email] SENT to={to_email} subject={subject}")
         return True
     except Exception as e:
-        _logger.error(f"[Email] FAILED to={safe_email} subject={subject}: {e}")
+        _logger.error(f"[Email] FAILED to={to_email} subject={subject}: {e}")
         return False
 
 
@@ -173,13 +202,13 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str, is
 FRONTEND_URL = os.environ["FRONTEND_URL"]
 
 
-async def notify_shortlisted(name: str, phone: str, email: str, schedule_token: str, is_test: bool = False, bypass_allowlist: bool = False):
+async def notify_shortlisted(name: str, phone: str, email: str, schedule_token: str, is_test: bool = False):
     """Send shortlist notification with schedule link via WhatsApp + Email.
     Returns (wa_ok, em_ok)."""
     schedule_link = f"{FRONTEND_URL}/schedule-interview/{schedule_token}"
 
     # WhatsApp: ShortList campaign
-    wa_ok = await send_whatsapp("ShortList", phone, email, [name, schedule_link], is_test=is_test, bypass_allowlist=bypass_allowlist)
+    wa_ok = await send_whatsapp("ShortList", phone, email, [name, schedule_link], is_test=is_test)
 
     # Email
     html = f"""
@@ -190,13 +219,13 @@ async def notify_shortlisted(name: str, phone: str, email: str, schedule_token: 
     <p>We look forward to our discussion and exploring how you can contribute to our team's research efforts.</p>
     <p>Best regards,<br>Blubridge Technologies</p>
     """
-    em_ok = await send_email(email, phone, "You're Shortlisted! Schedule Your Interview - Blubridge", html, is_test=is_test, bypass_allowlist=bypass_allowlist)
+    em_ok = await send_email(email, phone, "You're Shortlisted! Schedule Your Interview - Blubridge", html, is_test=is_test)
     return wa_ok, em_ok
 
 
-async def notify_rejected(name: str, phone: str, email: str, is_test: bool = False, bypass_allowlist: bool = False):
+async def notify_rejected(name: str, phone: str, email: str, is_test: bool = False):
     """Send rejection notification via WhatsApp + Email. Returns True if at least one channel succeeded."""
-    wa_ok = await send_whatsapp("Reject", phone, email, [], is_test=is_test, bypass_allowlist=bypass_allowlist)
+    wa_ok = await send_whatsapp("Reject", phone, email, [], is_test=is_test)
     html = f"""
     <p>Dear {name},</p>
     <p>Thank you for your time and effort in completing our registration form.</p>
@@ -205,7 +234,7 @@ async def notify_rejected(name: str, phone: str, email: str, is_test: bool = Fal
     <p>Wishing you the best in your future endeavours!</p>
     <p>Warm regards,<br>Blubridge Technologies</p>
     """
-    em_ok = await send_email(email, phone, "Application Update - Blubridge Technologies", html, is_test=is_test, bypass_allowlist=bypass_allowlist)
+    em_ok = await send_email(email, phone, "Application Update - Blubridge Technologies", html, is_test=is_test)
     return bool(wa_ok or em_ok)
 
 
@@ -259,9 +288,9 @@ async def notify_rejected_with_reason(
     return bool(wa_ok or em_ok)
 
 
-async def notify_schedule_confirmation(name: str, phone: str, email: str, date: str, time: str, is_test: bool = False, bypass_allowlist: bool = False):
+async def notify_schedule_confirmation(name: str, phone: str, email: str, date: str, time: str, is_test: bool = False):
     """Send schedule confirmation via WhatsApp + Email. Returns (wa_ok, em_ok)."""
-    wa_ok = await send_whatsapp("Schedule Detail", phone, email, [name, date, time, OFFICE_LOCATION], is_test=is_test, bypass_allowlist=bypass_allowlist)
+    wa_ok = await send_whatsapp("Schedule Detail", phone, email, [name, date, time, OFFICE_LOCATION], is_test=is_test)
     html = f"""
     <p>Hi {name},</p>
     <p>Thank you for scheduling your interview with Blubridge Technologies. Your interview details are confirmed as follows:</p>
@@ -269,13 +298,13 @@ async def notify_schedule_confirmation(name: str, phone: str, email: str, date: 
     <p>We look forward to meeting you.</p>
     <p>Best regards,<br>Blubridge Technologies</p>
     """
-    em_ok = await send_email(email, phone, "Interview Scheduled - Blubridge Technologies", html, is_test=is_test, bypass_allowlist=bypass_allowlist)
+    em_ok = await send_email(email, phone, "Interview Scheduled - Blubridge Technologies", html, is_test=is_test)
     return wa_ok, em_ok
 
 
-async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str, date: str, time: str, is_test: bool = False, bypass_allowlist: bool = False):
+async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str, date: str, time: str, is_test: bool = False):
     """Send OTP notification via WhatsApp + Email. Returns (wa_ok, em_ok)."""
-    wa_ok = await send_whatsapp("OTP With Job", phone, email, [name, job_role, otp, phone, date, time, OFFICE_LOCATION], is_test=is_test, bypass_allowlist=bypass_allowlist)
+    wa_ok = await send_whatsapp("OTP With Job", phone, email, [name, job_role, otp, phone, date, time, OFFICE_LOCATION], is_test=is_test)
     html = f"""
     <p>Hi {name},</p>
     <p>Your One-Time Password (OTP) to confirm your interview attendance at Blubridge Technologies is:</p>
@@ -287,11 +316,11 @@ async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str,
     <p>Looking forward to seeing you soon!</p>
     <p>Best regards,<br>Blubridge Recruitment Team</p>
     """
-    em_ok = await send_email(email, phone, f"Your Interview OTP - Blubridge Technologies", html, is_test=is_test, bypass_allowlist=bypass_allowlist)
+    em_ok = await send_email(email, phone, f"Your Interview OTP - Blubridge Technologies", html, is_test=is_test)
     return wa_ok, em_ok
 
 
-async def notify_missed_reminder(name: str, phone: str, email: str, role: str, date: str, time: str, schedule_token: str, is_test: bool = False, bypass_allowlist: bool = False):
+async def notify_missed_reminder(name: str, phone: str, email: str, role: str, date: str, time: str, schedule_token: str, is_test: bool = False):
     """Send missed interview reminder with reschedule link.
     Returns (wa_ok, em_ok).
 
@@ -303,7 +332,7 @@ async def notify_missed_reminder(name: str, phone: str, email: str, role: str, d
     wa_ok = await send_whatsapp(
         "Candidate FollowUp", phone, email,
         [name, role, date, time, schedule_link],
-        is_test=is_test, bypass_allowlist=bypass_allowlist,
+        is_test=is_test,
     )
     html = f"""
     <p>Hi {name},</p>
@@ -314,7 +343,7 @@ async def notify_missed_reminder(name: str, phone: str, email: str, role: str, d
     <p>Rescheduling is subject to available slots.</p>
     <p>Warm regards,<br>Blubridge Recruitment Team</p>
     """
-    em_ok = await send_email(email, phone, "Missed Interview - Reschedule Opportunity - Blubridge", html, is_test=is_test, bypass_allowlist=bypass_allowlist)
+    em_ok = await send_email(email, phone, "Missed Interview - Reschedule Opportunity - Blubridge", html, is_test=is_test)
     return wa_ok, em_ok
 
 

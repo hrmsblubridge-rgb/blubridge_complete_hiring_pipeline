@@ -3299,22 +3299,14 @@ async def register_applicant(data: RegistrationBody):
     phone_norm = re.sub(r'[^\d]', '', (data.phone or "").strip())
     if len(phone_norm) > 10:
         phone_norm = phone_norm[-10:]
-    # Iter51 — bypass cooldown for the messaging-allowlist test pairs so the
-    # team can run end-to-end QA without manually purging records each cycle.
-    # Uses the same `is_allowed_recipient` pair-check used by messaging.py
-    # (BOTH email AND phone must match a single allowed pair).
-    # iter67 — TESTER CREDENTIALS BYPASS (#5): cooldown is also skipped when
-    # the email OR phone matches an entry in bb_test_credentials. This lets the
-    # team manage QA recipients via the Tester Credentials UI without code
-    # changes. The hard-coded `is_allowed_recipient` allowlist (messaging.py)
-    # remains the source of truth for OUTBOUND message gating.
-    from messaging import is_allowed_recipient as _is_allowed_test_user
-    bypass = _is_allowed_test_user(email_norm, phone_norm)
-    if not bypass:
-        tc = await _db.bb_test_credentials.find_one(
-            {"$or": [{"email": email_norm}, {"phone": phone_norm}]}
-        )
-        bypass = bool(tc)
+    # iter68 — Cooldown bypass: skip the 4-month re-registration block when
+    # the email OR phone matches an entry in `bb_test_credentials` (managed via
+    # the Tester Credentials admin UI). This is the same DB-driven list that
+    # the messaging gate (`messaging.can_send_message`) consults under TEST_MODE.
+    tc = await _db.bb_test_credentials.find_one(
+        {"$or": [{"email": email_norm}, {"phone": phone_norm}]}
+    )
+    bypass = bool(tc)
     if bypass:
         _logger.info(
             f"[Cooldown] BYPASS for tester email={email_norm} phone={phone_norm}"

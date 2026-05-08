@@ -28,7 +28,6 @@ from messaging import (
     notify_otp,
     notify_missed_reminder,
     notify_rejected,
-    is_allowed_recipient,
 )
 
 _logger = logging.getLogger("bb_manual")
@@ -216,7 +215,7 @@ async def alert_send_shortlist(body: AlertSendBody, request: Request):
     to_phone = rec.get("phone") or ""
     _logger.info(f"[ManualAlerts:shortlist] by={user} → email={to_email} phone={to_phone}")
     wa_ok, em_ok = await notify_shortlisted(
-        rec.get("name") or "", to_phone, to_email, token, bypass_allowlist=True,
+        rec.get("name") or "", to_phone, to_email, token,
     )
     success = bool(wa_ok or em_ok)
     if not success:
@@ -236,7 +235,7 @@ async def alert_send_schedule_detail(body: AlertSendBody, request: Request):
     to_phone = rec.get("phone") or ""
     _logger.info(f"[ManualAlerts:schedule_detail] by={user} → email={to_email} phone={to_phone}")
     wa_ok, em_ok = await notify_schedule_confirmation(
-        rec.get("name") or "", to_phone, to_email, date, time, bypass_allowlist=True,
+        rec.get("name") or "", to_phone, to_email, date, time,
     )
     success = bool(wa_ok or em_ok)
     if not success:
@@ -264,7 +263,6 @@ async def alert_send_otp(body: AlertSendBody, request: Request):
         otp,
         rec.get("schedule_date") or "",
         rec.get("schedule_time") or "",
-        bypass_allowlist=True,
     )
     success = bool(wa_ok or em_ok)
     if not success:
@@ -286,7 +284,6 @@ async def alert_send_followup(body: AlertSendBody, request: Request):
         rec.get("schedule_date") or "",
         rec.get("schedule_time") or "",
         token,
-        bypass_allowlist=True,
     )
     success = bool(wa_ok or em_ok)
     if not success:
@@ -302,7 +299,7 @@ async def alert_send_reject(body: AlertSendBody, request: Request):
     to_phone = rec.get("phone") or ""
     _logger.info(f"[ManualAlerts:reject] by={user} → email={to_email} phone={to_phone}")
     ok = await notify_rejected(
-        rec.get("name") or "", to_phone, to_email, bypass_allowlist=True,
+        rec.get("name") or "", to_phone, to_email,
     )
     if not ok:
         raise HTTPException(502, "Failed to send via WhatsApp and Email — check messaging credentials/logs")
