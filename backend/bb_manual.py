@@ -1,0 +1,366 @@
+"""
+Manual Operations module (iter67)
+=================================
+Provides three admin-driven flows that complement the automated pipeline:
+
+  • Manual Applicant Alerts (#2) — search by email+phone → re-fire any of the
+    5 messaging templates (shortlist, schedule detail, OTP, follow-up, reject).
+  • Manual OTP Verify (#4)      — set otp_verified=1 on a matched record.
+  • Tester Credentials (#5)     — manage `bb_test_credentials` (email OR phone
+    match → cooldown bypass on registration form).
+
+All three reuse the existing `messaging.py` allowlist + AiSensy/SMTP clients.
+No new outbound channels, no destructive DB updates.
+"""
+import logging
+import uuid
+import secrets
+from typing import Optional, List
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, HTTPException, Request, Depends, Query
+from pydantic import BaseModel, EmailStr
+from motor.motor_asyncio import AsyncIOMotorDatabase
+
+from messaging import (
+    notify_shortlisted,
+    notify_schedule_confirmation,
+    notify_otp,
+    notify_missed_reminder,
+    notify_rejected,
+    is_allowed_recipient,
+)
+
+_logger = logging.getLogger("bb_manual")
+
+manual_router = APIRouter(prefix="/api/bb/manual", tags=["ManualOps"])
+
+_db: Optional[AsyncIOMotorDatabase] = None
+_get_user = None
+
+
+def init_manual(db: AsyncIOMotorDatabase, get_user_dep):
+    global _db, _get_user
+    _db = db
+    _get_user = get_user_dep
+
+
+# ---------- helpers ----------
+def _norm_email(v) -> str:
+    return (v or "").strip().lower()
+
+
+def _norm_phone(v) -> str:
+    digits = "".join(ch for ch in str(v or "") if ch.isdigit())
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
+async def _find_applicant(email: str, phone: str) -> Optional[dict]:
+    """Find pipeline_data record by email OR phone (last 10 digits match)."""
+    e = _norm_email(email)
+    p = _norm_phone(phone)
+    if not (e or p):
+        return None
+    import re
+    clauses = []
+    if e:
+        clauses.append({"email": e})
+    if p:
+        clauses.append({"phone": {"$regex": f"{re.escape(p)}$"}})
+    return await _db.pipeline_data.find_one({"$or": clauses}, {"_id": 0})
+
+
+async def _ensure_default_test_credentials():
+    """Seed the two default tester rows on first call (idempotent)."""
+    defaults = [
+        {"email": "rishi.nayak@blubridge.com", "phone": "9443109903"},
+        {"email": "rajlearn@gmail.com",        "phone": "8883847098"},
+    ]
+    for d in defaults:
+        existing = await _db.bb_test_credentials.find_one(
+            {"$or": [{"email": d["email"]}, {"phone": d["phone"]}]}
+        )
+        if not existing:
+            await _db.bb_test_credentials.insert_one({
+                "id": uuid.uuid4().hex,
+                "email": d["email"],
+                "phone": d["phone"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "is_default": True,
+            })
+
+
+# ===========================================================================
+# Module #2 — Manual Applicant Alerts
+# ===========================================================================
+class AlertSendBody(BaseModel):
+    email: str
+    phone: str
+
+
+@manual_router.get("/applicant/lookup")
+async def lookup_applicant(request: Request, email: Optional[str] = None, phone: Optional[str] = None):
+    await _get_user(request)
+    if not (email or phone):
+        raise HTTPException(400, "email or phone required")
+    rec = await _find_applicant(email or "", phone or "")
+    if not rec:
+        raise HTTPException(404, "Applicant not found in pipeline_data")
+    # Surface the fields the UI needs (drop legacy/internal-only keys).
+    return {
+        "name":            rec.get("name") or "",
+        "email":           rec.get("email") or "",
+        "phone":           rec.get("phone") or "",
+        "job_role":        rec.get("job_role") or rec.get("job_title") or "",
+        "college_type":    rec.get("college_type") or "",
+        "college":         rec.get("college") or "",
+        "degree":          rec.get("degree") or "",
+        "course":          rec.get("course") or "",
+        "year_of_graduation": rec.get("year_of_graduation") or "",
+        "schedule_date":   rec.get("schedule_date") or "",
+        "schedule_time":   rec.get("schedule_time") or "",
+        "registered_status": rec.get("status") or rec.get("registered_status") or "",
+        "attended":        bool(rec.get("otp_verified")),
+        "result_status":   rec.get("result_status") or "",
+        "hr_team":         rec.get("hr_team") or "",
+        "otp":             rec.get("otp") or "",
+        "otp_verified":    bool(rec.get("otp_verified")),
+    }
+
+
+async def _resolve_or_404(email: str, phone: str) -> dict:
+    rec = await _find_applicant(email, phone)
+    if not rec:
+        raise HTTPException(404, "Applicant not found")
+    return rec
+
+
+async def _ensure_schedule_token(rec: dict) -> str:
+    """Re-use bb_registrations token if present; else mint and persist one."""
+    e = _norm_email(rec.get("email"))
+    p = _norm_phone(rec.get("phone"))
+    if e or p:
+        clauses = []
+        if e:
+            clauses.append({"email": e})
+        if p:
+            import re
+            clauses.append({"phone": {"$regex": f"{re.escape(p)}$"}})
+        reg = await _db.bb_registrations.find_one(
+            {"$or": clauses, "schedule_token": {"$exists": True, "$ne": ""}},
+            {"_id": 0, "schedule_token": 1},
+            sort=[("schedule_date", -1)],
+        )
+        if reg and reg.get("schedule_token"):
+            return reg["schedule_token"]
+
+    token = uuid.uuid4().hex
+    await _db.bb_registrations.insert_one({
+        "name": rec.get("name") or "",
+        "email": e,
+        "phone": p,
+        "job_role": rec.get("job_role") or rec.get("job_title") or "",
+        "schedule_date": rec.get("schedule_date") or "",
+        "schedule_time": rec.get("schedule_time") or "",
+        "schedule_token": token,
+        "status": "Scheduled",
+        "reschedule_count": 0,
+        "created_via": "manual_alerts_module",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return token
+
+
+@manual_router.post("/alerts/send-shortlist")
+async def alert_send_shortlist(body: AlertSendBody, request: Request):
+    user = await _get_user(request)
+    rec = await _resolve_or_404(body.email, body.phone)
+    token = await _ensure_schedule_token(rec)
+    await notify_shortlisted(rec.get("name") or "", rec.get("phone") or "", rec.get("email") or "", token)
+    _logger.info(f"[ManualAlerts:shortlist] by={user} → {rec.get('email')}")
+    return {"success": True, "action": "shortlist", "to": rec.get("email")}
+
+
+@manual_router.post("/alerts/send-schedule-detail")
+async def alert_send_schedule_detail(body: AlertSendBody, request: Request):
+    user = await _get_user(request)
+    rec = await _resolve_or_404(body.email, body.phone)
+    date = rec.get("schedule_date") or ""
+    time = rec.get("schedule_time") or ""
+    if not (date and time):
+        raise HTTPException(400, "Applicant has no schedule_date / schedule_time")
+    await notify_schedule_confirmation(rec.get("name") or "", rec.get("phone") or "", rec.get("email") or "", date, time)
+    _logger.info(f"[ManualAlerts:schedule_detail] by={user} → {rec.get('email')}")
+    return {"success": True, "action": "schedule_detail", "to": rec.get("email")}
+
+
+@manual_router.post("/alerts/send-otp")
+async def alert_send_otp(body: AlertSendBody, request: Request):
+    user = await _get_user(request)
+    rec = await _resolve_or_404(body.email, body.phone)
+    otp = (rec.get("otp") or "").strip()
+    if not otp:
+        otp = "".join(secrets.choice("0123456789") for _ in range(6))
+        await _db.pipeline_data.update_one(
+            {"email": rec.get("email"), "phone": rec.get("phone")},
+            {"$set": {"otp": otp, "otp_sent_at": datetime.now(timezone.utc).isoformat()}}
+        )
+    await notify_otp(
+        rec.get("name") or "", rec.get("phone") or "", rec.get("email") or "",
+        rec.get("job_role") or rec.get("job_title") or "Interview",
+        otp,
+        rec.get("schedule_date") or "",
+        rec.get("schedule_time") or "",
+    )
+    _logger.info(f"[ManualAlerts:otp] by={user} → {rec.get('email')}")
+    return {"success": True, "action": "otp", "to": rec.get("email"), "otp": otp}
+
+
+@manual_router.post("/alerts/send-followup")
+async def alert_send_followup(body: AlertSendBody, request: Request):
+    user = await _get_user(request)
+    rec = await _resolve_or_404(body.email, body.phone)
+    token = await _ensure_schedule_token(rec)
+    await notify_missed_reminder(
+        rec.get("name") or "", rec.get("phone") or "", rec.get("email") or "",
+        rec.get("job_role") or rec.get("job_title") or "Interview",
+        rec.get("schedule_date") or "",
+        rec.get("schedule_time") or "",
+        token,
+    )
+    _logger.info(f"[ManualAlerts:followup] by={user} → {rec.get('email')}")
+    return {"success": True, "action": "followup", "to": rec.get("email")}
+
+
+@manual_router.post("/alerts/send-reject")
+async def alert_send_reject(body: AlertSendBody, request: Request):
+    user = await _get_user(request)
+    rec = await _resolve_or_404(body.email, body.phone)
+    ok = await notify_rejected(rec.get("name") or "", rec.get("phone") or "", rec.get("email") or "")
+    _logger.info(f"[ManualAlerts:reject] by={user} → {rec.get('email')} ok={ok}")
+    return {"success": bool(ok), "action": "reject", "to": rec.get("email")}
+
+
+# ===========================================================================
+# Module #4 — Manual OTP Verify
+# ===========================================================================
+class ManualVerifyBody(BaseModel):
+    email: str
+    phone: str
+
+
+@manual_router.post("/otp/verify")
+async def manual_otp_verify(body: ManualVerifyBody, request: Request):
+    user = await _get_user(request)
+    e = _norm_email(body.email)
+    p = _norm_phone(body.phone)
+    if not (e and p):
+        raise HTTPException(400, "Both email and phone are required")
+    # Same-applicant check: email + phone must point to ONE pipeline_data doc.
+    import re
+    rec = await _db.pipeline_data.find_one(
+        {"email": e, "phone": {"$regex": f"{re.escape(p)}$"}},
+        {"_id": 1},
+    )
+    if not rec:
+        raise HTTPException(404, "Email and phone do not belong to the same applicant")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await _db.pipeline_data.update_one(
+        {"_id": rec["_id"]},
+        {"$set": {"otp_verified": True, "otp_verified_at": now_iso, "last_update": now_iso}},
+    )
+    # Mirror to bb_registrations (best-effort) so analytics views stay aligned.
+    await _db.bb_registrations.update_many(
+        {"$or": [{"email": e}, {"phone": {"$regex": f"{re.escape(p)}$"}}]},
+        {"$set": {"otp_verified": True, "otp_verified_at": now_iso, "last_update": now_iso}},
+    )
+    _logger.info(f"[ManualOTP:verify] by={user} email={e} phone={p}")
+
+    full = await _db.pipeline_data.find_one({"_id": rec["_id"]}, {"_id": 0})
+    return {
+        "success": True,
+        "applicant": {
+            "name":          full.get("name") or "",
+            "phone":         full.get("phone") or "",
+            "email":         full.get("email") or "",
+            "job_role":      full.get("job_role") or full.get("job_title") or "",
+            "college_type":  full.get("college_type") or "",
+            "source":        full.get("hr_team") or "",
+            "schedule_date": full.get("schedule_date") or "",
+            "schedule_time": full.get("schedule_time") or "",
+            "otp":           full.get("otp") or "",
+            "otp_verified":  True,
+        },
+    }
+
+
+# ===========================================================================
+# Module #5 — Tester Credentials
+# ===========================================================================
+class TestCredBody(BaseModel):
+    email: str
+    phone: str
+
+
+@manual_router.get("/test-credentials")
+async def list_test_credentials(request: Request):
+    await _get_user(request)
+    await _ensure_default_test_credentials()
+    cursor = _db.bb_test_credentials.find({}, {"_id": 0}).sort("created_at", 1)
+    return {"items": await cursor.to_list(length=500)}
+
+
+@manual_router.post("/test-credentials")
+async def add_test_credential(body: TestCredBody, request: Request):
+    user = await _get_user(request)
+    e = _norm_email(body.email)
+    p = _norm_phone(body.phone)
+    if not (e and p):
+        raise HTTPException(400, "Both email and phone are required")
+    dup = await _db.bb_test_credentials.find_one(
+        {"$or": [{"email": e}, {"phone": p}]}
+    )
+    if dup:
+        raise HTTPException(409, f"Tester already exists (matched on {'email' if dup.get('email') == e else 'phone'})")
+    doc = {
+        "id": uuid.uuid4().hex,
+        "email": e,
+        "phone": p,
+        "created_by": user,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "is_default": False,
+    }
+    await _db.bb_test_credentials.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@manual_router.put("/test-credentials/{tc_id}")
+async def update_test_credential(tc_id: str, body: TestCredBody, request: Request):
+    user = await _get_user(request)
+    e = _norm_email(body.email)
+    p = _norm_phone(body.phone)
+    if not (e and p):
+        raise HTTPException(400, "Both email and phone are required")
+    dup = await _db.bb_test_credentials.find_one(
+        {"id": {"$ne": tc_id}, "$or": [{"email": e}, {"phone": p}]}
+    )
+    if dup:
+        raise HTTPException(409, f"Another tester already uses this {'email' if dup.get('email') == e else 'phone'}")
+    res = await _db.bb_test_credentials.update_one(
+        {"id": tc_id},
+        {"$set": {"email": e, "phone": p, "updated_by": user, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "Tester not found")
+    return {"success": True}
+
+
+@manual_router.delete("/test-credentials/{tc_id}")
+async def delete_test_credential(tc_id: str, request: Request):
+    await _get_user(request)
+    res = await _db.bb_test_credentials.delete_one({"id": tc_id})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Tester not found")
+    return {"success": True}

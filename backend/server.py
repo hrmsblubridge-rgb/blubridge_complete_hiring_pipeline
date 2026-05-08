@@ -2931,6 +2931,11 @@ app.include_router(resend_router)
 from bb_help import help_router
 app.include_router(help_router)
 
+# Include Manual Operations module (iter67)
+from bb_manual import manual_router, init_manual
+init_manual(db, get_current_user)
+app.include_router(manual_router)
+
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,

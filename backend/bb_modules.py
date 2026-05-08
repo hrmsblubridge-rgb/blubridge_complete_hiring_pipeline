@@ -2947,6 +2947,19 @@ async def export_scores(
             canon_to_display[canon] = canon
         return canon
 
+    # iter67 — EXPORT BUG FIX (#6): Round columns must be SAME with or without
+    # the date filter. Previously `round_cols` was built ONLY from rounds
+    # present in the filtered subset, so applying a narrow date range would
+    # drop rounds that legitimately exist in the system.
+    # Source-of-truth = `bb_rounds` (active=true). Subset rounds (from updates
+    # / score_records) are merged in as well so legacy/unregistered rounds
+    # still appear if the candidate has a score for them.
+    all_rounds_docs = await _db.bb_rounds.find(
+        {"active": {"$ne": False}}, {"_id": 0, "name": 1}
+    ).to_list(None)
+    for r in all_rounds_docs:
+        _track_round(r.get("name"))
+
     for u in updates:
         for s in (u.get("scores") or []):
             _track_round(s.get("round_name"))
@@ -3290,11 +3303,21 @@ async def register_applicant(data: RegistrationBody):
     # team can run end-to-end QA without manually purging records each cycle.
     # Uses the same `is_allowed_recipient` pair-check used by messaging.py
     # (BOTH email AND phone must match a single allowed pair).
+    # iter67 — TESTER CREDENTIALS BYPASS (#5): cooldown is also skipped when
+    # the email OR phone matches an entry in bb_test_credentials. This lets the
+    # team manage QA recipients via the Tester Credentials UI without code
+    # changes. The hard-coded `is_allowed_recipient` allowlist (messaging.py)
+    # remains the source of truth for OUTBOUND message gating.
     from messaging import is_allowed_recipient as _is_allowed_test_user
-    if _is_allowed_test_user(email_norm, phone_norm):
+    bypass = _is_allowed_test_user(email_norm, phone_norm)
+    if not bypass:
+        tc = await _db.bb_test_credentials.find_one(
+            {"$or": [{"email": email_norm}, {"phone": phone_norm}]}
+        )
+        bypass = bool(tc)
+    if bypass:
         _logger.info(
-            f"[Cooldown] BYPASS for allowlisted test user email={email_norm} "
-            f"phone={phone_norm}"
+            f"[Cooldown] BYPASS for tester email={email_norm} phone={phone_norm}"
         )
     else:
         four_months_ago = (datetime.now(timezone.utc) - timedelta(days=120)).isoformat()
@@ -3466,26 +3489,38 @@ async def register_applicant(data: RegistrationBody):
     }
     existing = await _db.pipeline_data.find_one(
         {"$or": [{"email": data.email.strip().lower()}, {"phone": phone_normalized}]},
-        {"_id": 0},
+        {"_id": 1},
     )
-    set_fields = {}
-    for k, v in pipeline_doc_set.items():
-        if k in DYNAMIC_FIELDS:
-            set_fields[k] = v
-        elif k in PROFILE_FIELDS:
-            # Fill only when existing is missing (None / '' / NULL / N/A)
-            if not existing or _is_blank(existing.get(k)):
-                set_fields[k] = v
-        else:
-            set_fields[k] = v
+
+    # iter67 — DEDUP FIX (#1): treat email-OR-phone match as the same applicant.
+    # When found by phone (different/empty email), update the SAME _id instead
+    # of `{"email": ...}` upsert which used to create a duplicate.
+    # Per spec, on match COMPLETELY overwrite all submitted fields (no "fill
+    # only when blank" preservation); system-managed fields (scores, otp_*,
+    # schedule_*, created_at, _id) remain untouched because they're not in
+    # `set_fields`.
+    set_fields = dict(pipeline_doc_set)
     set_fields["last_update"] = submitted_at
     set_fields["updated_at"] = submitted_at
-    await _db.pipeline_data.update_one(
-        {"email": data.email.strip().lower()},
-        {"$set": set_fields,
-         "$setOnInsert": {"created_at": submitted_at}},
-        upsert=True,
-    )
+
+    # iter67 — HR TEAM FIX (#3): populate `hr_team` from the form's
+    # `form_type_name` (sourced from bb_form_types via bb_hiring_forms).
+    form_type_name = (form.get("form_type_name") or "").strip()
+    if form_type_name:
+        set_fields["hr_team"] = form_type_name
+
+    if existing:
+        await _db.pipeline_data.update_one(
+            {"_id": existing["_id"]},
+            {"$set": set_fields},
+        )
+    else:
+        await _db.pipeline_data.update_one(
+            {"email": data.email.strip().lower()},
+            {"$set": set_fields,
+             "$setOnInsert": {"created_at": submitted_at}},
+            upsert=True,
+        )
 
     # ---- Build structured evaluation response ----
     reason = _classify_reason(rejected_reasons) if not is_shortlisted else ""

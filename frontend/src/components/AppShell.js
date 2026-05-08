@@ -5,6 +5,7 @@ import {
     SquaresFour, ChartBar, FileText, CalendarCheck, PencilLine, Table,
     MagnifyingGlass, Briefcase, FolderOpen, GraduationCap, CalendarBlank,
     ShieldCheck, SignOut, List, X, UserCircle, WhatsappLogo, Question,
+    EnvelopeSimple, Flask,
 } from '@phosphor-icons/react';
 
 const NAV = [
@@ -16,6 +17,9 @@ const NAV = [
     { label: 'Score & Round', icon: Table, path: '/score-round' },
     { label: 'Candidate Journey', icon: MagnifyingGlass, path: '/candidate-journey' },
     { label: 'WhatsApp Resend', icon: WhatsappLogo, path: '/whatsapp-resend' },
+    { label: 'Manual Applicant Alerts', icon: EnvelopeSimple, path: '/manual-alerts' },
+    { label: 'Manual OTP Verify', icon: ShieldCheck, path: '/manual-otp-verify' },
+    { label: 'Tester Credentials', icon: Flask, path: '/tester-credentials' },
     { label: 'Create Job Roles', icon: Briefcase, path: '/manage-job-roles' },
     { label: 'Create Job Openings', icon: FolderOpen, path: '/job-openings' },
     { label: 'College Drives', icon: GraduationCap, path: '/college-schedules' },
