@@ -70,16 +70,22 @@ async def _find_applicant(email: str, phone: str) -> Optional[dict]:
 
 
 def _parse_schedule_date_iso(raw) -> str:
-    """Coerce DB schedule_date (DD-MM-YYYY | YYYY-MM-DD | DD/MM/YYYY) → 'YYYY-MM-DD'.
+    """Coerce DB schedule_date into 'YYYY-MM-DD' (DATE-ONLY).
+    Accepted inputs: 'YYYY-MM-DD', 'DD-MM-YYYY', 'DD/MM/YYYY', 'YYYY/MM/DD',
+    or any of the above with an embedded time (e.g. '2026-05-08 13:00:00',
+    '2026-05-08T13:00:00+00:00'). Time component is dropped.
     Empty / unparseable → '' so the caller can show 'unknown' state."""
     s = str(raw or "").strip()
     if not s:
         return ""
-    # Try ISO first
+    # iter69d — Strip any time component so the comparison is DATE-ONLY.
+    # Splits on the first space OR the 'T' (ISO datetime) so we keep just
+    # the calendar-date portion before parsing.
+    head = s.split("T", 1)[0].split(" ", 1)[0]
     for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
         try:
             from datetime import datetime as _dt
-            return _dt.strptime(s, fmt).strftime("%Y-%m-%d")
+            return _dt.strptime(head, fmt).strftime("%Y-%m-%d")
         except ValueError:
             continue
     return ""

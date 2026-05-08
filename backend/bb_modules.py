@@ -2778,34 +2778,54 @@ async def import_scores_confirm(data: dict, request: Request):
             new_scores.append({"round_name": rn, "score": num})
             batch_round_names.add(rn)
 
-        # ---- Iter48 — APPEND-ONLY MERGE ----
+        # ---- iter69d — UPDATE-OR-INSERT MERGE per round (per user spec) ----
         # Spec:
-        #   * If (round_name, score) NOT already present → ADD to scores
-        #   * Existing scores preserved
+        #   * Existing rounds → score is UPDATED to the latest imported value
+        #   * New rounds      → INSERTED into scores[]
         #   * No duplicate round entries per applicant
-        # → For each round we already have a score for, KEEP the existing
-        #   value; for net-new rounds, append. Existing data is never lost.
+        #   * Match applicant by email OR phone (so file rows lacking the
+        #     exact email still update the right candidate by phone).
+        phone_str = str(r.get("phone", "") or "").strip()
+        phone_norm = re.sub(r"\D", "", phone_str)[-10:] if phone_str else ""
+        match_clauses = [{"email": email}]
+        if phone_norm:
+            match_clauses.append({"phone": {"$regex": f"{re.escape(phone_norm)}$"}})
         existing_doc = await _db.bb_applicant_updates.find_one(
-            {"email": email}, {"_id": 0, "scores": 1, "status": 1}
+            {"$or": match_clauses}, {"_id": 1, "scores": 1, "status": 1}
         ) or {}
         existing_scores = list(existing_doc.get("scores") or [])
-        existing_round_names = {
-            str(s.get("round_name") or "").strip().lower()
-            for s in existing_scores if s.get("round_name")
-        }
+        # Build a canonical→index map of the existing scores so we can update
+        # in-place when an imported round already exists.
+        idx_by_canon = {}
+        for i, s in enumerate(existing_scores):
+            rn_canon = _norm_round((s.get("round_name") or "")).lower()
+            if rn_canon:
+                idx_by_canon[rn_canon] = i
         merged_scores = list(existing_scores)
         for ns in new_scores:
-            if ns["round_name"].lower() not in existing_round_names:
-                merged_scores.append(ns)
-                existing_round_names.add(ns["round_name"].lower())
+            ns_canon = _norm_round(ns["round_name"]).lower()
+            if ns_canon in idx_by_canon:
+                # UPDATE in place — preserve any extra metadata on the entry,
+                # only refresh the score (and updated_at marker).
+                merged_scores[idx_by_canon[ns_canon]] = {
+                    **merged_scores[idx_by_canon[ns_canon]],
+                    "round_name": ns["round_name"],
+                    "score": ns["score"],
+                    "updated_at": now_iso,
+                }
+            else:
+                # INSERT new round
+                merged_scores.append({**ns, "updated_at": now_iso})
+                idx_by_canon[ns_canon] = len(merged_scores) - 1
 
         # Status: only set if the import explicitly carries a non-default value;
         # otherwise preserve any pre-existing status the recruiter set.
         incoming_status = (r.get("status") or "").strip() or "On hold"
         final_status = existing_doc.get("status") or incoming_status
 
+        update_filter = {"_id": existing_doc["_id"]} if existing_doc.get("_id") else {"email": email}
         await _db.bb_applicant_updates.update_one(
-            {"email": email},
+            update_filter,
             {"$set": {
                 "email": email,
                 "status": final_status,
@@ -3843,6 +3863,12 @@ async def schedule_interview(token: str, data: ScheduleBody):
                     "schedule_message_wa_ok": bool(wa_ok),
                     "schedule_message_em_ok": bool(em_ok),
                     "schedule_message_sent_at": datetime.now(timezone.utc).isoformat(),
+                    # iter69d — Also set the legacy `interview_mail_sent` flag so
+                    # the bg_worker (Schedule Link Sender) does not re-fire the
+                    # same email a few minutes later → was the duplicate email
+                    # source the user was seeing.
+                    "interview_mail_sent": ok,
+                    "interview_mail_sent_at": datetime.now(timezone.utc).isoformat(),
                 }},
             )
         else:
