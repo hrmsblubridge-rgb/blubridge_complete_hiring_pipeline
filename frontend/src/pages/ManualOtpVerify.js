@@ -21,22 +21,23 @@ const API = process.env.REACT_APP_BACKEND_URL;
 
 export default function ManualOtpVerify() {
     const navigate = useNavigate();
-    const [email, setEmail] = useState('');
-    const [phone, setPhone] = useState('');
+    const [query, setQuery] = useState('');
     const [searching, setSearching] = useState(false);
     const [verifying, setVerifying] = useState(false);
     const [applicant, setApplicant] = useState(null);  // lookup payload
     const [verified, setVerified] = useState(null);    // post-verify applicant payload
 
     const handleSearch = async () => {
-        if (!email || !phone) { toast.error('Both email and phone are required'); return; }
+        const q = query.trim();
+        if (!q) { toast.error('Enter an email or phone number'); return; }
+        const isEmail = q.includes('@');
+        const params = isEmail ? { email: q } : { phone: q };
         setSearching(true);
         setApplicant(null);
         setVerified(null);
         try {
             const r = await axios.get(`${API}/api/bb/manual/applicant/lookup`, {
-                withCredentials: true,
-                params: { email, phone },
+                withCredentials: true, params,
             });
             setApplicant(r.data);
             toast.success('Applicant found');
@@ -60,7 +61,7 @@ export default function ManualOtpVerify() {
     };
 
     const handleCancel = () => {
-        setEmail(''); setPhone(''); setApplicant(null); setVerified(null);
+        setQuery(''); setApplicant(null); setVerified(null);
     };
 
     const interviewStatus = applicant?.interview_status || 'unknown';
@@ -85,17 +86,16 @@ export default function ManualOtpVerify() {
             <main className="max-w-3xl mx-auto px-6 lg:px-10 py-6 space-y-5">
                 {/* Step 1 — Search */}
                 <div className="bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl p-5 flex flex-wrap items-end gap-3">
-                    <div className="flex-1 min-w-[200px]">
-                        <label className="text-[11px] font-semibold tracking-[0.16em] text-[#9b9787] uppercase block mb-1">Email</label>
-                        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="candidate@example.com"
-                            data-testid="manual-otp-email"
-                            className="w-full bg-[#faf9f1] border border-[#e5e3d8] rounded-lg px-3 py-2 text-sm text-[#1a2332] outline-none focus:border-[#1d3a8a]" />
-                    </div>
-                    <div className="flex-1 min-w-[200px]">
-                        <label className="text-[11px] font-semibold tracking-[0.16em] text-[#9b9787] uppercase block mb-1">Phone</label>
-                        <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="9876543210"
-                            data-testid="manual-otp-phone"
-                            className="w-full bg-[#faf9f1] border border-[#e5e3d8] rounded-lg px-3 py-2 text-sm text-[#1a2332] outline-none focus:border-[#1d3a8a]" />
+                    <div className="flex-1 min-w-[260px]">
+                        <label className="text-[11px] font-semibold tracking-[0.16em] text-[#9b9787] uppercase block mb-1">Search</label>
+                        <input
+                            value={query}
+                            onChange={(e) => setQuery(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+                            placeholder="Enter applicant email or phone number"
+                            data-testid="manual-otp-query"
+                            className="w-full bg-[#faf9f1] border border-[#e5e3d8] rounded-lg px-3 py-2 text-sm text-[#1a2332] outline-none focus:border-[#1d3a8a]"
+                        />
                     </div>
                     <button onClick={handleSearch} disabled={searching} data-testid="manual-otp-search-btn"
                         className="px-5 py-2.5 rounded-lg bg-[#1d3a8a] hover:bg-[#162d6e] text-white font-semibold text-sm flex items-center gap-2 disabled:opacity-60">

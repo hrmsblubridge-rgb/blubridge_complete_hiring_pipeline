@@ -26,19 +26,21 @@ const ACTION_BUTTONS = [
 
 export default function ManualAlerts() {
     const navigate = useNavigate();
-    const [email, setEmail] = useState('');
-    const [phone, setPhone] = useState('');
+    const [query, setQuery] = useState('');
     const [applicant, setApplicant] = useState(null);
     const [loading, setLoading] = useState(false);
     const [sending, setSending] = useState('');
 
     const handleSearch = async () => {
-        if (!email && !phone) { toast.error('Enter email or phone'); return; }
+        const q = query.trim();
+        if (!q) { toast.error('Enter an email or phone number'); return; }
+        const isEmail = q.includes('@');
+        const params = isEmail ? { email: q } : { phone: q };
         setLoading(true);
         setApplicant(null);
         try {
             const r = await axios.get(`${API}/api/bb/manual/applicant/lookup`, {
-                withCredentials: true, params: { email: email || undefined, phone: phone || undefined },
+                withCredentials: true, params,
             });
             setApplicant(r.data);
             toast.success('Applicant found');
@@ -48,7 +50,7 @@ export default function ManualAlerts() {
     };
 
     const handleCancel = () => {
-        setEmail(''); setPhone(''); setApplicant(null);
+        setQuery(''); setApplicant(null);
     };
 
     const fireAction = async (btn) => {
@@ -87,8 +89,17 @@ export default function ManualAlerts() {
             <main className="max-w-5xl mx-auto px-6 lg:px-10 py-6 space-y-5">
                 {/* Search row */}
                 <div className="bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl p-5 flex flex-wrap items-end gap-3">
-                    <Field label="Email" value={email} onChange={setEmail} placeholder="candidate@example.com" testid="manual-alerts-email" />
-                    <Field label="Phone" value={phone} onChange={setPhone} placeholder="9876543210" testid="manual-alerts-phone" />
+                    <div className="flex-1 min-w-[260px]">
+                        <label className="text-[11px] font-semibold tracking-[0.16em] text-[#9b9787] uppercase block mb-1">Search</label>
+                        <input
+                            value={query}
+                            onChange={(e) => setQuery(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
+                            placeholder="Enter applicant email or phone number"
+                            data-testid="manual-alerts-query"
+                            className="w-full bg-[#faf9f1] border border-[#e5e3d8] rounded-lg px-3 py-2 text-sm text-[#1a2332] outline-none focus:border-[#1d3a8a]"
+                        />
+                    </div>
                     <button onClick={handleSearch} disabled={loading} data-testid="manual-alerts-search-btn"
                         className="px-5 py-2.5 rounded-lg bg-[#1d3a8a] hover:bg-[#162d6e] text-white font-semibold text-sm flex items-center gap-2 disabled:opacity-60">
                         <MagnifyingGlass size={16} weight="bold" /> {loading ? 'Searching…' : 'Search'}
@@ -155,21 +166,6 @@ export default function ManualAlerts() {
                     </div>
                 )}
             </main>
-        </div>
-    );
-}
-
-function Field({ label, value, onChange, placeholder, testid }) {
-    return (
-        <div className="flex-1 min-w-[200px]">
-            <label className="text-[11px] font-semibold tracking-[0.16em] text-[#9b9787] uppercase block mb-1">{label}</label>
-            <input
-                value={value}
-                onChange={(e) => onChange(e.target.value)}
-                placeholder={placeholder}
-                data-testid={testid}
-                className="w-full bg-[#faf9f1] border border-[#e5e3d8] rounded-lg px-3 py-2 text-sm text-[#1a2332] outline-none focus:border-[#1d3a8a]"
-            />
         </div>
     );
 }
