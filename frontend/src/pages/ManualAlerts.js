@@ -149,7 +149,7 @@ export default function ManualAlerts() {
                             ))}
                         </div>
                         <p className="text-[11px] text-[#9b9787] mt-3 leading-relaxed">
-                            ⓘ Outbound messages remain gated by the messaging allowlist — non-allowlisted recipients are blocked at the send layer.
+                            ⓘ Manual alerts bypass the global allowlist and send to the actual applicant email/phone shown above. Success is reported only when at least one channel (WhatsApp / Email) succeeds.
                         </p>
                     </div>
                 )}

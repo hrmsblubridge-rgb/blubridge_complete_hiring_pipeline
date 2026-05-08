@@ -70,6 +70,38 @@ async def _find_applicant(email: str, phone: str) -> Optional[dict]:
     return await _db.pipeline_data.find_one({"$or": clauses}, {"_id": 0})
 
 
+def _parse_schedule_date_iso(raw) -> str:
+    """Coerce DB schedule_date (DD-MM-YYYY | YYYY-MM-DD | DD/MM/YYYY) → 'YYYY-MM-DD'.
+    Empty / unparseable → '' so the caller can show 'unknown' state."""
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    # Try ISO first
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
+        try:
+            from datetime import datetime as _dt
+            return _dt.strptime(s, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return ""
+
+
+def _interview_status_today(schedule_date_iso: str) -> str:
+    """Compare normalized schedule date with TODAY (local system date, date-only).
+    Returns 'today' | 'past' | 'future' | 'unknown'."""
+    if not schedule_date_iso:
+        return "unknown"
+    try:
+        from datetime import datetime as _dt, date as _date
+        target = _dt.strptime(schedule_date_iso, "%Y-%m-%d").date()
+        today = _date.today()  # LOCAL SYSTEM DATE
+        if target == today:   return "today"
+        if target < today:    return "past"
+        return "future"
+    except Exception:
+        return "unknown"
+
+
 async def _ensure_default_test_credentials():
     """Seed the two default tester rows on first call (idempotent)."""
     defaults = [
@@ -106,6 +138,8 @@ async def lookup_applicant(request: Request, email: Optional[str] = None, phone:
     rec = await _find_applicant(email or "", phone or "")
     if not rec:
         raise HTTPException(404, "Applicant not found in pipeline_data")
+    sched_iso = _parse_schedule_date_iso(rec.get("schedule_date"))
+    interview_status = _interview_status_today(sched_iso)
     # Surface the fields the UI needs (drop legacy/internal-only keys).
     return {
         "name":            rec.get("name") or "",
@@ -118,7 +152,9 @@ async def lookup_applicant(request: Request, email: Optional[str] = None, phone:
         "course":          rec.get("course") or "",
         "year_of_graduation": rec.get("year_of_graduation") or "",
         "schedule_date":   rec.get("schedule_date") or "",
+        "schedule_date_iso": sched_iso,
         "schedule_time":   rec.get("schedule_time") or "",
+        "interview_status": interview_status,  # 'today' | 'past' | 'future' | 'unknown'
         "registered_status": rec.get("status") or rec.get("registered_status") or "",
         "attended":        bool(rec.get("otp_verified")),
         "result_status":   rec.get("result_status") or "",
@@ -176,9 +212,16 @@ async def alert_send_shortlist(body: AlertSendBody, request: Request):
     user = await _get_user(request)
     rec = await _resolve_or_404(body.email, body.phone)
     token = await _ensure_schedule_token(rec)
-    await notify_shortlisted(rec.get("name") or "", rec.get("phone") or "", rec.get("email") or "", token)
-    _logger.info(f"[ManualAlerts:shortlist] by={user} → {rec.get('email')}")
-    return {"success": True, "action": "shortlist", "to": rec.get("email")}
+    to_email = rec.get("email") or ""
+    to_phone = rec.get("phone") or ""
+    _logger.info(f"[ManualAlerts:shortlist] by={user} → email={to_email} phone={to_phone}")
+    wa_ok, em_ok = await notify_shortlisted(
+        rec.get("name") or "", to_phone, to_email, token, bypass_allowlist=True,
+    )
+    success = bool(wa_ok or em_ok)
+    if not success:
+        raise HTTPException(502, "Failed to send via WhatsApp and Email — check messaging credentials/logs")
+    return {"success": True, "action": "shortlist", "to": to_email, "wa_ok": wa_ok, "em_ok": em_ok}
 
 
 @manual_router.post("/alerts/send-schedule-detail")
@@ -189,9 +232,16 @@ async def alert_send_schedule_detail(body: AlertSendBody, request: Request):
     time = rec.get("schedule_time") or ""
     if not (date and time):
         raise HTTPException(400, "Applicant has no schedule_date / schedule_time")
-    await notify_schedule_confirmation(rec.get("name") or "", rec.get("phone") or "", rec.get("email") or "", date, time)
-    _logger.info(f"[ManualAlerts:schedule_detail] by={user} → {rec.get('email')}")
-    return {"success": True, "action": "schedule_detail", "to": rec.get("email")}
+    to_email = rec.get("email") or ""
+    to_phone = rec.get("phone") or ""
+    _logger.info(f"[ManualAlerts:schedule_detail] by={user} → email={to_email} phone={to_phone}")
+    wa_ok, em_ok = await notify_schedule_confirmation(
+        rec.get("name") or "", to_phone, to_email, date, time, bypass_allowlist=True,
+    )
+    success = bool(wa_ok or em_ok)
+    if not success:
+        raise HTTPException(502, "Failed to send via WhatsApp and Email — check messaging credentials/logs")
+    return {"success": True, "action": "schedule_detail", "to": to_email, "wa_ok": wa_ok, "em_ok": em_ok}
 
 
 @manual_router.post("/alerts/send-otp")
@@ -205,15 +255,21 @@ async def alert_send_otp(body: AlertSendBody, request: Request):
             {"email": rec.get("email"), "phone": rec.get("phone")},
             {"$set": {"otp": otp, "otp_sent_at": datetime.now(timezone.utc).isoformat()}}
         )
-    await notify_otp(
-        rec.get("name") or "", rec.get("phone") or "", rec.get("email") or "",
+    to_email = rec.get("email") or ""
+    to_phone = rec.get("phone") or ""
+    _logger.info(f"[ManualAlerts:otp] by={user} → email={to_email} phone={to_phone}")
+    wa_ok, em_ok = await notify_otp(
+        rec.get("name") or "", to_phone, to_email,
         rec.get("job_role") or rec.get("job_title") or "Interview",
         otp,
         rec.get("schedule_date") or "",
         rec.get("schedule_time") or "",
+        bypass_allowlist=True,
     )
-    _logger.info(f"[ManualAlerts:otp] by={user} → {rec.get('email')}")
-    return {"success": True, "action": "otp", "to": rec.get("email"), "otp": otp}
+    success = bool(wa_ok or em_ok)
+    if not success:
+        raise HTTPException(502, "Failed to send via WhatsApp and Email — check messaging credentials/logs")
+    return {"success": True, "action": "otp", "to": to_email, "otp": otp, "wa_ok": wa_ok, "em_ok": em_ok}
 
 
 @manual_router.post("/alerts/send-followup")
@@ -221,24 +277,36 @@ async def alert_send_followup(body: AlertSendBody, request: Request):
     user = await _get_user(request)
     rec = await _resolve_or_404(body.email, body.phone)
     token = await _ensure_schedule_token(rec)
-    await notify_missed_reminder(
-        rec.get("name") or "", rec.get("phone") or "", rec.get("email") or "",
+    to_email = rec.get("email") or ""
+    to_phone = rec.get("phone") or ""
+    _logger.info(f"[ManualAlerts:followup] by={user} → email={to_email} phone={to_phone}")
+    wa_ok, em_ok = await notify_missed_reminder(
+        rec.get("name") or "", to_phone, to_email,
         rec.get("job_role") or rec.get("job_title") or "Interview",
         rec.get("schedule_date") or "",
         rec.get("schedule_time") or "",
         token,
+        bypass_allowlist=True,
     )
-    _logger.info(f"[ManualAlerts:followup] by={user} → {rec.get('email')}")
-    return {"success": True, "action": "followup", "to": rec.get("email")}
+    success = bool(wa_ok or em_ok)
+    if not success:
+        raise HTTPException(502, "Failed to send via WhatsApp and Email — check messaging credentials/logs")
+    return {"success": True, "action": "followup", "to": to_email, "wa_ok": wa_ok, "em_ok": em_ok}
 
 
 @manual_router.post("/alerts/send-reject")
 async def alert_send_reject(body: AlertSendBody, request: Request):
     user = await _get_user(request)
     rec = await _resolve_or_404(body.email, body.phone)
-    ok = await notify_rejected(rec.get("name") or "", rec.get("phone") or "", rec.get("email") or "")
-    _logger.info(f"[ManualAlerts:reject] by={user} → {rec.get('email')} ok={ok}")
-    return {"success": bool(ok), "action": "reject", "to": rec.get("email")}
+    to_email = rec.get("email") or ""
+    to_phone = rec.get("phone") or ""
+    _logger.info(f"[ManualAlerts:reject] by={user} → email={to_email} phone={to_phone}")
+    ok = await notify_rejected(
+        rec.get("name") or "", to_phone, to_email, bypass_allowlist=True,
+    )
+    if not ok:
+        raise HTTPException(502, "Failed to send via WhatsApp and Email — check messaging credentials/logs")
+    return {"success": True, "action": "reject", "to": to_email}
 
 
 # ===========================================================================
@@ -264,6 +332,19 @@ async def manual_otp_verify(body: ManualVerifyBody, request: Request):
     )
     if not rec:
         raise HTTPException(404, "Email and phone do not belong to the same applicant")
+
+    # Date guard — interview must be TODAY (matches the new UI rule). Past or
+    # future schedules cannot be OTP-verified manually.
+    full_for_date = await _db.pipeline_data.find_one(
+        {"_id": rec["_id"]}, {"_id": 0, "schedule_date": 1}
+    )
+    sched_iso = _parse_schedule_date_iso((full_for_date or {}).get("schedule_date"))
+    status_today = _interview_status_today(sched_iso)
+    if status_today == "past":
+        raise HTTPException(400, "Your interview is over !")
+    if status_today == "future":
+        raise HTTPException(400, "Your interview is in future !")
+    # 'today' or 'unknown' (no schedule_date set) → allow verify
 
     now_iso = datetime.now(timezone.utc).isoformat()
     await _db.pipeline_data.update_one(

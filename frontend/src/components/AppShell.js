@@ -25,7 +25,7 @@ const NAV = [
     { label: 'College Drives', icon: GraduationCap, path: '/college-schedules' },
     { label: 'Set Holidays', icon: CalendarBlank, path: '/set-holidays' },
     { label: 'Verify Applicant OTP', icon: ShieldCheck, path: '/verify-otp' },
-    { label: 'Help & Templates', icon: Question, path: '/help' },
+    // { label: 'Help & Templates', icon: Question, path: '/help' },
 ];
 
 export default function AppShell({ children }) {

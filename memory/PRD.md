@@ -45,6 +45,12 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter68)** — Manual flows hardened (no destructive DB updates):
+  - **Manual Applicant Alerts** now actually send to the real applicant. Added `bypass_allowlist` flag on `messaging.send_whatsapp` / `send_email` (default False — automated flows still gated). All 5 high-level `notify_*` functions accept and propagate the flag and now return `(wa_ok, em_ok)` tuples. `bb_manual.py` alert handlers pass `bypass_allowlist=True`, log recipient + channel results, and raise HTTP 502 (truthful failure) when both channels fail. UI no longer shows false success.
+  - **Manual OTP Verify** turned into a 2-step flow. New lookup payload exposes `schedule_date_iso` (`%Y-%m-%d`) + `interview_status` ('today' | 'past' | 'future' | 'unknown') computed against LOCAL SYSTEM DATE (date-only compare, ignores time). Frontend conditionally renders Verify button only on `today` / `unknown`; shows "Your interview is over !" (past) / "Your interview is in future !" (future). Backend `/manual/otp/verify` enforces the same guard server-side (HTTP 400) so UI bypass is impossible.
+  - Schedule-date parser handles existing DB variants `DD-MM-YYYY`, `YYYY-MM-DD`, `DD/MM/YYYY`, `YYYY/MM/DD`. No DB writes.
+  - Verified live via curl + Playwright: today=Verify, past=Over, future=In future, real applicant `aashoksai306@gmail.com` got actual WhatsApp + Email (status 200, message_id present in AiSensy response).
+
 - **Feb 2026 (iter58)** — Score & Round — Advanced filters + Dynamic per-round 5-col groups:
   - **Filter bar** on `/score-round`: Search (name/email/phone), **From Date** + **To Date** (`pipeline_data.schedule_date`), **Status** dropdown (Shortlisted / Rejected / On-Hold — OVERALL only; recruiter `bb_applicant_updates.status` wins over `result_status`), **College** + **Job Role** substring filters. Apply / Reset. All combinable; AND logic; no filters → all rows.
   - **Status perf**: single `distinct()` on `bb_applicant_updates.email` index → main `pipeline_data` query uses `email IN [matching]`. Sub-second on 100K rows.
