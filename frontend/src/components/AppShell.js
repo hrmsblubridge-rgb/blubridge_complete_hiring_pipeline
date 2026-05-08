@@ -59,7 +59,7 @@ export default function AppShell({ children }) {
             >
                 {/* Logo */}
                 <div className="px-6 py-5 border-b border-[#e5e3d8] flex items-center justify-center bg-[#fffdf7]">
-                    <img src="/blubridge-logo.webp" alt="BluBridge" className="h-10 w-auto object-contain" />
+                    <img src="/blubridge-logo.webp" alt="BluBridge" className="w-auto object-contain" />
                 </div>
 
                 {/* Nav */}
