@@ -4,7 +4,7 @@
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="theme-color" content="#000000" />
-        <meta name="description" content="A product of emergent.sh" />
+        <meta name="description" content="Smart recruitment & interview management platform — automate hiring forms, interview schedules, candidate scoring, and WhatsApp/email alerts." />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@600&display=swap" rel="stylesheet" />
@@ -21,9 +21,36 @@
         work correctly both with client-side routing and a non-root public URL.
         Learn how to configure a non-root public URL by running `npm run build`.
         -->
-        <title>Emergent | Fullstack App</title>
+        <title>BluBridge Hiring Pipeline | Smart Recruitment & Interview Management</title>
         <script>window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);</script>
         <script src="https://assets.emergent.sh/scripts/emergent-main.js"></script>
+        <script>
+            // Lock the page title against any third-party override.
+            (function () {
+                var DESIRED_TITLE = "BluBridge Hiring Pipeline | Smart Recruitment & Interview Management";
+                document.title = DESIRED_TITLE;
+                try {
+                    Object.defineProperty(document, "title", {
+                        configurable: true,
+                        get: function () { return DESIRED_TITLE; },
+                        set: function () { /* swallow external writes */ },
+                    });
+                } catch (e) { /* noop */ }
+            })();
+        </script>
+        <style>
+            /* Hide any "Made with Emergent" badge variants (HTML or script-injected) */
+            #emergent-badge,
+            a[href*="emergent.sh"][href*="utm_source=emergent-badge"],
+            a[id^="emergent-"],
+            div[id^="emergent-badge"],
+            [class*="emergent-badge"] {
+                display: none !important;
+                visibility: hidden !important;
+                opacity: 0 !important;
+                pointer-events: none !important;
+            }
+        </style>
     </head>
     <body>
         <noscript>You need to enable JavaScript to run this app.</noscript>
