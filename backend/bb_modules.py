@@ -1163,21 +1163,43 @@ async def register_college_applicant(data: CollegeRegistrationBody):
             {"$or": [{"email": target_email}, {"phone": phone_normalized}]},
             {"_id": 1, "email": 1, "phone": 1, **{f: 1 for f in PROFILE_FIELDS}},
         )
-        if existing and is_tester:
+        if is_tester:
+            # iter69b — TESTER CONSOLIDATION + FULL OVERWRITE (college flow).
+            # See register_applicant for full rationale. `find_one` would
+            # only update ONE of N duplicate tester rows; we now consolidate
+            # all matches into a single survivor.
             replacement = dict(pipeline_doc_set)
             replacement["last_update"] = submitted_at
             replacement["updated_at"] = submitted_at
             replacement["created_at"] = submitted_at
             replacement["stage"] = "registered"
             replacement["pipeline_synced_at"] = submitted_at
-            await _db.pipeline_data.replace_one(
-                {"_id": existing["_id"]},
-                replacement,
-            )
-            _logger.info(
-                f"[Pipeline:tester] college_drive FULL_OVERWRITE "
-                f"email={target_email} phone={phone_normalized} _id={existing['_id']}"
-            )
+            all_matches = await _db.pipeline_data.find(
+                {"$or": [{"email": target_email}, {"phone": phone_normalized}]},
+                {"_id": 1},
+            ).sort("_id", 1).to_list(length=50)
+            if all_matches:
+                survivor = all_matches[0]
+                r = await _db.pipeline_data.replace_one(
+                    {"_id": survivor["_id"]}, replacement
+                )
+                extra_ids = [m["_id"] for m in all_matches[1:]]
+                deleted = 0
+                if extra_ids:
+                    d = await _db.pipeline_data.delete_many({"_id": {"$in": extra_ids}})
+                    deleted = d.deleted_count
+                _logger.info(
+                    f"[Pipeline:tester] college_drive FULL_OVERWRITE+CONSOLIDATE "
+                    f"survivor_id={survivor['_id']} matched={len(all_matches)} "
+                    f"replaced_modified={r.modified_count} deleted_dups={deleted} "
+                    f"email={target_email} phone={phone_normalized}"
+                )
+            else:
+                ins = await _db.pipeline_data.insert_one(replacement)
+                _logger.info(
+                    f"[Pipeline:tester] college_drive INSERTED _id={ins.inserted_id} "
+                    f"email={target_email} phone={phone_normalized}"
+                )
         elif existing:
             ex_email = (existing.get("email") or "").strip().lower()
             ex_phone = (existing.get("phone") or "").strip()
@@ -3524,27 +3546,55 @@ async def register_applicant(data: RegistrationBody):
     if form_type_name:
         set_fields["hr_team"] = form_type_name
 
-    if existing:
-        if is_tester:
-            # iter69 — Tester credentials FULL OVERWRITE: replace the entire
-            # pipeline_data document with the latest registration payload (per
-            # spec: "completely overwrite old record"). Drops residual fields
-            # like stale schedule_*, otp_*, scores, result_status.
-            replacement = dict(set_fields)
-            replacement["created_at"] = submitted_at  # treat as a fresh record
-            await _db.pipeline_data.replace_one(
-                {"_id": existing["_id"]},
-                replacement,
+    if is_tester:
+        # iter69b — TESTER CONSOLIDATION + FULL OVERWRITE.
+        # Multiple legacy duplicate `pipeline_data` rows can already exist for
+        # one tester (e.g. rajlearn@gmail.com AND rajlearn06@gmail.com both
+        # holding phone 8883847098). `find_one` would only ever update ONE of
+        # them, leaving the other untouched — which is exactly what the user
+        # was seeing. For tester credentials we now:
+        #   1. Find ALL pipeline_data rows that match the registrant's
+        #      email OR phone (these are all the same tester per spec).
+        #   2. Pick the FIRST as the "survivor" → replace_one with the latest
+        #      payload (preserving the `_id`).
+        #   3. Delete the rest by _id (NEVER touch records outside this set,
+        #      so unrelated applicants are safe).
+        match_filter = {"$or": [
+            {"email": data.email.strip().lower()},
+            {"phone": phone_normalized},
+        ]}
+        all_matches = await _db.pipeline_data.find(
+            match_filter, {"_id": 1, "email": 1, "phone": 1}
+        ).sort("_id", 1).to_list(length=50)
+        replacement = dict(set_fields)
+        replacement["created_at"] = submitted_at
+        if all_matches:
+            survivor = all_matches[0]
+            r = await _db.pipeline_data.replace_one(
+                {"_id": survivor["_id"]}, replacement
             )
+            extra_ids = [m["_id"] for m in all_matches[1:]]
+            deleted = 0
+            if extra_ids:
+                d = await _db.pipeline_data.delete_many({"_id": {"$in": extra_ids}})
+                deleted = d.deleted_count
             _logger.info(
-                f"[Pipeline:tester] FULL_OVERWRITE email={data.email.strip().lower()} "
-                f"phone={phone_normalized} _id={existing['_id']}"
+                f"[Pipeline:tester] FULL_OVERWRITE+CONSOLIDATE "
+                f"survivor_id={survivor['_id']} matched={len(all_matches)} "
+                f"replaced_modified={r.modified_count} deleted_dups={deleted} "
+                f"email={data.email.strip().lower()} phone={phone_normalized}"
             )
         else:
-            await _db.pipeline_data.update_one(
-                {"_id": existing["_id"]},
-                {"$set": set_fields},
+            ins = await _db.pipeline_data.insert_one(replacement)
+            _logger.info(
+                f"[Pipeline:tester] INSERTED new tester _id={ins.inserted_id} "
+                f"email={data.email.strip().lower()} phone={phone_normalized}"
             )
+    elif existing:
+        await _db.pipeline_data.update_one(
+            {"_id": existing["_id"]},
+            {"$set": set_fields},
+        )
     else:
         await _db.pipeline_data.update_one(
             {"email": data.email.strip().lower()},

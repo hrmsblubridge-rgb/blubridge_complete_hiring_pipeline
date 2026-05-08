@@ -45,6 +45,11 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter69c)** — Tester FULL OVERWRITE — actual root cause:
+  - **Real bug**: `find_one(...)` returns ONE matching `pipeline_data` row, but legacy data has **N duplicates per tester** (e.g. `rajlearn@gmail.com` AND `rajlearn06@gmail.com` both hold phone 8883847098). Replacing only one row left the other intact → frontend kept showing the stale orphan, masquerading as "overwrite not working".
+  - **Fix**: For tester registrations, both `register_applicant` and `register_college_applicant` now `find(...).to_list()` ALL matches (sorted by `_id` ASC), `replace_one` the survivor (preserving its `_id`), then `delete_many` the rest. Logs include `survivor_id`, `matched=N`, `replaced_modified=1`, `deleted_dups=N-1`. Non-tester paths untouched.
+  - **Verified live**: `rajlearn` had 2 dup rows → after one tester registration, exactly 1 row remains with all latest values; survivor `_id` retained for downstream FK consistency. No unrelated applicants modified.
+
 - **Feb 2026 (iter69b)** — AiSensy template param fix + tester full-overwrite:
   - **ROOT CAUSE (Issue #1/#2 — WhatsApp not delivered for Followup)**: `notify_missed_reminder` was sending **5 params** to AiSensy "Candidate FollowUp" but the actual approved template expects **4 params**. AiSensy returned `{"message":"Template params does not match the campaign"}` (HTTP 400) and silently dropped the message. Fixed: dropped `schedule_link` param (CTA URL is in template body); now sends `[name, role, formattedDate, time]`. Verified live → 200 OK with `submitted_message_id`. The other 4 templates were probed and confirmed correct: ShortList=2, Schedule Detail=4, OTP With Job=7, Reject=0.
   - **Note (Issues #1/#2 delivery)**: Reject + Schedule Detail were already returning HTTP 200 from AiSensy. If recipients still don't see the message, the cause is downstream (AiSensy free-tier whitelist / 24-hour conversation window) — outside our codebase. The gate logs the campaign + recipient + AiSensy `status` + `submitted_message_id` for every send, so HR can correlate against AiSensy dashboard.
