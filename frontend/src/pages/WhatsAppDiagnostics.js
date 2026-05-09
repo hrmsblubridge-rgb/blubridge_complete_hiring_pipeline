@@ -44,6 +44,43 @@ export default function WhatsAppDiagnostics() {
         toast.success('Full diagnostic JSON copied to clipboard');
     };
 
+    const copyCoworkerBrief = () => {
+        if (!report) return;
+        const failing = ['Schedule Detail', 'Candidate Followups1', 'Reject'];
+        const ids = report.results
+            .filter(r => failing.includes(r.campaign))
+            .map(r => `  • ${r.campaign}: ${r.submitted_message_id || '—'}`)
+            .join('\n');
+        const brief = `Hi,
+
+Our backend is successfully submitting all 5 WhatsApp campaigns to AiSensy (HTTP 200, success="true", valid submitted_message_id). However, only ShortList and OTP With Job actually deliver to the recipient's phone. These 3 are silently dropped at the Meta layer:
+
+  • Schedule Detail
+  • Candidate Followups1
+  • Reject
+
+Latest submitted_message_ids (search these in AiSensy delivery logs):
+${ids}
+
+Please check on the AiSensy dashboard for each of the 3 above:
+
+1. Manage Campaigns / Templates → what is the Meta status? (APPROVED / PENDING / REJECTED / PAUSED / FLAGGED). Anything other than APPROVED silently drops messages.
+
+2. Live Reports / Delivery Logs → search for the submitted_message_ids above. What is the per-message delivery state (delivered / failed / pending / dropped) and any error reason?
+
+3. Free-tier Allowlisted Numbers → is the test phone ${report.target_phone ? '+91 ' + report.target_phone : '+91 9443109903'} on the allowlist for these 3 specific campaigns?
+
+4. Template category → is each marked MARKETING, UTILITY, or AUTHENTICATION? MARKETING templates require an open 24-hour conversation window per recipient. The 2 working ones (ShortList, OTP With Job) are likely UTILITY/AUTHENTICATION — that's why they always go through.
+
+5. Template variables on Meta side → does the template body actually have the same number of {{1}}…{{N}} placeholders we're sending? AiSensy accepts the call even when Meta's template definition mismatches.
+
+Most likely fix: re-submit those 3 templates to Meta for approval as UTILITY (transactional) so they bypass the 24h window.
+
+Thanks!`;
+        navigator.clipboard.writeText(brief);
+        toast.success('Coworker brief copied — paste it into a message to your AiSensy admin');
+    };
+
     return (
         <div className="min-h-screen" data-testid="whatsapp-diagnostics-page">
             <header className="bg-[#faf9f1] border-b border-[#e5e3d8] px-6 lg:px-10 py-5">
@@ -68,10 +105,17 @@ export default function WhatsAppDiagnostics() {
                     </div>
                     <div className="flex items-center gap-2">
                         {report && (
-                            <button onClick={copyReport} data-testid="copy-report-btn"
-                                className="px-3 py-2 rounded-lg border border-[#e5e3d8] text-sm font-semibold text-[#1a2332] hover:bg-[#efede5] flex items-center gap-1.5">
-                                <Copy size={14} weight="bold" /> Copy JSON
-                            </button>
+                            <>
+                                <button onClick={copyCoworkerBrief} data-testid="copy-brief-btn"
+                                    className="px-3 py-2 rounded-lg text-white text-sm font-semibold flex items-center gap-1.5"
+                                    style={{ backgroundColor: '#1d3a8a' }}>
+                                    <Copy size={14} weight="bold" /> Copy Coworker Brief
+                                </button>
+                                <button onClick={copyReport} data-testid="copy-report-btn"
+                                    className="px-3 py-2 rounded-lg border border-[#e5e3d8] text-sm font-semibold text-[#1a2332] hover:bg-[#efede5] flex items-center gap-1.5">
+                                    <Copy size={14} weight="bold" /> Copy JSON
+                                </button>
+                            </>
                         )}
                         <button onClick={runProbe} disabled={running} data-testid="run-probe-btn"
                             className="px-4 py-2 rounded-lg text-white text-sm font-semibold flex items-center gap-1.5 disabled:opacity-60"
