@@ -1,9 +1,11 @@
 /**
- * WhatsApp Missed Export (iter67)
+ * Bulk Communication Center (iter69)
  * --------------------------------------------
  * Upload candidate list → auto-match against pipeline_data + bb_registrations
- * → preview latest active schedule → bulk resend via AiSensy "Candidate
- * FollowUp" template (5 params) → log to bb_resend_history.
+ * → preview matched rows → recruiter picks ONE of 5 actions
+ *   (Interview Schedule | Schedule Details | OTP | Candidate Follow-up |
+ *    Rejection) → bulk send Mail + WhatsApp via centralized notify_*
+ *   helpers (TEST MODE gate enforced) → log to bb_resend_history.
  */
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -13,11 +15,60 @@ import {
     ArrowLeft, Upload, WhatsappLogo, MagnifyingGlass, Funnel, ArrowsClockwise,
     PaperPlaneTilt, Eye, CheckCircle, XCircle, Warning, ClockCountdown, X,
     FileText, ListChecks, FileXls, FileCsv, Download,
+    Calendar, ShieldCheck, Bell, Prohibit, EnvelopeSimple,
 } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 const WA_GREEN = '#25D366';
 const WA_GREEN_DARK = '#128C7E';
+
+// ---------- Action catalog (Bulk Communication Center) ----------
+const ACTIONS = [
+    {
+        key: 'interview_schedule',
+        label: 'Send Interview Schedule',
+        icon: PaperPlaneTilt,
+        bg: '#f0abfc', fg: '#86198f', accent: '#a21caf',
+        helper: 'notify_shortlisted',
+        requires: ['name'],
+        // Auto-creates schedule_token if missing.
+    },
+    {
+        key: 'schedule_details',
+        label: 'Send Schedule Details',
+        icon: Calendar,
+        bg: '#3b82f6', fg: '#ffffff', accent: '#1d4ed8',
+        helper: 'notify_schedule_confirmation',
+        requires: ['name', 'date', 'time'],
+    },
+    {
+        key: 'otp',
+        label: 'Send OTP',
+        icon: ShieldCheck,
+        bg: '#f97316', fg: '#ffffff', accent: '#c2410c',
+        helper: 'notify_otp',
+        requires: ['name', 'date', 'time'],
+        // OTP reused from bb_registrations or generated.
+    },
+    {
+        key: 'candidate_followup',
+        label: 'Send Candidate Follow-up',
+        icon: Bell,
+        bg: '#7c3aed', fg: '#ffffff', accent: '#5b21b6',
+        helper: 'notify_missed_reminder',
+        requires: ['name', 'role', 'date', 'time', 'active_schedule'],
+    },
+    {
+        key: 'rejection',
+        label: 'Send Rejection',
+        icon: Prohibit,
+        bg: '#f5d0fe', fg: '#86198f', accent: '#a21caf',
+        helper: 'notify_rejected',
+        requires: ['name'],
+    },
+];
+
+const ACTION_BY_KEY = Object.fromEntries(ACTIONS.map(a => [a.key, a]));
 
 // ---------- helpers ----------
 const fmtDDMMYYYY = (iso) => {
@@ -155,6 +206,9 @@ export default function WhatsAppResend() {
     const [sending, setSending] = useState(false);
     const [history, setHistory] = useState([]);
     const [showHistory, setShowHistory] = useState(false);
+    // iter69 — Bulk Communication Center: recruiter picks 1 of 5 actions.
+    const [actionKey, setActionKey] = useState('candidate_followup');
+    const action = ACTION_BY_KEY[actionKey];
 
     // Load template once
     useEffect(() => {
@@ -207,9 +261,10 @@ export default function WhatsAppResend() {
                 upload_id: upload.upload_id,
                 row_ids: rowIds,
                 only_failed: onlyFailed,
+                action_type: actionKey,
             }, { withCredentials: true });
             const { success = 0, failed = 0, blocked = 0, skipped = 0 } = r.data;
-            toast.success(`${label}: ✅ ${success} · ❌ ${failed} · 🚫 ${blocked} · ⏭ ${skipped}`);
+            toast.success(`${action.label} → ${label}: ✅ ${success} · ❌ ${failed} · 🚫 ${blocked} · ⏭ ${skipped}`);
             await loadPreview(upload.upload_id, page);
             setSelected(new Set());
         } catch (e) {
@@ -251,9 +306,25 @@ export default function WhatsAppResend() {
         }
     };
 
-    const sendable = useMemo(() => rows.filter(r => r.match_status !== 'No Match' && r.schedule?.has_active_schedule), [rows]);
-    const sendBulkAll = () => sendRows(sendable.map(r => r.row_id), 'Bulk resend');
-    const sendSelected = () => sendRows([...selected], 'Selected resend');
+    // iter69 — Per-action sendability: each action requires different fields.
+    const isRowSendable = useCallback((r) => {
+        if (r.match_status === 'No Match') return false;
+        const s = r.schedule || {};
+        const c = r.candidate || {};
+        const phone = c.phone || c.input_phone || '';
+        const email = c.email || c.input_email || '';
+        if (!phone && !email) return false;
+        const reqs = action?.requires || [];
+        if (reqs.includes('date') && !s.schedule_date) return false;
+        if (reqs.includes('time') && !s.schedule_time) return false;
+        if (reqs.includes('role') && !s.job_role) return false;
+        if (reqs.includes('active_schedule') && !s.has_active_schedule) return false;
+        return true;
+    }, [action]);
+
+    const sendable = useMemo(() => rows.filter(isRowSendable), [rows, isRowSendable]);
+    const sendBulkAll = () => sendRows(sendable.map(r => r.row_id), 'Bulk');
+    const sendSelected = () => sendRows([...selected], 'Selected');
     const retryFailed = () => sendRows(rows.filter(r => r.whatsapp?.last_status === 'failed').map(r => r.row_id), 'Retry failed', true);
 
     const totalPages = Math.max(1, Math.ceil(filteredTotal / pageSize));
@@ -267,12 +338,12 @@ export default function WhatsAppResend() {
                         <button onClick={() => navigate('/home')} data-testid="back-btn" className="p-2 rounded-lg hover:bg-[#efede5]">
                             <ArrowLeft size={18} className="text-[#1a2332]" />
                         </button>
-                        <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: '#25D36620' }}>
-                            <WhatsappLogo size={22} weight="fill" color={WA_GREEN_DARK} />
+                        <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ backgroundColor: '#1d3a8a20' }}>
+                            <PaperPlaneTilt size={22} weight="fill" color="#1d3a8a" />
                         </div>
                         <div>
-                            <h1 className="text-xl lg:text-2xl font-bold text-[#1a2332] tracking-tight">WhatsApp Missed Export</h1>
-                            <p className="text-xs text-[#6b7280] mt-0.5">Re-deliver interview schedules + meeting links</p>
+                            <h1 data-testid="bulk-comm-heading" className="text-xl lg:text-2xl font-bold text-[#1a2332] tracking-tight">Bulk Communication Center</h1>
+                            <p className="text-xs text-[#6b7280] mt-0.5">Pick an action — fire Mail + WhatsApp to matched candidates</p>
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -295,12 +366,15 @@ export default function WhatsAppResend() {
                     <UploadZone onUploaded={setUpload} />
                 ) : (
                     <>
+                        {/* iter69 — Action selector: pick one of 5 Mail+WhatsApp actions */}
+                        <ActionSelector active={actionKey} onPick={setActionKey} />
+
                         {/* Stats strip */}
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                             <Stat label="Total Rows" value={upload.total_rows} tone="zinc" />
                             <Stat label="Matched" value={upload.matched_rows} tone="emerald" />
                             <Stat label="Unmatched" value={upload.total_rows - upload.matched_rows} tone="rose" />
-                            <Stat label="Sendable" value={sendable.length} tone="green" icon={<WhatsappLogo size={16} weight="fill" color={WA_GREEN_DARK} />} />
+                            <Stat label={`Sendable · ${action.label.replace('Send ', '')}`} value={sendable.length} tone="green" icon={<EnvelopeSimple size={16} weight="fill" color="#128C7E" />} />
                         </div>
 
                         {/* Filter + bulk action toolbar */}
@@ -352,12 +426,13 @@ export default function WhatsAppResend() {
                                 </div>
                                 <button disabled={sending || !sendable.length} onClick={sendBulkAll} data-testid="resend-bulk-all-btn"
                                     className="px-4 py-2 rounded-lg text-white text-sm font-semibold flex items-center gap-1.5 disabled:opacity-50"
-                                    style={{ backgroundColor: WA_GREEN }}>
-                                    <PaperPlaneTilt size={14} weight="bold" /> Bulk Resend ({sendable.length})
+                                    style={{ backgroundColor: action.accent }}>
+                                    <PaperPlaneTilt size={14} weight="bold" /> {action.label} ({sendable.length})
                                 </button>
                                 <button disabled={sending || !selected.size} onClick={sendSelected} data-testid="resend-selected-btn"
-                                    className="px-3 py-2 rounded-lg border border-[#25D366] text-[#128C7E] text-sm font-semibold disabled:opacity-50 hover:bg-[#25D366]/10">
-                                    Resend Selected ({selected.size})
+                                    className="px-3 py-2 rounded-lg border text-sm font-semibold disabled:opacity-50"
+                                    style={{ borderColor: action.accent, color: action.accent }}>
+                                    Send Selected ({selected.size})
                                 </button>
                                 <button disabled={sending} onClick={retryFailed} data-testid="resend-retry-btn"
                                     className="px-3 py-2 rounded-lg border border-[#e5e3d8] bg-[#fffdf7] text-sm text-[#1a2332] hover:bg-[#efede5] flex items-center gap-1.5 disabled:opacity-50">
@@ -395,7 +470,7 @@ export default function WhatsAppResend() {
                                             const c = r.candidate || {};
                                             const s = r.schedule || {};
                                             const w = r.whatsapp || {};
-                                            const sendable = r.match_status !== 'No Match' && s.has_active_schedule;
+                                            const sendable = isRowSendable(r);
                                             return (
                                                 <tr key={r.row_id} className="border-b border-[#ece9dc] hover:bg-[#faf9f1]" data-testid={`resend-row-${r.row_id}`}>
                                                     <td className="px-3 py-3">
@@ -445,11 +520,11 @@ export default function WhatsAppResend() {
                                                                 className="p-1.5 rounded-md border border-[#e5e3d8] hover:bg-[#efede5]">
                                                                 <Eye size={14} className="text-[#1a2332]" />
                                                             </button>
-                                                            <button disabled={!sendable || sending} onClick={() => sendRows([r.row_id], 'Single resend')}
-                                                                title="Resend"
+                                                            <button disabled={!sendable || sending} onClick={() => sendRows([r.row_id], 'Single send')}
+                                                                title={sendable ? `Send ${action.label}` : 'Missing required fields for this action'}
                                                                 data-testid={`resend-send-${r.row_id}`}
                                                                 className="p-1.5 rounded-md text-white disabled:opacity-40"
-                                                                style={{ backgroundColor: WA_GREEN }}>
+                                                                style={{ backgroundColor: action.accent }}>
                                                                 <PaperPlaneTilt size={14} weight="bold" />
                                                             </button>
                                                         </div>
@@ -479,6 +554,49 @@ export default function WhatsAppResend() {
             </main>
 
             {previewRow && <MessagePreview row={previewRow} template={template} onClose={() => setPreviewRow(null)} />}
+        </div>
+    );
+}
+
+// ---------- Action Selector (Bulk Communication Center) ----------
+function ActionSelector({ active, onPick }) {
+    return (
+        <div data-testid="bulk-action-selector" className="bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl p-4">
+            <div className="flex items-center gap-2 mb-3">
+                <PaperPlaneTilt size={16} weight="duotone" className="text-[#1d3a8a]" />
+                <p className="text-[11px] font-semibold tracking-[0.16em] uppercase text-[#6b7280]">Choose Action — Mail + WhatsApp</p>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                {ACTIONS.map((a) => {
+                    const Icon = a.icon;
+                    const isActive = active === a.key;
+                    return (
+                        <button
+                            key={a.key}
+                            onClick={() => onPick(a.key)}
+                            data-testid={`action-card-${a.key}`}
+                            className={`relative rounded-2xl p-5 text-left transition-all border-2 ${isActive ? 'shadow-lg scale-[1.02]' : 'border-transparent hover:shadow-md hover:scale-[1.01]'}`}
+                            style={{
+                                backgroundColor: a.bg,
+                                color: a.fg,
+                                borderColor: isActive ? a.accent : 'transparent',
+                            }}
+                        >
+                            {isActive && (
+                                <span className="absolute top-2 right-2 inline-flex items-center justify-center w-5 h-5 rounded-full bg-white">
+                                    <CheckCircle size={16} weight="fill" color={a.accent} />
+                                </span>
+                            )}
+                            <Icon size={28} weight="duotone" />
+                            <p className="mt-3 font-bold text-[14px] leading-tight">{a.label}</p>
+                            <p className="mt-2 text-[11px] opacity-90 flex items-center gap-1">
+                                <EnvelopeSimple size={12} weight="fill" />
+                                <span>Mail + WhatsApp</span>
+                            </p>
+                        </button>
+                    );
+                })}
+            </div>
         </div>
     );
 }

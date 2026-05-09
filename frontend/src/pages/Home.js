@@ -9,7 +9,7 @@ const NAV_ITEMS = [
     { label: 'Update Applicants Scores', desc: 'Manage rounds and update candidate scores', icon: PencilLine, path: '/update-scores', tone: 'emerald' },
     { label: 'Score & Round', desc: 'Excel-like table — per-round scores, status, induction dates', icon: Table, path: '/score-round', tone: 'sky' },
     { label: 'Candidate Journey', desc: 'View full lifecycle — rounds, scores, status, induction date', icon: MagnifyingGlass, path: '/candidate-journey', tone: 'indigo' },
-    { label: 'WhatsApp Missed Export', desc: 'Resend interview schedules and meeting links to candidates', icon: WhatsappLogo, path: '/whatsapp-resend', tone: 'whatsapp' },
+    { label: 'Bulk Communication Center', desc: 'Send Interview Schedule, Schedule Details, OTP, Follow-up or Rejection (Mail + WhatsApp)', icon: WhatsappLogo, path: '/whatsapp-resend', tone: 'whatsapp' },
     { label: 'Manual Applicant Alerts', desc: 'Manually trigger any messaging flow (shortlist / OTP / follow-up / reject) per candidate', icon: EnvelopeSimple, path: '/manual-alerts', tone: 'violet' },
     { label: 'Manual OTP Verify', desc: 'Mark a candidate as Attended (otp_verified=true) by email + phone', icon: ShieldCheck, path: '/manual-otp-verify', tone: 'orange' },
     { label: 'Tester Credentials', desc: 'Manage QA email/phone pairs that bypass the 4-month registration cooldown', icon: Flask, path: '/tester-credentials', tone: 'pink' },

@@ -26,7 +26,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from messaging import send_whatsapp, can_send_message, FRONTEND_URL
+from messaging import (
+    send_whatsapp, can_send_message, FRONTEND_URL,
+    notify_shortlisted, notify_schedule_confirmation, notify_otp,
+    notify_missed_reminder, notify_rejected,
+)
+import random
 
 _logger = logging.getLogger("bb_resend")
 
@@ -314,6 +319,11 @@ class SendRequest(BaseModel):
     upload_id: str
     row_ids: Optional[List[str]] = None  # None or empty => all matched rows
     only_failed: bool = False
+    # iter69 — Bulk Communication Center: dispatch one of 5 actions.
+    # Allowed: interview_schedule | schedule_details | otp |
+    #          candidate_followup | rejection. Default preserves
+    #          legacy behaviour (Candidate Follow-up) for old callers.
+    action_type: str = "candidate_followup"
 
 
 class TestSendRequest(BaseModel):
@@ -496,21 +506,58 @@ async def list_uploads(request: Request, limit: int = Query(20, ge=1, le=100)):
 # ---------------------------------------------------------------------------
 # Sender helpers
 # ---------------------------------------------------------------------------
-async def _send_one(row: dict, user: str, upload_id: str) -> Tuple[str, Optional[str]]:
-    """Send WhatsApp for a single row. Returns (status, failure_reason)."""
+# ---------------------------------------------------------------------------
+# Action registry — Bulk Communication Center (iter69)
+# ---------------------------------------------------------------------------
+ACTION_LABELS = {
+    "interview_schedule": "Interview Schedule",
+    "schedule_details":   "Schedule Details",
+    "otp":                "OTP",
+    "candidate_followup": "Candidate Follow-up",
+    "rejection":          "Rejection",
+}
+
+
+async def _get_or_create_otp(email: str, phone: str) -> str:
+    """Q1=a — Reuse existing OTP from bb_registrations if present, else
+    generate a new 6-digit code, store it, and return it."""
+    q: Dict[str, Any] = {"$or": []}
+    if email:
+        q["$or"].append({"email": email})
+    if phone:
+        q["$or"].append({"phone": phone})
+    if not q["$or"]:
+        return ""
+    reg = await _db.bb_registrations.find_one(q, sort=[("created_at", -1)])
+    if reg and reg.get("otp"):
+        return str(reg["otp"])
+    new_otp = str(random.randint(100000, 999999))
+    if reg:
+        await _db.bb_registrations.update_one(
+            {"_id": reg["_id"]},
+            {"$set": {
+                "otp": new_otp,
+                "otp_sent": True,
+                "otp_sent_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+    return new_otp
+
+
+async def _send_one(row: dict, user: str, upload_id: str, action_type: str = "candidate_followup") -> Tuple[str, Optional[str]]:
+    """Dispatch a single row to the chosen Mail+WhatsApp action.
+    Returns (status, failure_reason). status ∈ success | failed | blocked | skipped."""
     cand = row.get("candidate") or {}
     sched = row.get("schedule") or {}
-    name = cand.get("name") or cand.get("input_name") or ""
+    name  = cand.get("name") or cand.get("input_name") or ""
     email = cand.get("email") or cand.get("input_email") or ""
     phone = cand.get("phone") or cand.get("input_phone") or ""
 
-    # ---- Validations ----
+    # ---- Common validations ----
     if row.get("match_status") == "No Match":
         return "skipped", "Candidate not matched"
-    if not _is_valid_phone(phone):
-        return "failed", f"Invalid phone: {phone}"
-    if not sched.get("has_active_schedule"):
-        return "skipped", "No active schedule available"
+    if not _is_valid_phone(phone) and not email:
+        return "failed", "No usable phone/email"
 
     # ---- Cooldown ----
     last = (row.get("whatsapp") or {}).get("last_sent_at")
@@ -522,20 +569,7 @@ async def _send_one(row: dict, user: str, upload_id: str) -> Tuple[str, Optional
         except Exception:
             pass
 
-    # ---- Ensure schedule token ----
-    token = sched.get("schedule_token")
-    if not token:
-        token = await _ensure_schedule_token(cand, sched)
-        if not token:
-            return "failed", "Could not generate schedule link"
-        sched["schedule_token"] = token
-        sched["schedule_link"] = f"{FRONTEND_URL}/schedule-interview/{token}" if FRONTEND_URL else f"/schedule-interview/{token}"
-
-    schedule_link = sched.get("schedule_link") or (f"{FRONTEND_URL}/schedule-interview/{token}" if FRONTEND_URL else "")
-    if not schedule_link:
-        return "failed", "Schedule link missing"
-
-    # ---- TEST_MODE gate (informational; send_whatsapp also enforces) ----
+    # ---- TEST_MODE gate (informational; messaging.* helpers also enforce) ----
     allowed, reason = await can_send_message(email, phone)
     if not allowed:
         return "blocked", f"Recipient blocked by gate ({reason})"
@@ -544,15 +578,61 @@ async def _send_one(row: dict, user: str, upload_id: str) -> Tuple[str, Optional
     formatted_time = _fmt_time(sched.get("schedule_time"))
     job_role = sched.get("job_role") or "Interview"
 
-    ok = await send_whatsapp(
-        "Candidate FollowUp", phone, email,
-        # iter69e (#11) — AiSensy "Candidate FollowUp" template expects
-        # exactly 4 params (verified against AiSensy on 2026-05-08). Sending
-        # the 5th `schedule_link` produced HTTP 400 → silent drop. Aligned
-        # with `messaging.notify_missed_reminder`.
-        [name, job_role, formatted_date, formatted_time],
-        is_test=False,
-    )
+    # ---- Per-action validations + dispatch ----
+    template_label = ACTION_LABELS.get(action_type, action_type)
+    params: List[Any] = []
+    ok = False
+
+    try:
+        if action_type == "interview_schedule":
+            # Q2=a — auto-create token if missing.
+            token = sched.get("schedule_token")
+            if not token:
+                token = await _ensure_schedule_token(cand, sched)
+            if not token:
+                return "failed", "Could not generate schedule link"
+            wa_ok, em_ok = await notify_shortlisted(name, phone, email, token, is_test=False)
+            ok = bool(wa_ok or em_ok)
+            params = [name, f"{FRONTEND_URL}/schedule-interview/{token}"]
+
+        elif action_type == "schedule_details":
+            if not (formatted_date and formatted_time):
+                return "skipped", "Missing schedule date/time"
+            wa_ok, em_ok = await notify_schedule_confirmation(name, phone, email, formatted_date, formatted_time, is_test=False)
+            ok = bool(wa_ok or em_ok)
+            params = [name, formatted_date, formatted_time]
+
+        elif action_type == "otp":
+            if not (formatted_date and formatted_time):
+                return "skipped", "Missing schedule date/time"
+            otp_code = await _get_or_create_otp(email, phone)
+            if not otp_code:
+                return "failed", "Could not resolve OTP"
+            wa_ok, em_ok = await notify_otp(name, phone, email, job_role, otp_code, formatted_date, formatted_time, is_test=False)
+            ok = bool(wa_ok or em_ok)
+            params = [name, job_role, otp_code, phone, formatted_date, formatted_time]
+
+        elif action_type == "candidate_followup":
+            if not sched.get("has_active_schedule"):
+                return "skipped", "No active schedule available"
+            token = sched.get("schedule_token") or await _ensure_schedule_token(cand, sched)
+            wa_ok, em_ok = await notify_missed_reminder(
+                name, phone, email, job_role, formatted_date, formatted_time,
+                token or "", is_test=False,
+            )
+            ok = bool(wa_ok or em_ok)
+            params = [name, job_role, formatted_date, formatted_time]
+
+        elif action_type == "rejection":
+            # Q3=a — send only, no DB state change.
+            ok = await notify_rejected(name, phone, email, is_test=False)
+            params = [name]
+
+        else:
+            return "failed", f"Unknown action_type: {action_type}"
+    except Exception as e:
+        _logger.exception(f"[BulkComm] {action_type} send failed for {email}: {e}")
+        return "failed", f"Exception: {str(e)[:120]}"
 
     # ---- History log ----
     await _db.bb_resend_history.insert_one({
@@ -562,14 +642,15 @@ async def _send_one(row: dict, user: str, upload_id: str) -> Tuple[str, Optional
         "sent_by": user,
         "sent_at": datetime.now(timezone.utc).isoformat(),
         "candidate": {"name": name, "email": email, "phone": phone},
-        "template": "Candidate FollowUp",
-        "params": [name, job_role, formatted_date, formatted_time],
+        "action_type": action_type,
+        "template": template_label,
+        "params": params,
         "status": "success" if ok else "failed",
-        "failure_reason": None if ok else "AiSensy send failed",
+        "failure_reason": None if ok else "Mail/WhatsApp send failed",
         "retry_count": int((row.get("whatsapp") or {}).get("retry_count") or 0) + 1,
     })
 
-    return ("success" if ok else "failed", None if ok else "AiSensy send failed")
+    return ("success" if ok else "failed", None if ok else "Mail/WhatsApp send failed")
 
 
 async def _persist_row_status(upload_id: str, row_id: str, status: str, reason: Optional[str]):
@@ -610,9 +691,9 @@ async def send_resend(payload: SendRequest, request: Request):
     if not selected:
         raise HTTPException(400, "No rows to send")
 
-    summary = {"success": 0, "failed": 0, "blocked": 0, "skipped": 0, "results": []}
+    summary = {"success": 0, "failed": 0, "blocked": 0, "skipped": 0, "results": [], "action_type": payload.action_type}
     for r in selected:
-        status, reason = await _send_one(r, user, payload.upload_id)
+        status, reason = await _send_one(r, user, payload.upload_id, payload.action_type)
         summary[status] = summary.get(status, 0) + 1
         summary["results"].append({
             "row_id": r.get("row_id"),

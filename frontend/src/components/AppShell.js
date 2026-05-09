@@ -19,7 +19,7 @@ const NAV = [
     { label: 'Update Applicants Scores', icon: PencilLine, path: '/update-scores' },
     { label: 'Score & Round', icon: Table, path: '/score-round' },
     { label: 'Candidate Journey', icon: MagnifyingGlass, path: '/candidate-journey' },
-    { label: 'WhatsApp Resend', icon: WhatsappLogo, path: '/whatsapp-resend' },
+    { label: 'Bulk Communication', icon: WhatsappLogo, path: '/whatsapp-resend' },
     { label: 'Manual Applicant Alerts', icon: EnvelopeSimple, path: '/manual-alerts' },
     { label: 'Manual OTP Verify', icon: ShieldCheck, path: '/manual-otp-verify' },
     { label: 'Tester Credentials', icon: Flask, path: '/tester-credentials' },
