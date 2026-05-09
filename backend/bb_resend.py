@@ -766,26 +766,28 @@ async def get_row_otp(upload_id: str, row_id: str, request: Request):
 @resend_router.get("/template-preview")
 async def template_preview(action_type: str = Query("candidate_followup")):
     """Return the WhatsApp template body the UI should display as preview,
-    keyed to the active Bulk Comm action. iter71 — per-action template
-    bodies aligned with Manual Applicant Alerts copy + AiSensy templates.
+    keyed to the active Bulk Comm action. iter72 — bodies aligned verbatim
+    with the AiSensy templates documented in the BluBridge Mail/Message
+    template PDF reference.
 
     Variables:
       {{name}}, {{job_role}}, {{schedule_date}}, {{schedule_time}},
       {{schedule_link}}, {{otp}}, {{office_location}}
     """
-    OFFICE = "30, Norton Road, Mandavelipakkam, Raja Annamalai Puram, Chennai - 600028."
+    OFFICE = "30, Norton Road, Mandavelipakkam, Raja Annamalai Puram, Chennai, Tamil Nadu - 600028."
     BODIES: Dict[str, Dict[str, Any]] = {
         "interview_schedule": {
             "template": "ShortList",
             "params": ["name", "schedule_link"],
             "body": (
                 "Dear {{name}},\n\n"
-                "Congratulations! Your profile aligns with our requirements at "
-                "Blubridge Technologies.\n\n"
-                "Please schedule your offline (in-person) interview using the "
-                "link below:\n{{schedule_link}}\n\n"
-                "We look forward to meeting you.\n\n"
-                "— Blubridge Technologies"
+                "Congratulations! After reviewing your responses, we are pleased "
+                "to inform you that your profile aligns with our requirements.\n\n"
+                "Please schedule a convenient time for your offline (in-person) "
+                "interview using the link below:\n{{schedule_link}}\n\n"
+                "We look forward to our discussion and exploring how you can "
+                "contribute to our team's research efforts.\n\n"
+                "Best regards,\nBlubridge Technologies"
             ),
         },
         "schedule_details": {
@@ -793,12 +795,17 @@ async def template_preview(action_type: str = Query("candidate_followup")):
             "params": ["name", "schedule_date", "schedule_time", "office_location"],
             "body": (
                 "Hi {{name}},\n\n"
-                "Your interview at Blubridge Technologies is confirmed:\n\n"
-                "📅 Date: {{schedule_date}}\n"
-                "⏰ Time: {{schedule_time}}\n"
-                "📍 Location: {{office_location}}\n\n"
+                "Thank you for scheduling your interview with Blubridge Technologies. "
+                "Your interview details are confirmed as follows:\n\n"
+                "Date: {{schedule_date}}\n"
+                "Time: {{schedule_time}}\n"
+                "Location: {{office_location}}\n\n"
+                "Your interview will consist of the following rounds:\n"
+                "*Round 1:* Logical Reasoning & Aptitude (100 minutes)\n"
+                "*Round 2:* Advanced Logical Reasoning (30 minutes)\n"
+                "_If shortlisted, a further round will be conducted._\n\n"
                 "We look forward to meeting you.\n\n"
-                "— Blubridge Technologies"
+                "Best regards,\nBlubridge Technologies"
             ),
         },
         "otp": {
@@ -806,15 +813,21 @@ async def template_preview(action_type: str = Query("candidate_followup")):
             "params": ["name", "job_role", "otp", "phone", "schedule_date", "schedule_time", "office_location"],
             "body": (
                 "Hi {{name}},\n\n"
-                "Your One-Time Password (OTP) to confirm your interview attendance is:\n\n"
-                "🔐 *{{otp}}*\n\n"
-                "Interview Details\n"
+                "Your One-Time Password (OTP) to confirm your interview "
+                "attendance at Blubridge Technologies is:\n\n"
+                "*{{otp}}*\n\n"
+                "Please provide this OTP along with your personal details at the "
+                "office reception on the day of your interview.\n\n"
+                "Interview Details:\n"
                 "Role: {{job_role}}\n"
+                "Phone: {{phone}}\n"
                 "Date: {{schedule_date}}\n"
                 "Time: {{schedule_time}}\n"
                 "Location: {{office_location}}\n\n"
-                "OTP is valid for 8 hours from your scheduled slot.\n\n"
-                "— Blubridge Recruitment Team"
+                "This OTP is valid only for eight hours from your scheduled "
+                "interview slot.\n\n"
+                "Looking forward to seeing you soon!\n\n"
+                "Best regards,\nBlubridge Recruitment Team"
             ),
         },
         "candidate_followup": {
@@ -822,11 +835,14 @@ async def template_preview(action_type: str = Query("candidate_followup")):
             "params": ["name", "job_role", "schedule_date", "schedule_time", "schedule_link"],
             "body": (
                 "Hi {{name}},\n\n"
-                "We noticed you missed your scheduled interview at Blubridge for "
-                "the role of {{job_role}}. We'd like to offer you one final "
-                "opportunity to reschedule.\n\n"
-                "📅 Originally scheduled: {{schedule_date}} at {{schedule_time}}\n\n"
-                "Reschedule here:\n{{schedule_link}}\n\n"
+                "We had your in-person interview for the {{job_role}} position "
+                "scheduled on {{schedule_date}} at {{schedule_time}}, but we did "
+                "not see you arrive at the office at the scheduled time.\n\n"
+                "Please note that arrival is considered complete only after "
+                "verification at the reception/security desk, using the "
+                "verification details shared earlier.\n\n"
+                "If you're still interested, please use the link below to "
+                "reschedule at your earliest convenience:\n{{schedule_link}}\n\n"
                 "Rescheduling is subject to available slots.\n\n"
                 "— Blubridge Recruitment Team"
             ),
@@ -835,16 +851,16 @@ async def template_preview(action_type: str = Query("candidate_followup")):
             "template": "Reject",
             "params": [],
             "body": (
-                "Dear {{name}},\n\n"
+                "Dear Candidate,\n\n"
                 "Thank you for your time and effort in completing our "
                 "registration form.\n\n"
                 "While your background and experience are impressive, we have "
                 "decided to move forward with candidates whose profiles more "
                 "closely align with our current requirements.\n\n"
-                "We encourage you to apply for future opportunities at "
-                "Blubridge Technologies.\n\n"
-                "Wishing you the best!\n\n"
-                "— Blubridge Technologies"
+                "We encourage you to apply for future opportunities at Blubridge "
+                "Technologies.\n\n"
+                "Wishing you the best in your future endeavours!\n\n"
+                "Warm regards,\nBlubridge Technologies"
             ),
         },
     }

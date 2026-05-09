@@ -278,6 +278,47 @@ async def send_whatsapp(campaign_name: str, phone: str, email: str, template_par
 
 # ============ EMAIL (SMTP) ============
 
+# iter72 — Branded email shell aligned with the PDF reference design. All
+# notify_* helpers wrap their body HTML with `_email_shell()` so every
+# outbound email shares the same header (BLUBRIDGE wordmark) and footer.
+def _email_shell(body_html: str) -> str:
+    """Wrap notification body HTML in a branded email envelope.
+
+    Preserves the body exactly as written; only adds the outer container,
+    header logo, and footer signature. Inline styles only — many email
+    clients strip <style> blocks."""
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f5f4ec;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1a2332;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f5f4ec;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);">
+        <tr>
+          <td style="background:#1a2332;padding:20px 28px;">
+            <div style="font-family:Georgia,'Times New Roman',serif;font-weight:700;letter-spacing:0.18em;color:#ffffff;font-size:18px;">
+              BLU<span style="color:#22d3ee;">BRIDGE</span>
+            </div>
+            <div style="color:#cbd5e1;font-size:11px;letter-spacing:0.14em;margin-top:2px;">RECRUITMENT &nbsp;·&nbsp; HIRING PIPELINE</div>
+          </td>
+        </tr>
+        <tr><td style="padding:32px 32px 16px 32px;font-size:15px;line-height:1.65;color:#1f2937;">
+          {body_html}
+        </td></tr>
+        <tr><td style="padding:0 32px 28px 32px;border-top:1px solid #e5e3d8;margin-top:24px;">
+          <p style="margin:24px 0 6px 0;font-size:13px;color:#6b7280;">— Blubridge Recruitment Team</p>
+          <p style="margin:0;font-family:Georgia,'Times New Roman',serif;font-weight:700;letter-spacing:0.18em;color:#1a2332;font-size:14px;">
+            BLU<span style="color:#0891b2;">BRIDGE</span>
+          </p>
+          <p style="margin:8px 0 0 0;font-size:11px;color:#9ca3af;">
+            30, Norton Road, Mandavelipakkam, Raja Annamalai Puram, Chennai - 600028.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>"""
+
+
 async def send_email(to_email: str, phone: str, subject: str, html_body: str, is_test: bool = False):
     """Send email via SMTP SSL. Returns True on success.
     `is_test` is accepted for backward compatibility but is ignored — gating
@@ -327,31 +368,32 @@ async def notify_shortlisted(name: str, phone: str, email: str, schedule_token: 
     # WhatsApp: ShortList campaign
     wa_ok = await send_whatsapp("ShortList", phone, email, [name, schedule_link], is_test=is_test)
 
-    # Email
-    html = f"""
-    <p>Dear {name},</p>
+    # Email — body wrapped by _email_shell() (branded header + footer).
+    body = f"""
+    <p style="margin:0 0 12px 0;">Dear {name},</p>
     <p>Congratulations! After reviewing your responses, we are pleased to inform you that your profile aligns with our requirements.</p>
-    <p>Please schedule a convenient time for your offline (in-person) interview using the link below:</p>
-    <p><a href="{schedule_link}">{schedule_link}</a></p>
+    <p>Please schedule a convenient time for your <strong>offline (in-person) interview</strong> using the link below:</p>
+    <p style="text-align:center;margin:24px 0;">
+      <a href="{schedule_link}" style="display:inline-block;background:#1a2332;color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:14px;">Schedule My Interview</a>
+    </p>
+    <p style="font-size:12px;color:#6b7280;word-break:break-all;">Or paste this link in your browser: {schedule_link}</p>
     <p>We look forward to our discussion and exploring how you can contribute to our team's research efforts.</p>
-    <p>Best regards,<br>Blubridge Technologies</p>
     """
-    em_ok = await send_email(email, phone, "You're Shortlisted! Schedule Your Interview - Blubridge", html, is_test=is_test)
+    em_ok = await send_email(email, phone, "You're Shortlisted! Schedule Your Interview - Blubridge", _email_shell(body), is_test=is_test)
     return wa_ok, em_ok
 
 
 async def notify_rejected(name: str, phone: str, email: str, is_test: bool = False):
     """Send rejection notification via WhatsApp + Email. Returns True if at least one channel succeeded."""
     wa_ok = await send_whatsapp("Reject", phone, email, [], is_test=is_test)
-    html = f"""
-    <p>Dear {name},</p>
+    body = f"""
+    <p style="margin:0 0 12px 0;">Dear {name},</p>
     <p>Thank you for your time and effort in completing our registration form.</p>
     <p>While your background and experience are impressive, we have decided to move forward with candidates whose profiles more closely align with our current requirements.</p>
     <p>We encourage you to apply for future opportunities at Blubridge Technologies.</p>
-    <p>Wishing you the best in your future endeavours!</p>
-    <p>Warm regards,<br>Blubridge Technologies</p>
+    <p style="margin:20px 0 0 0;">Wishing you the best in your future endeavours!</p>
     """
-    em_ok = await send_email(email, phone, "Application Update - Blubridge Technologies", html, is_test=is_test)
+    em_ok = await send_email(email, phone, "Application Update - Blubridge Technologies", _email_shell(body), is_test=is_test)
     return bool(wa_ok or em_ok)
 
 
@@ -408,32 +450,48 @@ async def notify_rejected_with_reason(
 async def notify_schedule_confirmation(name: str, phone: str, email: str, date: str, time: str, is_test: bool = False):
     """Send schedule confirmation via WhatsApp + Email. Returns (wa_ok, em_ok)."""
     wa_ok = await send_whatsapp("Schedule Detail", phone, email, [name, date, time, OFFICE_LOCATION], is_test=is_test)
-    html = f"""
-    <p>Hi {name},</p>
+    body = f"""
+    <p style="margin:0 0 12px 0;">Hi {name},</p>
     <p>Thank you for scheduling your interview with Blubridge Technologies. Your interview details are confirmed as follows:</p>
-    <p><strong>Date:</strong> {date}<br><strong>Time:</strong> {time}<br><strong>Location:</strong> {OFFICE_LOCATION}</p>
-    <p>We look forward to meeting you.</p>
-    <p>Best regards,<br>Blubridge Technologies</p>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0;background:#f5f4ec;border-radius:8px;padding:16px;width:100%;">
+      <tr><td style="padding:6px 14px;font-size:13px;color:#6b7280;width:100px;">Date</td><td style="padding:6px 14px;font-weight:600;color:#1a2332;">{date}</td></tr>
+      <tr><td style="padding:6px 14px;font-size:13px;color:#6b7280;">Time</td><td style="padding:6px 14px;font-weight:600;color:#1a2332;">{time}</td></tr>
+      <tr><td style="padding:6px 14px;font-size:13px;color:#6b7280;vertical-align:top;">Location</td><td style="padding:6px 14px;color:#1a2332;">{OFFICE_LOCATION}</td></tr>
+    </table>
+    <p><strong>Your interview will consist of the following rounds:</strong></p>
+    <ul style="padding-left:20px;margin:8px 0 16px 0;">
+      <li><strong>Round 1:</strong> Logical Reasoning &amp; Aptitude (100 minutes)</li>
+      <li><strong>Round 2:</strong> Advanced Logical Reasoning (30 minutes)</li>
+    </ul>
+    <p style="font-size:13px;color:#6b7280;font-style:italic;">If shortlisted, a further round will be conducted.</p>
+    <p style="margin:18px 0 0 0;">We look forward to meeting you.</p>
     """
-    em_ok = await send_email(email, phone, "Interview Scheduled - Blubridge Technologies", html, is_test=is_test)
+    em_ok = await send_email(email, phone, "Interview Scheduled - Blubridge Technologies", _email_shell(body), is_test=is_test)
     return wa_ok, em_ok
 
 
 async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str, date: str, time: str, is_test: bool = False):
     """Send OTP notification via WhatsApp + Email. Returns (wa_ok, em_ok)."""
     wa_ok = await send_whatsapp("OTP With Job", phone, email, [name, job_role, otp, phone, date, time, OFFICE_LOCATION], is_test=is_test)
-    html = f"""
-    <p>Hi {name},</p>
+    body = f"""
+    <p style="margin:0 0 12px 0;">Hi {name},</p>
     <p>Your One-Time Password (OTP) to confirm your interview attendance at Blubridge Technologies is:</p>
-    <h2>{otp}</h2>
+    <div style="text-align:center;margin:24px 0;">
+      <div style="display:inline-block;background:#1a2332;color:#22d3ee;font-family:'Courier New',Courier,monospace;font-weight:700;font-size:34px;letter-spacing:0.34em;padding:18px 32px;border-radius:10px;">{otp}</div>
+    </div>
     <p>Please provide this OTP along with your personal details at the office reception on the day of your interview.</p>
-    <p><strong>Interview Details:</strong></p>
-    <p><strong>Role:</strong> {job_role}<br><strong>Phone:</strong> {phone}<br><strong>Date:</strong> {date}<br><strong>Time:</strong> {time}<br><strong>Location:</strong> {OFFICE_LOCATION}</p>
-    <p>This OTP is valid only for eight hours from your scheduled interview slot.</p>
-    <p>Looking forward to seeing you soon!</p>
-    <p>Best regards,<br>Blubridge Recruitment Team</p>
+    <p style="margin:20px 0 8px 0;font-weight:600;color:#1a2332;">Interview Details</p>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 16px 0;background:#f5f4ec;border-radius:8px;padding:14px;width:100%;">
+      <tr><td style="padding:5px 14px;font-size:13px;color:#6b7280;width:100px;">Role</td><td style="padding:5px 14px;font-weight:600;color:#1a2332;">{job_role}</td></tr>
+      <tr><td style="padding:5px 14px;font-size:13px;color:#6b7280;">Phone</td><td style="padding:5px 14px;color:#1a2332;">{phone}</td></tr>
+      <tr><td style="padding:5px 14px;font-size:13px;color:#6b7280;">Date</td><td style="padding:5px 14px;color:#1a2332;">{date}</td></tr>
+      <tr><td style="padding:5px 14px;font-size:13px;color:#6b7280;">Time</td><td style="padding:5px 14px;color:#1a2332;">{time}</td></tr>
+      <tr><td style="padding:5px 14px;font-size:13px;color:#6b7280;vertical-align:top;">Location</td><td style="padding:5px 14px;color:#1a2332;">{OFFICE_LOCATION}</td></tr>
+    </table>
+    <p style="font-size:13px;color:#6b7280;">This OTP is valid only for <strong>eight hours</strong> from your scheduled interview slot.</p>
+    <p style="margin:16px 0 0 0;">Looking forward to seeing you soon!</p>
     """
-    em_ok = await send_email(email, phone, "Your Interview OTP - Blubridge Technologies", html, is_test=is_test)
+    em_ok = await send_email(email, phone, "Your Interview OTP - Blubridge Technologies", _email_shell(body), is_test=is_test)
     return wa_ok, em_ok
 
 
@@ -456,16 +514,19 @@ async def notify_missed_reminder(name: str, phone: str, email: str, role: str, d
         [name, role, date, time, schedule_link],
         is_test=is_test,
     )
-    html = f"""
-    <p>Hi {name},</p>
-    <p>We noticed you missed your scheduled interview at Blubridge. We understand unexpected situations may occur, so we'd like to offer you one final opportunity to reschedule.</p>
-    <p>If you miss the interview again, you won't be able to apply for any positions at Blubridge for the next 3 months.</p>
+    body = f"""
+    <p style="margin:0 0 12px 0;">Hi {name},</p>
+    <p>We noticed you missed your scheduled interview at Blubridge for the role of <strong>{role}</strong>. We understand unexpected situations may occur, so we'd like to offer you one final opportunity to reschedule.</p>
+    <p style="background:#fef3c7;border-left:4px solid #d97706;padding:12px 16px;margin:18px 0;color:#92400e;font-size:14px;">
+      <strong>Note:</strong> If you miss the interview again, you won't be able to apply for any positions at Blubridge for the next <strong>3 months</strong>.
+    </p>
     <p>If you're still interested, please use the link below to reschedule your interview at your earliest convenience:</p>
-    <p><a href="{schedule_link}">Reschedule Your Interview</a></p>
-    <p>Rescheduling is subject to available slots.</p>
-    <p>Warm regards,<br>Blubridge Recruitment Team</p>
+    <p style="text-align:center;margin:24px 0;">
+      <a href="{schedule_link}" style="display:inline-block;background:#1a2332;color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:14px;">Reschedule Your Interview</a>
+    </p>
+    <p style="font-size:12px;color:#6b7280;">Rescheduling is subject to available slots.</p>
     """
-    em_ok = await send_email(email, phone, "Missed Interview - Reschedule Opportunity - Blubridge", html, is_test=is_test)
+    em_ok = await send_email(email, phone, "Missed Interview - Reschedule Opportunity - Blubridge", _email_shell(body), is_test=is_test)
     return wa_ok, em_ok
 
 
@@ -473,11 +534,13 @@ async def notify_schedule_reminder(name: str, phone: str, email: str, schedule_t
     """Send 24h reminder to schedule interview."""
     schedule_link = f"{FRONTEND_URL}/schedule-interview/{schedule_token}"
     await send_whatsapp("ShortList", phone, email, [name, schedule_link], is_test=is_test)
-    html = f"""
-    <p>Dear {name},</p>
+    body = f"""
+    <p style="margin:0 0 12px 0;">Dear {name},</p>
     <p>This is a reminder that you have been shortlisted for an interview at Blubridge Technologies, but you haven't scheduled your interview yet.</p>
     <p>Please schedule your interview at the earliest using the link below:</p>
-    <p><a href="{schedule_link}">{schedule_link}</a></p>
-    <p>Best regards,<br>Blubridge Technologies</p>
+    <p style="text-align:center;margin:24px 0;">
+      <a href="{schedule_link}" style="display:inline-block;background:#1a2332;color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:14px;">Schedule My Interview</a>
+    </p>
+    <p style="font-size:12px;color:#6b7280;word-break:break-all;">Or paste this link: {schedule_link}</p>
     """
-    await send_email(email, phone, "Reminder: Schedule Your Interview - Blubridge", html, is_test=is_test)
+    await send_email(email, phone, "Reminder: Schedule Your Interview - Blubridge", _email_shell(body), is_test=is_test)
