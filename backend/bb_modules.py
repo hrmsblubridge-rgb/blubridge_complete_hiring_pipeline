@@ -1165,15 +1165,25 @@ async def register_college_applicant(data: CollegeRegistrationBody):
         )
         if is_tester:
             # iter69b — TESTER CONSOLIDATION + FULL OVERWRITE (college flow).
-            # See register_applicant for full rationale. `find_one` would
-            # only update ONE of N duplicate tester rows; we now consolidate
-            # all matches into a single survivor.
+            # iter69e — Also resets flow-state fields per spec #9.
+            FLOW_STATE_FIELDS = (
+                "otp", "otp_verified", "otp_sent", "otp_sent_at",
+                "email_type", "result_status",
+                "schedule_date", "schedule_time",
+                "whatsapp_reminder_sent", "whatsapp_followup_sent",
+                "shortlist_mail_sent", "interview_mail_sent",
+                "reject_notified", "schedule_message_sent",
+                "isImported", "import_batch_id", "imported_at",
+                "import_rejection_notified",
+            )
             replacement = dict(pipeline_doc_set)
             replacement["last_update"] = submitted_at
             replacement["updated_at"] = submitted_at
             replacement["created_at"] = submitted_at
             replacement["stage"] = "registered"
             replacement["pipeline_synced_at"] = submitted_at
+            for k in FLOW_STATE_FIELDS:
+                replacement[k] = ""
             all_matches = await _db.pipeline_data.find(
                 {"$or": [{"email": target_email}, {"phone": phone_normalized}]},
                 {"_id": 1},
@@ -1188,8 +1198,29 @@ async def register_college_applicant(data: CollegeRegistrationBody):
                 if extra_ids:
                     d = await _db.pipeline_data.delete_many({"_id": {"$in": extra_ids}})
                     deleted = d.deleted_count
+                # Reset flow flags on bb_registrations too
+                try:
+                    await _db.bb_registrations.update_many(
+                        {"$or": [{"email": target_email}, {"phone": phone_normalized}]},
+                        {"$unset": {
+                            "shortlist_mail_sent": "",
+                            "shortlist_mail_sent_at": "",
+                            "interview_mail_sent": "",
+                            "interview_mail_sent_at": "",
+                            "reject_notified": "",
+                            "reject_notified_at": "",
+                            "schedule_message_sent": "",
+                            "schedule_message_sent_at": "",
+                            "schedule_message_wa_ok": "",
+                            "schedule_message_em_ok": "",
+                            "whatsapp_reminder_sent": "",
+                            "whatsapp_followup_sent": "",
+                        }},
+                    )
+                except Exception as _e:
+                    _logger.warning(f"[Pipeline:tester] college bb_registrations reset skipped: {_e}")
                 _logger.info(
-                    f"[Pipeline:tester] college_drive FULL_OVERWRITE+CONSOLIDATE "
+                    f"[Pipeline:tester] college_drive FULL_OVERWRITE+CONSOLIDATE+RESET "
                     f"survivor_id={survivor['_id']} matched={len(all_matches)} "
                     f"replaced_modified={r.modified_count} deleted_dups={deleted} "
                     f"email={target_email} phone={phone_normalized}"
@@ -1975,6 +2006,26 @@ async def update_applicant_score(email: str, data: ApplicantScoreUpdate, request
         update_doc["scores"] = list(existing_by_round.values())
     await _db.bb_applicant_updates.update_one({"email": email}, {"$set": update_doc}, upsert=True)
     await _db.registered_candidates.update_many({"email": email}, {"$set": {"result_status": data.status}})
+    # iter69e (#8) — Sync result_status to pipeline_data so the Manual Alerts
+    # page, View Applicants, View Attended Applicants, and analytics all see
+    # the same value immediately. Match by email OR phone (last-10-digit
+    # regex) so duplicates with the same person are all kept in sync.
+    try:
+        import re as _re
+        rec_for_phone = await _db.bb_applicant_updates.find_one({"email": email}, {"_id": 0, "phone": 1})
+        phone_clauses = []
+        ph = (rec_for_phone or {}).get("phone") or ""
+        ph_norm = _re.sub(r"\D", "", str(ph))[-10:]
+        clauses = [{"email": email}]
+        if ph_norm:
+            clauses.append({"phone": {"$regex": f"{_re.escape(ph_norm)}$"}})
+        await _db.pipeline_data.update_many(
+            {"$or": clauses},
+            {"$set": {"result_status": data.status,
+                       "result_status_updated_at": datetime.now(timezone.utc).isoformat()}},
+        )
+    except Exception as _e:
+        _logger.warning(f"[applicant-score] pipeline_data result_status sync skipped: {_e}")
     return {"success": True}
 
 
@@ -3568,17 +3619,20 @@ async def register_applicant(data: RegistrationBody):
 
     if is_tester:
         # iter69b — TESTER CONSOLIDATION + FULL OVERWRITE.
-        # Multiple legacy duplicate `pipeline_data` rows can already exist for
-        # one tester (e.g. rajlearn@gmail.com AND rajlearn06@gmail.com both
-        # holding phone 8883847098). `find_one` would only ever update ONE of
-        # them, leaving the other untouched — which is exactly what the user
-        # was seeing. For tester credentials we now:
-        #   1. Find ALL pipeline_data rows that match the registrant's
-        #      email OR phone (these are all the same tester per spec).
-        #   2. Pick the FIRST as the "survivor" → replace_one with the latest
-        #      payload (preserving the `_id`).
-        #   3. Delete the rest by _id (NEVER touch records outside this set,
-        #      so unrelated applicants are safe).
+        # iter69e — Also explicitly NULL flow-state fields so re-registration
+        # behaves like a brand-new applicant (per spec #9). Personal fields
+        # come from `set_fields`; flow-state fields get cleared regardless of
+        # what the form payload contained.
+        FLOW_STATE_FIELDS = (
+            "otp", "otp_verified", "otp_sent", "otp_sent_at",
+            "email_type", "result_status",
+            "schedule_date", "schedule_time",
+            "whatsapp_reminder_sent", "whatsapp_followup_sent",
+            "shortlist_mail_sent", "interview_mail_sent",
+            "reject_notified", "schedule_message_sent",
+            "isImported", "import_batch_id", "imported_at",
+            "import_rejection_notified",
+        )
         match_filter = {"$or": [
             {"email": data.email.strip().lower()},
             {"phone": phone_normalized},
@@ -3588,6 +3642,9 @@ async def register_applicant(data: RegistrationBody):
         ).sort("_id", 1).to_list(length=50)
         replacement = dict(set_fields)
         replacement["created_at"] = submitted_at
+        # Force flow-state fields to "" (per spec #9 — null/empty)
+        for k in FLOW_STATE_FIELDS:
+            replacement[k] = ""
         if all_matches:
             survivor = all_matches[0]
             r = await _db.pipeline_data.replace_one(
@@ -3598,8 +3655,31 @@ async def register_applicant(data: RegistrationBody):
             if extra_ids:
                 d = await _db.pipeline_data.delete_many({"_id": {"$in": extra_ids}})
                 deleted = d.deleted_count
+            # Mirror the reset on bb_registrations (where some flow flags
+            # actually live). Use $unset so re-registration restarts the
+            # interview-mail / reject-notified / schedule-message worker flags.
+            try:
+                await _db.bb_registrations.update_many(
+                    match_filter,
+                    {"$unset": {
+                        "shortlist_mail_sent": "",
+                        "shortlist_mail_sent_at": "",
+                        "interview_mail_sent": "",
+                        "interview_mail_sent_at": "",
+                        "reject_notified": "",
+                        "reject_notified_at": "",
+                        "schedule_message_sent": "",
+                        "schedule_message_sent_at": "",
+                        "schedule_message_wa_ok": "",
+                        "schedule_message_em_ok": "",
+                        "whatsapp_reminder_sent": "",
+                        "whatsapp_followup_sent": "",
+                    }},
+                )
+            except Exception as _e:
+                _logger.warning(f"[Pipeline:tester] bb_registrations reset skipped: {_e}")
             _logger.info(
-                f"[Pipeline:tester] FULL_OVERWRITE+CONSOLIDATE "
+                f"[Pipeline:tester] FULL_OVERWRITE+CONSOLIDATE+RESET "
                 f"survivor_id={survivor['_id']} matched={len(all_matches)} "
                 f"replaced_modified={r.modified_count} deleted_dups={deleted} "
                 f"email={data.email.strip().lower()} phone={phone_normalized}"

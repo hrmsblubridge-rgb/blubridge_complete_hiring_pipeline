@@ -107,6 +107,33 @@ def _interview_status_today(schedule_date_iso: str) -> str:
         return "unknown"
 
 
+def _derive_registered_status(rec: dict) -> str:
+    """Derive the recruiter-facing registration status from pipeline_data.
+    Rules (per spec #6):
+      - email_type == 'reject'                    → "Rejected"
+      - email_type == 'shortlist' AND no schedule → "Interview not scheduled"
+      - schedule present AND otp_verified=1       → "Attended"
+      - schedule present AND interview_date<today → "Not Attended"
+      - schedule present AND otp_verified!=1      → "Interview scheduled"
+      - default                                   → ""  (unknown)
+    """
+    et = (rec.get("email_type") or "").strip().lower()
+    if et == "reject":
+        return "Rejected"
+    has_sched = bool((rec.get("schedule_date") or "").strip()) and bool((rec.get("schedule_time") or "").strip())
+    is_verified = bool(rec.get("otp_verified"))
+    if has_sched and is_verified:
+        return "Attended"
+    if et == "shortlist" and not has_sched:
+        return "Interview not scheduled"
+    if has_sched and not is_verified:
+        sched_iso = _parse_schedule_date_iso(rec.get("schedule_date"))
+        if _interview_status_today(sched_iso) == "past":
+            return "Not Attended"
+        return "Interview scheduled"
+    return ""
+
+
 async def _ensure_default_test_credentials():
     """Seed the two default tester rows on first call (idempotent)."""
     defaults = [
@@ -160,7 +187,7 @@ async def lookup_applicant(request: Request, email: Optional[str] = None, phone:
         "schedule_date_iso": sched_iso,
         "schedule_time":   rec.get("schedule_time") or "",
         "interview_status": interview_status,  # 'today' | 'past' | 'future' | 'unknown'
-        "registered_status": rec.get("status") or rec.get("registered_status") or "",
+        "registered_status": _derive_registered_status(rec),
         "attended":        bool(rec.get("otp_verified")),
         "result_status":   rec.get("result_status") or "",
         "hr_team":         rec.get("hr_team") or "",

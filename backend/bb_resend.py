@@ -546,7 +546,11 @@ async def _send_one(row: dict, user: str, upload_id: str) -> Tuple[str, Optional
 
     ok = await send_whatsapp(
         "Candidate FollowUp", phone, email,
-        [name, job_role, formatted_date, formatted_time, schedule_link],
+        # iter69e (#11) — AiSensy "Candidate FollowUp" template expects
+        # exactly 4 params (verified against AiSensy on 2026-05-08). Sending
+        # the 5th `schedule_link` produced HTTP 400 → silent drop. Aligned
+        # with `messaging.notify_missed_reminder`.
+        [name, job_role, formatted_date, formatted_time],
         is_test=False,
     )
 
@@ -559,7 +563,7 @@ async def _send_one(row: dict, user: str, upload_id: str) -> Tuple[str, Optional
         "sent_at": datetime.now(timezone.utc).isoformat(),
         "candidate": {"name": name, "email": email, "phone": phone},
         "template": "Candidate FollowUp",
-        "params": [name, job_role, formatted_date, formatted_time, schedule_link],
+        "params": [name, job_role, formatted_date, formatted_time],
         "status": "success" if ok else "failed",
         "failure_reason": None if ok else "AiSensy send failed",
         "retry_count": int((row.get("whatsapp") or {}).get("retry_count") or 0) + 1,
@@ -627,10 +631,11 @@ async def send_test_message(payload: TestSendRequest, request: Request):
     """Send a test WhatsApp message to the first allowlisted number."""
     user = await _get_user(request)
     target_email, target_phone = "rishi.nayak@blubridge.com", "9443109903"
-    schedule_link = f"{FRONTEND_URL}/schedule-interview/test-token" if FRONTEND_URL else ""
+    # iter69e (#11) — 4-param Candidate FollowUp template (no schedule_link).
+    fmt_date = _fmt_date(payload.schedule_date)
     ok = await send_whatsapp(
         "Candidate FollowUp", target_phone, target_email,
-        [payload.name, payload.job_role, _fmt_date(payload.schedule_date), payload.schedule_time, schedule_link],
+        [payload.name, payload.job_role, fmt_date, payload.schedule_time],
         is_test=False,
     )
     await _db.bb_resend_history.insert_one({
@@ -641,7 +646,7 @@ async def send_test_message(payload: TestSendRequest, request: Request):
         "sent_at": datetime.now(timezone.utc).isoformat(),
         "candidate": {"name": payload.name, "email": target_email, "phone": target_phone},
         "template": "Candidate FollowUp",
-        "params": [payload.name, payload.job_role, _fmt_date(payload.schedule_date), payload.schedule_time, schedule_link],
+        "params": [payload.name, payload.job_role, fmt_date, payload.schedule_time],
         "status": "success" if ok else "failed",
         "failure_reason": None if ok else "AiSensy send failed",
         "retry_count": 1,

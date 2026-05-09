@@ -16,6 +16,30 @@ import {
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
+// Per-status enable map (spec #7). Keys = derived registered_status; values =
+// the action keys that are ALLOWED. For "Attended", an extra check on
+// result_status (Selected vs Rejected/On hold) decides what's enabled.
+const ENABLED_BY_STATUS = {
+    'Interview not scheduled': ['shortlist'],
+    'Interview scheduled':     ['schedule_detail', 'otp', 'followup'],
+    'Not Attended':            ['schedule_detail', 'otp', 'followup'],
+    'Attended':                [],   // refined below by result_status
+    'Rejected':                [],
+    '':                        [],   // unknown — keep all disabled, force admin to clarify
+};
+
+function _allowedActions(applicant) {
+    if (!applicant) return [];
+    const rs = applicant.registered_status || '';
+    if (rs === 'Attended') {
+        const result = (applicant.result_status || '').trim().toLowerCase();
+        if (result === 'selected') return [];
+        if (result === 'rejected' || result === 'on hold') return ['reject'];
+        return [];
+    }
+    return ENABLED_BY_STATUS[rs] || [];
+}
+
 const ACTION_BUTTONS = [
     { key: 'shortlist',       label: 'Send Interview Schedule',         endpoint: '/api/bb/manual/alerts/send-shortlist',       icon: PaperPlaneTilt, color: 'bg-emerald-600 hover:bg-emerald-700' },
     { key: 'schedule_detail', label: 'Send Schedule Details',           endpoint: '/api/bb/manual/alerts/send-schedule-detail', icon: ClipboardText,  color: 'bg-blue-600 hover:bg-blue-700' },
@@ -142,29 +166,42 @@ export default function ManualAlerts() {
                 )}
 
                 {/* Action buttons row */}
-                {applicant && (
+                {applicant && (() => {
+                    const allowed = _allowedActions(applicant);
+                    return (
                     <div className="bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl p-5">
-                        <p className="text-[11px] font-semibold tracking-[0.16em] text-[#9b9787] uppercase mb-3">Trigger Manual Alert</p>
+                        <p className="text-[11px] font-semibold tracking-[0.16em] text-[#9b9787] uppercase mb-3 flex items-center gap-2">
+                            Trigger Manual Alert
+                            <span className="text-[10px] normal-case tracking-normal text-[#6b7280] font-normal">
+                                — derived state: <strong className="text-[#1a2332]">{applicant.registered_status || 'Unknown'}</strong>
+                                {applicant.result_status && (<> · result: <strong className="text-[#1a2332]">{applicant.result_status}</strong></>)}
+                            </span>
+                        </p>
                         <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-                            {ACTION_BUTTONS.map((btn) => (
+                            {ACTION_BUTTONS.map((btn) => {
+                                const enabled = allowed.includes(btn.key);
+                                return (
                                 <button
                                     key={btn.key}
-                                    disabled={sending !== ''}
+                                    disabled={sending !== '' || !enabled}
                                     onClick={() => fireAction(btn)}
                                     data-testid={`action-${btn.key}`}
-                                    className={`text-white text-xs font-semibold px-4 py-3 rounded-xl flex flex-col items-center gap-1.5 transition-colors disabled:opacity-50 ${btn.color}`}
+                                    title={enabled ? '' : `Not allowed for ${applicant.registered_status || 'this state'}`}
+                                    className={`text-white text-xs font-semibold px-4 py-3 rounded-xl flex flex-col items-center gap-1.5 transition-colors ${enabled ? btn.color : 'bg-gray-300 cursor-not-allowed'} disabled:opacity-50`}
                                 >
                                     <btn.icon size={20} weight="duotone" />
                                     <span className="text-center leading-tight">{sending === btn.key ? 'Sending…' : btn.label}</span>
                                     <span className="text-[10px] opacity-80">Mail + WhatsApp</span>
                                 </button>
-                            ))}
+                                );
+                            })}
                         </div>
                         <p className="text-[11px] text-[#9b9787] mt-3 leading-relaxed">
-                            ⓘ Outbound messages obey the global TEST MODE gate. While TEST MODE is ON, sends succeed only when the recipient (email OR phone) is on the Tester Credentials list. Add testers in the <strong>Tester Credentials</strong> page; failures here mean the candidate is not yet a tester.
+                            ⓘ Buttons enable based on the applicant's derived stage (spec #7). Outbound messages additionally obey TEST MODE — while ON, only Tester Credentials receive real WhatsApp / Email.
                         </p>
                     </div>
-                )}
+                    );
+                })()}
             </main>
         </div>
     );

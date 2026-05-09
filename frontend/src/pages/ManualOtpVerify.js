@@ -133,40 +133,43 @@ export default function ManualOtpVerify() {
                             </tbody>
                         </table>
 
-                        {/* Date-based conditional action */}
+                        {/* Date-based / verified-state conditional action */}
                         <div className="px-5 py-4 border-t border-[#ece9dc] bg-[#faf9f1]">
-                            {interviewStatus === 'today' && (
+                            {applicant.otp_verified ? (
+                                <div className="flex items-center gap-2 text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3 text-sm font-semibold"
+                                    data-testid="manual-otp-status-already-verified">
+                                    <CheckCircle size={18} weight="fill" />
+                                    Applicant has already verified their OTP !
+                                </div>
+                            ) : interviewStatus === 'today' ? (
                                 <button onClick={handleVerify} disabled={verifying} data-testid="manual-otp-verify-btn"
                                     className="px-5 py-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm flex items-center gap-2 disabled:opacity-60">
                                     <ShieldCheck size={16} weight="bold" /> {verifying ? 'Verifying…' : 'Verify'}
                                 </button>
-                            )}
-                            {interviewStatus === 'past' && (
+                            ) : interviewStatus === 'past' ? (
                                 <div className="flex items-center gap-2 text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-4 py-3 text-sm font-semibold"
                                     data-testid="manual-otp-status-past">
                                     <WarningCircle size={18} weight="duotone" />
                                     Your interview is over !
                                 </div>
-                            )}
-                            {interviewStatus === 'future' && (
+                            ) : interviewStatus === 'future' ? (
                                 <div className="flex items-center gap-2 text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm font-semibold"
                                     data-testid="manual-otp-status-future">
                                     <Clock size={18} weight="duotone" />
                                     Your interview is in future !
                                 </div>
-                            )}
-                            {interviewStatus === 'unknown' && (
-                                <div className="flex items-center gap-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm font-semibold mb-3"
-                                    data-testid="manual-otp-status-unknown">
-                                    <WarningCircle size={18} weight="duotone" />
-                                    No schedule date on record — Verify is allowed.
-                                </div>
-                            )}
-                            {interviewStatus === 'unknown' && (
-                                <button onClick={handleVerify} disabled={verifying} data-testid="manual-otp-verify-btn"
-                                    className="px-5 py-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm flex items-center gap-2 disabled:opacity-60">
-                                    <ShieldCheck size={16} weight="bold" /> {verifying ? 'Verifying…' : 'Verify'}
-                                </button>
+                            ) : (
+                                <>
+                                    <div className="flex items-center gap-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm font-semibold mb-3"
+                                        data-testid="manual-otp-status-unknown">
+                                        <WarningCircle size={18} weight="duotone" />
+                                        No schedule date on record — Verify is allowed.
+                                    </div>
+                                    <button onClick={handleVerify} disabled={verifying} data-testid="manual-otp-verify-btn"
+                                        className="px-5 py-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm flex items-center gap-2 disabled:opacity-60">
+                                        <ShieldCheck size={16} weight="bold" /> {verifying ? 'Verifying…' : 'Verify'}
+                                    </button>
+                                </>
                             )}
                         </div>
                     </div>
