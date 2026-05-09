@@ -112,6 +112,110 @@ def is_allowed_recipient(email: str, phone: str) -> bool:
     return False
 
 
+# ============ OTP RESOLUTION (iter71) ============
+# Single source of truth for the OTP value tied to an applicant + interview
+# date. Rule: ONE OTP per (applicant, schedule_date). Reused everywhere
+# (Manual OTP Verify, Manual Alerts OTP, Bulk Comm OTP, OTP worker, OTP
+# email/WhatsApp). Reset on reschedule or re-registration only.
+
+async def get_otp_for_schedule(email: str, phone: str, schedule_date: str = "") -> str:
+    """Read-only lookup. Returns the OTP currently stored on the latest
+    matching `bb_registrations` doc for this applicant. If `schedule_date`
+    is supplied, prefers a doc with that exact `schedule_date`. Falls back
+    to most-recent doc otherwise. Empty string when no OTP exists yet.
+
+    NEVER generates a new OTP — use `get_or_create_otp_for_schedule` for
+    that (currently invoked only by the OTP worker / registration flow)."""
+    if _db is None:
+        return ""
+    e = _norm_email(email)
+    p = _norm_phone(phone)
+    if not (e or p):
+        return ""
+    import re as _re
+    clauses = []
+    if e:
+        clauses.append({"email": e})
+    if p:
+        clauses.append({"phone": {"$regex": f"{_re.escape(p)}$"}})
+
+    # Prefer exact schedule_date match (one OTP per interview date).
+    if schedule_date:
+        doc = await _db.bb_registrations.find_one(
+            {"$or": clauses, "schedule_date": schedule_date,
+             "otp": {"$exists": True, "$nin": [None, ""]}},
+            {"_id": 0, "otp": 1},
+            sort=[("otp_sent_at", -1)],
+        )
+        if doc and doc.get("otp"):
+            return str(doc["otp"])
+
+    # Fallback: latest OTP regardless of schedule_date (handles the
+    # historical case where schedule_date wasn't recorded on the OTP doc).
+    doc = await _db.bb_registrations.find_one(
+        {"$or": clauses, "otp": {"$exists": True, "$nin": [None, ""]}},
+        {"_id": 0, "otp": 1, "schedule_date": 1},
+        sort=[("otp_sent_at", -1)],
+    )
+    return str(doc["otp"]) if doc and doc.get("otp") else ""
+
+
+async def get_or_create_otp_for_schedule(email: str, phone: str, schedule_date: str, name: str = "") -> str:
+    """Worker/registration-only path: returns existing OTP or generates a
+    new one and persists it on `bb_registrations`. Other callers MUST use
+    `get_otp_for_schedule` (read-only) to avoid duplicate OTP creation."""
+    existing = await get_otp_for_schedule(email, phone, schedule_date)
+    if existing:
+        return existing
+    if _db is None:
+        return ""
+    import random
+    from datetime import datetime as _dt, timezone as _tz
+    new_otp = str(random.randint(100000, 999999))
+    e = _norm_email(email)
+    p = _norm_phone(phone)
+    now_iso = _dt.now(_tz.utc).isoformat()
+    # Try update existing doc for the same (email/phone, schedule_date)
+    res = await _db.bb_registrations.update_one(
+        {"$or": [{"email": e}, {"phone": p}], "schedule_date": schedule_date},
+        {"$set": {"otp": new_otp, "otp_sent_at": now_iso, "otp_sent": True}},
+    )
+    if res.matched_count == 0:
+        # Insert minimal doc so subsequent lookups find it.
+        await _db.bb_registrations.insert_one({
+            "name": name, "email": e, "phone": p,
+            "schedule_date": schedule_date,
+            "otp": new_otp, "otp_sent": True, "otp_sent_at": now_iso,
+            "created_via": "otp_resolver", "created_at": now_iso,
+        })
+    return new_otp
+
+
+async def reset_otp_on_reschedule(email: str, phone: str) -> int:
+    """Invalidate ALL stored OTPs for this applicant. Called when the
+    interview is rescheduled — old OTP must be wiped so the OTP worker
+    generates a fresh one for the new slot. Returns count of docs modified."""
+    if _db is None:
+        return 0
+    import re as _re
+    e = _norm_email(email)
+    p = _norm_phone(phone)
+    clauses = []
+    if e:
+        clauses.append({"email": e})
+    if p:
+        clauses.append({"phone": {"$regex": f"{_re.escape(p)}$"}})
+    if not clauses:
+        return 0
+    res = await _db.bb_registrations.update_many(
+        {"$or": clauses},
+        {"$unset": {"otp": "", "otp_sent": "", "otp_sent_at": "",
+                    "otpGeneratedAt": "", "otpExpiry": ""}},
+    )
+    _logger.info(f"[OTP:reset_on_reschedule] email={e} phone={p} cleared={res.modified_count}")
+    return res.modified_count
+
+
 # ============ WHATSAPP (AiSensy) ============
 
 async def send_whatsapp(campaign_name: str, phone: str, email: str, template_params: list, is_test: bool = False):
@@ -329,7 +433,7 @@ async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str,
     <p>Looking forward to seeing you soon!</p>
     <p>Best regards,<br>Blubridge Recruitment Team</p>
     """
-    em_ok = await send_email(email, phone, f"Your Interview OTP - Blubridge Technologies", html, is_test=is_test)
+    em_ok = await send_email(email, phone, "Your Interview OTP - Blubridge Technologies", html, is_test=is_test)
     return wa_ok, em_ok
 
 
@@ -338,17 +442,17 @@ async def notify_missed_reminder(name: str, phone: str, email: str, role: str, d
     Returns (wa_ok, em_ok).
 
     iter70 — Aligned with PHP reference (user spec):
-        $campaign_name = "Candidate FollowUp";
+        $campaign_name = "Candidate Followups1";
         sendAiSensyMessage($campaign_name, $phone,
             [$name, $role, $formattedDate, $time, $schedule_link],
             "Blubridgetechnologies");
-    AiSensy "Candidate FollowUp" template now expects exactly 5 params:
+    AiSensy "Candidate Followups1" template now expects exactly 5 params:
     [name, role, date, time, schedule_link]. The reschedule CTA URL is
     delivered as the 5th template variable (NOT the button URL).
     """
     schedule_link = f"{FRONTEND_URL}/schedule-interview/{schedule_token}" if schedule_token else FRONTEND_URL
     wa_ok = await send_whatsapp(
-        "Candidate FollowUp", phone, email,
+        "Candidate Followups1", phone, email,
         [name, role, date, time, schedule_link],
         is_test=is_test,
     )

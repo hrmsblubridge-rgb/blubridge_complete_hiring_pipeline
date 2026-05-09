@@ -157,25 +157,30 @@ function UploadZone({ onUploaded }) {
 }
 
 // ---------- Message Preview Modal ----------
-function MessagePreview({ row, template, onClose }) {
+function MessagePreview({ row, template, action, onClose }) {
     const c = row?.candidate || {};
     const s = row?.schedule || {};
+    const office = template?.office_location || '30, Norton Road, Chennai - 600028';
     const body = (template?.body || '')
-        .replace(/{{name}}/g, c.name || '—')
+        .replace(/{{name}}/g, c.name || c.input_name || '—')
         .replace(/{{job_role}}/g, s.job_role || '—')
         .replace(/{{schedule_date}}/g, fmtDDMMYYYY(s.schedule_date))
         .replace(/{{schedule_time}}/g, s.schedule_time || '—')
         .replace(/{{interview_round}}/g, s.interview_round || 'Round 1')
-        .replace(/{{schedule_link}}/g, s.schedule_link || '—')
+        .replace(/{{schedule_link}}/g, s.schedule_link || `${window.location.origin}/schedule-interview/<token>`)
+        .replace(/{{otp}}/g, c.otp || '—')
+        .replace(/{{phone}}/g, c.phone || c.input_phone || '—')
+        .replace(/{{office_location}}/g, office)
         .replace(/{{hr_name}}/g, s.hr_name || 'BluBridge HR Team');
 
+    const headerColor = action?.accent || WA_GREEN_DARK;
     return (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose} data-testid="resend-message-preview">
             <div className="bg-[#fffdf7] rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between px-5 py-3 border-b border-[#e5e3d8]" style={{ backgroundColor: WA_GREEN_DARK }}>
+                <div className="flex items-center justify-between px-5 py-3 border-b border-[#e5e3d8]" style={{ backgroundColor: headerColor }}>
                     <div className="flex items-center gap-2 text-white">
                         <WhatsappLogo size={20} weight="fill" />
-                        <span className="font-semibold text-sm">WhatsApp Preview</span>
+                        <span className="font-semibold text-sm">{action?.label || 'WhatsApp Preview'}</span>
                     </div>
                     <button onClick={onClose} className="text-white/80 hover:text-white"><X size={18} /></button>
                 </div>
@@ -183,6 +188,9 @@ function MessagePreview({ row, template, onClose }) {
                     <div className="bg-[#DCF8C6] rounded-xl rounded-tl-none p-4 shadow-sm whitespace-pre-wrap text-sm text-[#1f2937] leading-relaxed">
                         {body}
                     </div>
+                    <p className="text-[10px] text-[#6b7280] mt-3 text-center">
+                        Template: <span className="font-mono">{template?.template || '—'}</span> · Params: {(template?.params || []).length}
+                    </p>
                 </div>
             </div>
         </div>
@@ -210,11 +218,14 @@ export default function WhatsAppResend() {
     const [actionKey, setActionKey] = useState('candidate_followup');
     const action = ACTION_BY_KEY[actionKey];
 
-    // Load template once
+    // iter71 — Reload preview template whenever action changes so the
+    // preview always reflects the active action's body.
     useEffect(() => {
-        axios.get(`${API}/api/bb/resend/template-preview`, { withCredentials: true })
-            .then(r => setTemplate(r.data)).catch(() => {});
-    }, []);
+        axios.get(`${API}/api/bb/resend/template-preview`, {
+            withCredentials: true,
+            params: { action_type: actionKey },
+        }).then(r => setTemplate(r.data)).catch(() => {});
+    }, [actionKey]);
 
     const loadPreview = useCallback(async (uploadId, p = 1) => {
         if (!uploadId) return;
@@ -515,7 +526,18 @@ export default function WhatsAppResend() {
                                                     </td>
                                                     <td className="px-3 py-3 sticky right-0 bg-[#fffdf7]">
                                                         <div className="flex items-center gap-1">
-                                                            <button onClick={() => setPreviewRow(r)} title="Preview message"
+                                                            <button onClick={async () => {
+                                                                let enriched = r;
+                                                                // iter71 — OTP-action preview: fetch live OTP so the
+                                                                // preview shows the applicant's actual code.
+                                                                if (actionKey === 'otp' && upload?.upload_id) {
+                                                                    try {
+                                                                        const resp = await axios.get(`${API}/api/bb/resend/row-otp/${upload.upload_id}/${r.row_id}`, { withCredentials: true });
+                                                                        enriched = { ...r, candidate: { ...(r.candidate || {}), otp: resp.data?.otp || '' } };
+                                                                    } catch { /* keep base row on error */ }
+                                                                }
+                                                                setPreviewRow(enriched);
+                                                            }} title="Preview message"
                                                                 data-testid={`resend-preview-${r.row_id}`}
                                                                 className="p-1.5 rounded-md border border-[#e5e3d8] hover:bg-[#efede5]">
                                                                 <Eye size={14} className="text-[#1a2332]" />
@@ -553,7 +575,7 @@ export default function WhatsAppResend() {
                 )}
             </main>
 
-            {previewRow && <MessagePreview row={previewRow} template={template} onClose={() => setPreviewRow(null)} />}
+            {previewRow && <MessagePreview row={previewRow} template={template} action={action} onClose={() => setPreviewRow(null)} />}
         </div>
     );
 }

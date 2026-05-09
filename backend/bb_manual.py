@@ -28,6 +28,7 @@ from messaging import (
     notify_otp,
     notify_missed_reminder,
     notify_rejected,
+    get_otp_for_schedule,
 )
 
 _logger = logging.getLogger("bb_manual")
@@ -172,29 +173,14 @@ async def lookup_applicant(request: Request, email: Optional[str] = None, phone:
         raise HTTPException(404, "Applicant not found in pipeline_data")
     sched_iso = _parse_schedule_date_iso(rec.get("schedule_date"))
     interview_status = _interview_status_today(sched_iso)
-    # iter70 — OTP resolution: prefer pipeline_data.otp; fall back to the
-    # latest bb_registrations.otp for the same applicant if pipeline_data.otp
-    # is null/empty (the OTP worker writes only to bb_registrations). Ensures
-    # the Manual OTP Verify page ALWAYS shows the OTP if one exists, even
-    # when otp_verified is already true.
-    otp_value = rec.get("otp") or ""
+    # iter71 — Centralized OTP resolution. ONE OTP per (applicant, schedule_date)
+    # tied to bb_registrations. Never generates here; only reads. Falls back
+    # to pipeline_data.otp if a tester manually populated it.
+    otp_value = await get_otp_for_schedule(
+        rec.get("email") or "", rec.get("phone") or "", rec.get("schedule_date") or "",
+    )
     if not otp_value:
-        e = _norm_email(rec.get("email") or "")
-        p = _norm_phone(rec.get("phone") or "")
-        clauses = []
-        if e:
-            clauses.append({"email": e})
-        if p:
-            import re as _re
-            clauses.append({"phone": {"$regex": f"{_re.escape(p)}$"}})
-        if clauses:
-            reg = await _db.bb_registrations.find_one(
-                {"$or": clauses, "otp": {"$exists": True, "$nin": [None, ""]}},
-                {"_id": 0, "otp": 1},
-                sort=[("otp_sent_at", -1)],
-            )
-            if reg and reg.get("otp"):
-                otp_value = str(reg["otp"])
+        otp_value = rec.get("otp") or ""
     # Surface the fields the UI needs (drop legacy/internal-only keys).
     return {
         "name":            rec.get("name") or "",
@@ -303,21 +289,27 @@ async def alert_send_schedule_detail(body: AlertSendBody, request: Request):
 async def alert_send_otp(body: AlertSendBody, request: Request):
     user = await _get_user(request)
     rec = await _resolve_or_404(body.email, body.phone)
-    otp = (rec.get("otp") or "").strip()
+    # iter71 — Centralized OTP resolution: NEVER generate a new OTP from
+    # any "send" path. The OTP worker (3h pre-interview) and registration
+    # flow are the only writers. If no OTP exists yet, fail with a clear
+    # error so the recruiter knows to wait for the auto-generation window.
+    sched_date = rec.get("schedule_date") or ""
+    otp = await get_otp_for_schedule(rec.get("email") or "", rec.get("phone") or "", sched_date)
     if not otp:
-        otp = "".join(secrets.choice("0123456789") for _ in range(6))
-        await _db.pipeline_data.update_one(
-            {"email": rec.get("email"), "phone": rec.get("phone")},
-            {"$set": {"otp": otp, "otp_sent_at": datetime.now(timezone.utc).isoformat()}}
+        raise HTTPException(
+            400,
+            "No OTP exists yet for this applicant. The OTP worker auto-generates "
+            "the OTP up to 3 hours before the scheduled interview. Please retry "
+            "closer to the interview slot or check the interview schedule_date.",
         )
     to_email = rec.get("email") or ""
     to_phone = rec.get("phone") or ""
-    _logger.info(f"[ManualAlerts:otp] by={user} → email={to_email} phone={to_phone}")
+    _logger.info(f"[ManualAlerts:otp] by={user} → email={to_email} phone={to_phone} otp_reused={otp}")
     wa_ok, em_ok = await notify_otp(
         rec.get("name") or "", to_phone, to_email,
         rec.get("job_role") or rec.get("job_title") or "Interview",
         otp,
-        rec.get("schedule_date") or "",
+        sched_date,
         rec.get("schedule_time") or "",
     )
     success = bool(wa_ok or em_ok)

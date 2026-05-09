@@ -105,7 +105,7 @@ MODULES = [
         "tips": [
             "5-min cooldown per candidate.",
             "Strict allowlist applies — non-allowlisted recipients log as 'blocked'.",
-            "Reuses the AiSensy 'Candidate FollowUp' template (5 params).",
+            "Reuses the AiSensy 'Candidate Followups1' template (5 params).",
             "Excel/CSV export of the preview table is available post-upload (iter67).",
         ],
         "downloads": [{"label": "WhatsApp Resend Template (.xlsx)", "url": "/api/bb/help/template/whatsapp-resend"}],
@@ -193,7 +193,7 @@ MODULES = [
 
 WHATS_NEW = [
     ("Cream Light Theme",     "Full app converted from dark mode to a warm cream theme with persistent left sidebar."),
-    ("WhatsApp Resend Module","CSV/XLSX upload → 5-priority match → preview → bulk send via approved 'Candidate FollowUp' template."),
+    ("WhatsApp Resend Module","CSV/XLSX upload → 5-priority match → preview → bulk send via approved 'Candidate Followups1' template."),
     ("Manual Applicant Alerts","Manually fire any of 5 messaging flows for a single candidate (shortlist / schedule / OTP / follow-up / reject)."),
     ("Manual OTP Verify",     "Email + Phone match → set otp_verified=true with full applicant readout."),
     ("Tester Credentials",    "QA email/phone pairs bypass the 4-month cooldown without touching code."),
@@ -242,7 +242,7 @@ GLOBAL_FAQS = [
     ("Can I bypass cooldown for testing?",
      "Yes — add the tester's email/phone via Tester Credentials. ANY match (email or phone) bypasses the 4-month restriction."),
     ("Where do the 5 manual alert templates come from?",
-     "ShortList / Schedule Detail / OTP With Job / Candidate FollowUp / Reject — all pre-approved on AiSensy."),
+     "ShortList / Schedule Detail / OTP With Job / Candidate Followups1 / Reject — all pre-approved on AiSensy."),
     ("Why does the OTP page have a 3h window?",
      "OTP becomes valid 3h before the scheduled time and stays valid for 8h after."),
     ("How are status typos handled in Score & Round?",

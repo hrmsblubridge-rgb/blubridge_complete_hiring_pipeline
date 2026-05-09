@@ -7,7 +7,7 @@ who missed/deleted their original message.
 Pipeline:
   upload(xlsx/csv) → auto-map columns → 5-priority match against pipeline_data
   + bb_registrations → fetch latest active schedule → preview → bulk send
-  via existing AiSensy "Candidate FollowUp" template (5 params:
+  via existing AiSensy "Candidate Followups1" template (5 params:
   [name, role, date, time, schedule_link]) → log to bb_resend_history.
 
 Strict allowlist from messaging.send_whatsapp() remains in place.
@@ -30,8 +30,8 @@ from messaging import (
     send_whatsapp, can_send_message, FRONTEND_URL,
     notify_shortlisted, notify_schedule_confirmation, notify_otp,
     notify_missed_reminder, notify_rejected,
+    get_otp_for_schedule,
 )
-import random
 
 _logger = logging.getLogger("bb_resend")
 
@@ -518,30 +518,11 @@ ACTION_LABELS = {
 }
 
 
-async def _get_or_create_otp(email: str, phone: str) -> str:
-    """Q1=a — Reuse existing OTP from bb_registrations if present, else
-    generate a new 6-digit code, store it, and return it."""
-    q: Dict[str, Any] = {"$or": []}
-    if email:
-        q["$or"].append({"email": email})
-    if phone:
-        q["$or"].append({"phone": phone})
-    if not q["$or"]:
-        return ""
-    reg = await _db.bb_registrations.find_one(q, sort=[("created_at", -1)])
-    if reg and reg.get("otp"):
-        return str(reg["otp"])
-    new_otp = str(random.randint(100000, 999999))
-    if reg:
-        await _db.bb_registrations.update_one(
-            {"_id": reg["_id"]},
-            {"$set": {
-                "otp": new_otp,
-                "otp_sent": True,
-                "otp_sent_at": datetime.now(timezone.utc).isoformat(),
-            }},
-        )
-    return new_otp
+async def _get_otp_readonly(email: str, phone: str, schedule_date: str = "") -> str:
+    """iter71 — Read-only OTP lookup for Bulk Communication Center. Never
+    generates a new OTP from this code path; defers entirely to the
+    centralized `messaging.get_otp_for_schedule` helper."""
+    return await get_otp_for_schedule(email, phone, schedule_date)
 
 
 async def _send_one(row: dict, user: str, upload_id: str, action_type: str = "candidate_followup") -> Tuple[str, Optional[str]]:
@@ -605,9 +586,10 @@ async def _send_one(row: dict, user: str, upload_id: str, action_type: str = "ca
         elif action_type == "otp":
             if not (formatted_date and formatted_time):
                 return "skipped", "Missing schedule date/time"
-            otp_code = await _get_or_create_otp(email, phone)
+            # iter71 — Read-only OTP fetch (NEVER generate from Bulk Comm).
+            otp_code = await _get_otp_readonly(email, phone, sched.get("schedule_date") or "")
             if not otp_code:
-                return "failed", "Could not resolve OTP"
+                return "skipped", "OTP not yet generated for this schedule (auto-generated 3h before interview)"
             wa_ok, em_ok = await notify_otp(name, phone, email, job_role, otp_code, formatted_date, formatted_time, is_test=False)
             ok = bool(wa_ok or em_ok)
             params = [name, job_role, otp_code, phone, formatted_date, formatted_time]
@@ -712,11 +694,11 @@ async def send_test_message(payload: TestSendRequest, request: Request):
     """Send a test WhatsApp message to the first allowlisted number."""
     user = await _get_user(request)
     target_email, target_phone = "rishi.nayak@blubridge.com", "9443109903"
-    # iter70 — 5-param Candidate FollowUp template aligned with PHP reference.
+    # iter70 — 5-param Candidate Followups1 template aligned with PHP reference.
     fmt_date = _fmt_date(payload.schedule_date)
     test_link = f"{FRONTEND_URL}/schedule-interview/test-token"
     ok = await send_whatsapp(
-        "Candidate FollowUp", target_phone, target_email,
+        "Candidate Followups1", target_phone, target_email,
         [payload.name, payload.job_role, fmt_date, payload.schedule_time, test_link],
         is_test=False,
     )
@@ -727,7 +709,7 @@ async def send_test_message(payload: TestSendRequest, request: Request):
         "sent_by": user,
         "sent_at": datetime.now(timezone.utc).isoformat(),
         "candidate": {"name": payload.name, "email": target_email, "phone": target_phone},
-        "template": "Candidate FollowUp",
+        "template": "Candidate Followups1",
         "params": [payload.name, payload.job_role, fmt_date, payload.schedule_time, test_link],
         "status": "success" if ok else "failed",
         "failure_reason": None if ok else "AiSensy send failed",
@@ -758,25 +740,117 @@ async def get_history(
     }
 
 
+@resend_router.get("/row-otp/{upload_id}/{row_id}")
+async def get_row_otp(upload_id: str, row_id: str, request: Request):
+    """iter71 — Read-only OTP fetch for a single uploaded row, used by the
+    preview modal so OTP-action previews always show the live applicant OTP.
+    Returns empty string when no OTP has been generated yet (worker runs 3h
+    pre-interview)."""
+    await _get_user(request)
+    doc = await _db.bb_resend_uploads.find_one({"upload_id": upload_id}, {"_id": 0, "rows": 1})
+    if not doc:
+        raise HTTPException(404, "Upload not found")
+    row = next((r for r in (doc.get("rows") or []) if r.get("row_id") == row_id), None)
+    if not row:
+        raise HTTPException(404, "Row not found")
+    cand = row.get("candidate") or {}
+    sched = row.get("schedule") or {}
+    otp = await _get_otp_readonly(
+        cand.get("email") or cand.get("input_email") or "",
+        cand.get("phone") or cand.get("input_phone") or "",
+        sched.get("schedule_date") or "",
+    )
+    return {"otp": otp}
+
+
 @resend_router.get("/template-preview")
-async def template_preview():
-    """Return the WhatsApp template body the UI should display as preview."""
-    return {
-        "template": "Candidate FollowUp",
-        "body": (
-            "Hello {{name}},\n\n"
-            "This is a reminder regarding your interview schedule for the role of {{job_role}}.\n\n"
-            "Interview Details:\n"
-            "📅 Date: {{schedule_date}}\n"
-            "⏰ Time: {{schedule_time}}\n"
-            "🎯 Round: {{interview_round}}\n\n"
-            "🔗 Interview Link:\n{{schedule_link}}\n\n"
-            "Please join on time.\n\n"
-            "For support contact:\n{{hr_name}}\n\n"
-            "Thank You,\nBluBridge Hiring Team"
-        ),
-        "params": ["name", "job_role", "schedule_date", "schedule_time", "schedule_link"],
+async def template_preview(action_type: str = Query("candidate_followup")):
+    """Return the WhatsApp template body the UI should display as preview,
+    keyed to the active Bulk Comm action. iter71 — per-action template
+    bodies aligned with Manual Applicant Alerts copy + AiSensy templates.
+
+    Variables:
+      {{name}}, {{job_role}}, {{schedule_date}}, {{schedule_time}},
+      {{schedule_link}}, {{otp}}, {{office_location}}
+    """
+    OFFICE = "30, Norton Road, Mandavelipakkam, Raja Annamalai Puram, Chennai - 600028."
+    BODIES: Dict[str, Dict[str, Any]] = {
+        "interview_schedule": {
+            "template": "ShortList",
+            "params": ["name", "schedule_link"],
+            "body": (
+                "Dear {{name}},\n\n"
+                "Congratulations! Your profile aligns with our requirements at "
+                "Blubridge Technologies.\n\n"
+                "Please schedule your offline (in-person) interview using the "
+                "link below:\n{{schedule_link}}\n\n"
+                "We look forward to meeting you.\n\n"
+                "— Blubridge Technologies"
+            ),
+        },
+        "schedule_details": {
+            "template": "Schedule Detail",
+            "params": ["name", "schedule_date", "schedule_time", "office_location"],
+            "body": (
+                "Hi {{name}},\n\n"
+                "Your interview at Blubridge Technologies is confirmed:\n\n"
+                "📅 Date: {{schedule_date}}\n"
+                "⏰ Time: {{schedule_time}}\n"
+                "📍 Location: {{office_location}}\n\n"
+                "We look forward to meeting you.\n\n"
+                "— Blubridge Technologies"
+            ),
+        },
+        "otp": {
+            "template": "OTP With Job",
+            "params": ["name", "job_role", "otp", "phone", "schedule_date", "schedule_time", "office_location"],
+            "body": (
+                "Hi {{name}},\n\n"
+                "Your One-Time Password (OTP) to confirm your interview attendance is:\n\n"
+                "🔐 *{{otp}}*\n\n"
+                "Interview Details\n"
+                "Role: {{job_role}}\n"
+                "Date: {{schedule_date}}\n"
+                "Time: {{schedule_time}}\n"
+                "Location: {{office_location}}\n\n"
+                "OTP is valid for 8 hours from your scheduled slot.\n\n"
+                "— Blubridge Recruitment Team"
+            ),
+        },
+        "candidate_followup": {
+            "template": "Candidate Followups1",
+            "params": ["name", "job_role", "schedule_date", "schedule_time", "schedule_link"],
+            "body": (
+                "Hi {{name}},\n\n"
+                "We noticed you missed your scheduled interview at Blubridge for "
+                "the role of {{job_role}}. We'd like to offer you one final "
+                "opportunity to reschedule.\n\n"
+                "📅 Originally scheduled: {{schedule_date}} at {{schedule_time}}\n\n"
+                "Reschedule here:\n{{schedule_link}}\n\n"
+                "Rescheduling is subject to available slots.\n\n"
+                "— Blubridge Recruitment Team"
+            ),
+        },
+        "rejection": {
+            "template": "Reject",
+            "params": [],
+            "body": (
+                "Dear {{name}},\n\n"
+                "Thank you for your time and effort in completing our "
+                "registration form.\n\n"
+                "While your background and experience are impressive, we have "
+                "decided to move forward with candidates whose profiles more "
+                "closely align with our current requirements.\n\n"
+                "We encourage you to apply for future opportunities at "
+                "Blubridge Technologies.\n\n"
+                "Wishing you the best!\n\n"
+                "— Blubridge Technologies"
+            ),
+        },
     }
+    body = BODIES.get(action_type) or BODIES["candidate_followup"]
+    body["office_location"] = OFFICE
+    return body
 
 
 # ---------------------------------------------------------------------------
