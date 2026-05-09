@@ -105,12 +105,49 @@ body {
 .app-shell .text-amber-400   { color: #b45309 !important; }
 .app-shell .text-blue-400    { color: #1d4ed8 !important; }
 .app-shell .text-violet-400  { color: #6d28d9 !important; }
+.app-shell .text-purple-400  { color: #6d28d9 !important; }
+
+/* Light-shade text tokens (200/300) used inside dark-translucent badges
+   are remapped to saturated dark text to ensure legibility on the
+   cream-tinted badge backgrounds. */
+.app-shell .text-emerald-200 { color: #065f46 !important; }
+.app-shell .text-emerald-300 { color: #047857 !important; }
+.app-shell .text-cyan-200    { color: #155e75 !important; }
+.app-shell .text-cyan-300    { color: #0e7490 !important; }
+.app-shell .text-amber-200   { color: #92400e !important; }
+.app-shell .text-amber-300   { color: #b45309 !important; }
+.app-shell .text-red-300     { color: #b91c1c !important; }
+.app-shell .text-fuchsia-200 { color: #86198f !important; }
+.app-shell .text-fuchsia-300 { color: #a21caf !important; }
+
+/* Saturated 500/700 text tokens occasionally used on cream bg —
+   keep them dark enough to be legible. */
+.app-shell .text-emerald-500 { color: #047857 !important; }
+.app-shell .text-cyan-500    { color: #0e7490 !important; }
+.app-shell .text-amber-500   { color: #b45309 !important; }
+.app-shell .text-blue-500    { color: #1d4ed8 !important; }
+.app-shell .text-red-500     { color: #b91c1c !important; }
+.app-shell .text-yellow-500  { color: #a16207 !important; }
+.app-shell .text-teal-500    { color: #0f766e !important; }
+.app-shell .text-violet-500  { color: #6d28d9 !important; }
+.app-shell .text-purple-500  { color: #6d28d9 !important; }
 
 .app-shell .border-emerald-800\/50 { border-color: #6ee7b7 !important; }
 .app-shell .border-orange-800\/50  { border-color: #fdba74 !important; }
 .app-shell .border-red-800\/50     { border-color: #fca5a5 !important; }
 .app-shell .border-cyan-800\/50    { border-color: #67e8f9 !important; }
 .app-shell .border-amber-800\/50   { border-color: #fcd34d !important; }
+.app-shell .border-amber-800\/40   { border-color: #fcd34d !important; }
+.app-shell .border-cyan-700\/50    { border-color: #22d3ee !important; }
+.app-shell .border-red-900\/30     { border-color: #fca5a5 !important; }
+.app-shell .border-red-900\/40     { border-color: #fca5a5 !important; }
+
+/* Solid 700 backgrounds on buttons — keep them saturated for clear
+   primary/destructive cues against the cream theme. */
+.app-shell .bg-amber-700\/30      { background-color: #fde68a !important; }
+.app-shell .bg-emerald-700\/30    { background-color: #a7f3d0 !important; }
+.app-shell .bg-fuchsia-700\/30    { background-color: #f5d0fe !important; }
+.app-shell .bg-emerald-900\/60    { background-color: #a7f3d0 !important; }
 
 /* Sticky table headers using zinc bg */
 .app-shell thead .bg-zinc-900,

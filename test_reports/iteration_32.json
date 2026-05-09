@@ -67,7 +67,7 @@
   "seed_data_creation": "None — all tests are read-only against the live HR analytics DB. No isTest:true documents were created.",
   "retest_needed": false,
   "should_main_agent_self_test": false,
-  "context_for_next_testing_agent": "test_iteration32_pipeline_applicants.py validates the May 2026 contract: /api/applicants total~=100798 (pipeline_data source), /api/attended total~=5335. Auth via POST /api/login with Admin User/Admin User (cookie-based session). Run with `REACT_APP_BACKEND_URL=https://score-round-staging.preview.emergentagent.com pytest backend/tests/test_iteration32_pipeline_applicants.py -v`. Score round columns visible on /api/attended rows are: ZA, C++, Java, BA, LA, Mensa, Mensa Org, Accounts1, Accounts2, BE, BP. If the totals shift by more than the test tolerance (5000 for applicants, 1500 for attended), the upstream HR ingest was re-run.",
+  "context_for_next_testing_agent": "test_iteration32_pipeline_applicants.py validates the May 2026 contract: /api/applicants total~=100798 (pipeline_data source), /api/attended total~=5335. Auth via POST /api/login with Admin User/Admin User (cookie-based session). Run with `REACT_APP_BACKEND_URL=https://recruit-pipeline-fix-1.preview.emergentagent.com pytest backend/tests/test_iteration32_pipeline_applicants.py -v`. Score round columns visible on /api/attended rows are: ZA, C++, Java, BA, LA, Mensa, Mensa Org, Accounts1, Accounts2, BE, BP. If the totals shift by more than the test tolerance (5000 for applicants, 1500 for attended), the upstream HR ingest was re-run.",
   "mocked_apis": {
     "WhatsApp AiSensy": "Returns 401 — not exercised in this iteration"
   }

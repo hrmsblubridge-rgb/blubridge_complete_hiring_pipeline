@@ -16,7 +16,7 @@ import pytest
 import requests
 from openpyxl import Workbook, load_workbook
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://score-round-staging.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://recruit-pipeline-fix-1.preview.emergentagent.com").rstrip("/")
 
 
 def _run_async(coro):

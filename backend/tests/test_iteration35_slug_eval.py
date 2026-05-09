@@ -9,7 +9,7 @@ import time
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://score-round-staging.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://recruit-pipeline-fix-1.preview.emergentagent.com").rstrip("/")
 SLUG = "ai-ml"
 OBJECT_ID = "69f9ae18dec9a8c504283e7c"
 
