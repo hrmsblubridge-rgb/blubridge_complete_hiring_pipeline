@@ -45,6 +45,14 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter69f — Phase 3 of 11-item batch · #10 Job Keyword + Role Sync)**:
+  - **#10A — Two-source sync**: `_sync_job_titles_master()` now extracts distinct job titles from BOTH `naukri_applies.job_title` AND `pipeline_data.job_role` (with `job_title` fallback), normalises, and upserts into `job_titles_master` AND auto-populates `bb_job_roles` (case-insensitive). The HR Pipeline upload (`/api/upload/pipeline`) now triggers the sync — previously only the Naukri upload did.
+  - **#10B — `/manage-job-roles` page** already existed (cards + edit + delete via `/api/bb/job-roles` CRUD). No frontend changes needed.
+  - **#10C — Manual create mirrors into `job_titles_master`**: `POST /api/bb/job-roles` now (a) rejects case-insensitive duplicates with HTTP 409, (b) inserts the title into `job_titles_master` (`source: 'manual'`) so it shows up in the mapping picker alongside imported titles.
+  - **#10D — Mapping picker** (`/api/job-titles/unmatched`) already reads from `job_titles_master` — now includes both extracted + manual entries automatically.
+  - **#10E — Dropdowns** consume `bb_job_roles` and the `_resolve_normalized_job_role(...)` helper (uses `job_keyword_mapping`) at the data layer, so app-wide UIs surface the canonical mapped names.
+  - **Verified live**: manual sync inserted 105 titles into `job_titles_master` + 73 into `bb_job_roles` from existing data. Manual create flow round-tripped: created → 409 on duplicate → appeared in mapping picker → role count incremented. Cleanup performed.
+
 - **Feb 2026 (iter69e — Phase 2 of 11-item batch)**:
   - **#6 — Derived Registered Status**: backend `_derive_registered_status()` now computes from `pipeline_data` fields:
     `email_type=reject` → "Rejected" · `email_type=shortlist` & no schedule → "Interview not scheduled" · schedule + `otp_verified=1` → "Attended" · schedule + past date + not verified → "Not Attended" · schedule + future/today + not verified → "Interview scheduled". Surfaced via `/applicant/lookup`. Result Status read directly from `pipeline_data.result_status`.

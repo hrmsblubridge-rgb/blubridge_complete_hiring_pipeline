@@ -484,6 +484,8 @@ async def upload_pipeline(file: UploadFile = File(...), user: str = Depends(get_
                 errors.append(f"Row {idx + 2}: {str(e)}")
 
         await reprocess_matching()
+        # iter69f (#10A) — sync extracted job titles → job_titles_master + bb_job_roles
+        await _sync_job_titles_master()
 
         return {
             "success": True,
@@ -677,25 +679,60 @@ def _normalize_text_for_matching(text: str) -> str:
 
 
 async def _sync_job_titles_master():
-    """Extract distinct job titles from naukri_applies and upsert into job_titles_master."""
-    pipeline = [
-        {"$match": {"job_title": {"$nin": [None, ""]}}},
-        {"$group": {"_id": "$job_title"}},
-    ]
-    results = await db.naukri_applies.aggregate(pipeline).to_list(None)
-    for r in results:
-        raw = str(r["_id"]).strip()
+    """Extract distinct job titles from BOTH naukri_applies AND pipeline_data,
+    and upsert into job_titles_master + bb_job_roles (case-insensitive
+    deduplication). Spec #10A — keeps the mapping picker AND the Job Roles
+    page in sync after every dataset upload.
+    """
+    sources = []
+    # Naukri uploads → job_title
+    sources.extend(
+        await db.naukri_applies.aggregate(
+            [{"$match": {"job_title": {"$nin": [None, ""]}}},
+             {"$group": {"_id": "$job_title"}}]
+        ).to_list(None)
+    )
+    # HR Pipeline uploads → job_role (pipeline_data uses `job_role`, with
+    # legacy `job_title` as fallback)
+    sources.extend(
+        await db.pipeline_data.aggregate(
+            [{"$match": {"job_role": {"$nin": [None, ""]}}},
+             {"$group": {"_id": "$job_role"}}]
+        ).to_list(None)
+    )
+    sources.extend(
+        await db.pipeline_data.aggregate(
+            [{"$match": {"job_role": {"$in": [None, ""]}, "job_title": {"$nin": [None, ""]}}},
+             {"$group": {"_id": "$job_title"}}]
+        ).to_list(None)
+    )
+    seen = set()
+    for r in sources:
+        raw = str(r["_id"] or "").strip()
         if not raw:
             continue
         normalized = _normalize_text_for_matching(raw)
-        if not normalized:
+        if not normalized or normalized in seen:
             continue
+        seen.add(normalized)
         existing = await db.job_titles_master.find_one({"normalized_job_title": normalized})
         if not existing:
             await db.job_titles_master.insert_one({
                 "raw_job_title": raw,
                 "normalized_job_title": normalized,
                 "is_mapped": False,
+            })
+        # iter69f (#10A) — auto-upsert into bb_job_roles so the Job Roles page
+        # always lists every distinct title from imports + manual creates.
+        # Case-insensitive match against existing rows.
+        bb_existing = await db.bb_job_roles.find_one(
+            {"name": {"$regex": f"^{re.escape(raw)}$", "$options": "i"}}
+        )
+        if not bb_existing:
+            await db.bb_job_roles.insert_one({
+                "name": raw,
+                "source": "imported",
+                "created_at": datetime.now(timezone.utc).isoformat(),
             })
 
 

@@ -476,8 +476,34 @@ async def create_job_role(data: JobRoleBody, request: Request):
     name = data.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Name required")
-    doc = {"name": name, "created_at": datetime.now(timezone.utc).isoformat()}
+    # iter69f (#10C) — Reject case-insensitive duplicates so the Job Roles
+    # page can never grow two cards for the same title.
+    dup = await _db.bb_job_roles.find_one(
+        {"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}}
+    )
+    if dup:
+        raise HTTPException(status_code=409, detail="Job role already exists")
+    doc = {"name": name, "source": "manual",
+           "created_at": datetime.now(timezone.utc).isoformat()}
     result = await _db.bb_job_roles.insert_one(doc)
+    # iter69f (#10C) — Mirror manual additions into job_titles_master so the
+    # mapping picker offers them alongside imported titles.
+    try:
+        from server import _normalize_text_for_matching as _nrm
+        normalized = _nrm(name)
+        if normalized:
+            existing_jtm = await _db.job_titles_master.find_one(
+                {"normalized_job_title": normalized}
+            )
+            if not existing_jtm:
+                await _db.job_titles_master.insert_one({
+                    "raw_job_title": name,
+                    "normalized_job_title": normalized,
+                    "is_mapped": False,
+                    "source": "manual",
+                })
+    except Exception as _e:
+        _logger.warning(f"[job-roles] job_titles_master mirror skipped: {_e}")
     return {"success": True, "id": str(result.inserted_id), "name": name}
 
 @bb_router.put("/job-roles/{role_id}")
