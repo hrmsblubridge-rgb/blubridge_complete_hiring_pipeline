@@ -265,15 +265,101 @@ async def send_whatsapp(campaign_name: str, phone: str, email: str, template_par
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(AISENSY_API_URL, json=payload)
-            ok = resp.status_code == 200
+            body_text = resp.text or ""
+            # iter74 — Stricter success check: HTTP 200 alone is not enough.
+            # AiSensy occasionally returns 200 with an embedded error body
+            # (e.g. `{"message":"Template params does not match…"}` and no
+            # `success`/`submitted_message_id` keys). Parse the JSON body
+            # and require `success == true` (or a `submitted_message_id`).
+            ok = False
+            try:
+                j = resp.json() if body_text else {}
+                if resp.status_code == 200:
+                    success_flag = str(j.get("success", "")).lower() == "true"
+                    submitted = bool(j.get("submitted_message_id"))
+                    ok = success_flag or submitted
+            except Exception:
+                # Non-JSON 200 response → conservative success on raw 200.
+                ok = resp.status_code == 200
             _logger.info(
                 f"[WhatsApp:RESP] campaign={campaign_name} phone={safe_phone} "
-                f"status={resp.status_code} ok={ok} body={resp.text[:300]}"
+                f"status={resp.status_code} ok={ok} body={body_text[:400]}"
             )
             return ok
     except Exception as e:
         _logger.error(f"[WhatsApp:EXC] campaign={campaign_name} phone={safe_phone}: {e}")
         return False
+
+
+async def send_whatsapp_with_diagnostics(campaign_name: str, phone: str, email: str, template_params: list):
+    """iter74 — Diagnostic variant that returns the full AiSensy probe data
+    (request payload + response body + parsed flags). Used by the
+    `/api/bb/diagnostics/whatsapp-probe` endpoint to produce a consolidated
+    side-by-side report of all 5 campaigns. ONLY used by Admin diagnostics
+    — production sends still go through `send_whatsapp`."""
+    allowed, reason = await can_send_message(email, phone)
+    if not allowed:
+        return {
+            "campaign": campaign_name, "phone": phone, "params": template_params,
+            "blocked": True, "reason": reason, "ok": False,
+            "status_code": None, "response_body": None, "submitted_message_id": None,
+        }
+    safe_phone = _norm_phone(phone)
+    if len(safe_phone) == 10:
+        safe_phone = "91" + safe_phone
+
+    payload = {
+        "apiKey": AISENSY_API_KEY,
+        "campaignName": campaign_name,
+        "destination": safe_phone,
+        "userName": "Blubridgetechnologies",
+        "templateParams": template_params,
+        "source": "python-api",
+        "media": [],
+        "buttons": [],
+        "carouselCards": [],
+        "location": [],
+        "attributes": [],
+        "paramsFallbackValue": {"FirstName": "user"},
+    }
+
+    out = {
+        "campaign": campaign_name,
+        "phone": safe_phone,
+        "param_count": len(template_params),
+        "params": template_params,
+        "userName": "Blubridgetechnologies",
+        "blocked": False,
+        "reason": reason,
+        "status_code": None,
+        "response_body": None,
+        "response_json": None,
+        "submitted_message_id": None,
+        "success_flag": None,
+        "error_message": None,
+        "ok": False,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(AISENSY_API_URL, json=payload)
+            out["status_code"] = resp.status_code
+            out["response_body"] = (resp.text or "")[:1000]
+            try:
+                j = resp.json()
+                out["response_json"] = j
+                out["submitted_message_id"] = j.get("submitted_message_id")
+                out["success_flag"] = j.get("success")
+                out["error_message"] = j.get("message") or j.get("error")
+                if resp.status_code == 200:
+                    out["ok"] = (
+                        str(j.get("success", "")).lower() == "true"
+                        or bool(j.get("submitted_message_id"))
+                    )
+            except Exception:
+                out["ok"] = resp.status_code == 200
+    except Exception as e:
+        out["error_message"] = f"Exception: {e}"
+    return out
 
 
 # ============ EMAIL (SMTP) ============
