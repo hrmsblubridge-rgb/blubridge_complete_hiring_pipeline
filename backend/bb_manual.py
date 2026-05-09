@@ -348,6 +348,7 @@ async def alert_send_reject(body: AlertSendBody, request: Request):
     _logger.info(f"[ManualAlerts:reject] by={user} → email={to_email} phone={to_phone}")
     ok = await notify_rejected(
         rec.get("name") or "", to_phone, to_email,
+        job_role=rec.get("job_role") or rec.get("job_title") or "",
     )
     if not ok:
         raise HTTPException(502, "Failed to send via WhatsApp and Email — check messaging credentials/logs")

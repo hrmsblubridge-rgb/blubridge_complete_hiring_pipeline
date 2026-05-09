@@ -607,7 +607,7 @@ async def _send_one(row: dict, user: str, upload_id: str, action_type: str = "ca
 
         elif action_type == "rejection":
             # Q3=a — send only, no DB state change.
-            ok = await notify_rejected(name, phone, email, is_test=False)
+            ok = await notify_rejected(name, phone, email, job_role=job_role, is_test=False)
             params = [name]
 
         else:
@@ -765,14 +765,10 @@ async def get_row_otp(upload_id: str, row_id: str, request: Request):
 
 @resend_router.get("/template-preview")
 async def template_preview(action_type: str = Query("candidate_followup")):
-    """Return the WhatsApp template body the UI should display as preview,
-    keyed to the active Bulk Comm action. iter72 — bodies aligned verbatim
-    with the AiSensy templates documented in the BluBridge Mail/Message
-    template PDF reference.
-
-    Variables:
+    """iter73 — WhatsApp template body previews aligned VERBATIM with the
+    BluBridge PDF reference. Variables:
       {{name}}, {{job_role}}, {{schedule_date}}, {{schedule_time}},
-      {{schedule_link}}, {{otp}}, {{office_location}}
+      {{schedule_link}}, {{otp}}, {{phone}}, {{office_location}}
     """
     OFFICE = "30, Norton Road, Mandavelipakkam, Raja Annamalai Puram, Chennai, Tamil Nadu - 600028."
     BODIES: Dict[str, Dict[str, Any]] = {
@@ -783,7 +779,7 @@ async def template_preview(action_type: str = Query("candidate_followup")):
                 "Dear {{name}},\n\n"
                 "Congratulations! After reviewing your responses, we are pleased "
                 "to inform you that your profile aligns with our requirements.\n\n"
-                "Please schedule a convenient time for your offline (in-person) "
+                "Please schedule a convenient time for your offline(in-person) "
                 "interview using the link below:\n{{schedule_link}}\n\n"
                 "We look forward to our discussion and exploring how you can "
                 "contribute to our team's research efforts.\n\n"
@@ -803,7 +799,7 @@ async def template_preview(action_type: str = Query("candidate_followup")):
                 "Your interview will consist of the following rounds:\n"
                 "*Round 1:* Logical Reasoning & Aptitude (100 minutes)\n"
                 "*Round 2:* Advanced Logical Reasoning (30 minutes)\n"
-                "_If shortlisted, a further round will be conducted._\n\n"
+                "*If shortlisted, a further round will be conducted.*\n\n"
                 "We look forward to meeting you.\n\n"
                 "Best regards,\nBlubridge Technologies"
             ),
@@ -815,7 +811,7 @@ async def template_preview(action_type: str = Query("candidate_followup")):
                 "Hi {{name}},\n\n"
                 "Your One-Time Password (OTP) to confirm your interview "
                 "attendance at Blubridge Technologies is:\n\n"
-                "*{{otp}}*\n\n"
+                "{{otp}}\n\n"
                 "Please provide this OTP along with your personal details at the "
                 "office reception on the day of your interview.\n\n"
                 "Interview Details:\n"
@@ -836,29 +832,29 @@ async def template_preview(action_type: str = Query("candidate_followup")):
             "body": (
                 "Hi {{name}},\n\n"
                 "We had your in-person interview for the {{job_role}} position "
-                "scheduled on {{schedule_date}} at {{schedule_time}}, but we did "
-                "not see you arrive at the office at the scheduled time.\n\n"
+                "scheduled on {{schedule_date}} at {{schedule_time}}, but we "
+                "did not see you arrive at the office at the scheduled time.\n\n"
                 "Please note that arrival is considered complete only after "
                 "verification at the reception/security desk, using the "
                 "verification details shared earlier.\n\n"
                 "If you're still interested, please use the link below to "
                 "reschedule at your earliest convenience:\n{{schedule_link}}\n\n"
                 "Rescheduling is subject to available slots.\n\n"
-                "— Blubridge Recruitment Team"
+                "Warm regards,\nBlubridge Recruitment Team"
             ),
         },
         "rejection": {
             "template": "Reject",
             "params": [],
             "body": (
-                "Dear Candidate,\n\n"
+                "Dear Candidate\n\n"
                 "Thank you for your time and effort in completing our "
                 "registration form.\n\n"
                 "While your background and experience are impressive, we have "
                 "decided to move forward with candidates whose profiles more "
                 "closely align with our current requirements.\n\n"
                 "We encourage you to apply for future opportunities at Blubridge "
-                "Technologies.\n\n"
+                "Technologies.\n"
                 "Wishing you the best in your future endeavours!\n\n"
                 "Warm regards,\nBlubridge Technologies"
             ),

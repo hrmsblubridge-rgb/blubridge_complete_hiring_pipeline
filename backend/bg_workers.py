@@ -226,6 +226,7 @@ async def _worker_schedule_link_sender():
                     doc.get("full_name", ""),
                     doc.get("phone", ""),
                     doc.get("email", ""),
+                    job_role=doc.get("job_role") or doc.get("job_title") or "",
                     is_test=bool(doc.get("isTest")),
                 )
                 await _db.bb_registrations.update_one(
@@ -460,7 +461,11 @@ async def _worker_import_rejection_mailer():
 
                 try:
                     from messaging import notify_rejected
-                    ok = await notify_rejected(name, phone, email, is_test=bool(doc.get("isTest")))
+                    ok = await notify_rejected(
+                        name, phone, email,
+                        job_role=doc.get("job_role") or doc.get("job_title") or "",
+                        is_test=bool(doc.get("isTest")),
+                    )
                     await _db.bb_applicant_updates.update_one(
                         {"_id": doc["_id"]},
                         {"$set": {
