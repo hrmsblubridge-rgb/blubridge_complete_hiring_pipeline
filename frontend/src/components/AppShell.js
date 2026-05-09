@@ -22,6 +22,7 @@ const NAV = [
     { label: 'Bulk Communication', icon: WhatsappLogo, path: '/whatsapp-resend' },
     { label: 'Manual Applicant Alerts', icon: EnvelopeSimple, path: '/manual-alerts' },
     { label: 'Manual OTP Verify', icon: ShieldCheck, path: '/manual-otp-verify' },
+    { label: 'WhatsApp Diagnostics', icon: WhatsappLogo, path: '/whatsapp-diagnostics' },
     { label: 'Tester Credentials', icon: Flask, path: '/tester-credentials' },
     { label: 'Create Job Roles', icon: Briefcase, path: '/manage-job-roles' },
     { label: 'Create Job Openings', icon: FolderOpen, path: '/job-openings' },
