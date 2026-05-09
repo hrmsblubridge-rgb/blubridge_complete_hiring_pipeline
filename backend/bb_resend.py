@@ -712,11 +712,12 @@ async def send_test_message(payload: TestSendRequest, request: Request):
     """Send a test WhatsApp message to the first allowlisted number."""
     user = await _get_user(request)
     target_email, target_phone = "rishi.nayak@blubridge.com", "9443109903"
-    # iter69e (#11) — 4-param Candidate FollowUp template (no schedule_link).
+    # iter70 — 5-param Candidate FollowUp template aligned with PHP reference.
     fmt_date = _fmt_date(payload.schedule_date)
+    test_link = f"{FRONTEND_URL}/schedule-interview/test-token"
     ok = await send_whatsapp(
         "Candidate FollowUp", target_phone, target_email,
-        [payload.name, payload.job_role, fmt_date, payload.schedule_time],
+        [payload.name, payload.job_role, fmt_date, payload.schedule_time, test_link],
         is_test=False,
     )
     await _db.bb_resend_history.insert_one({
@@ -727,7 +728,7 @@ async def send_test_message(payload: TestSendRequest, request: Request):
         "sent_at": datetime.now(timezone.utc).isoformat(),
         "candidate": {"name": payload.name, "email": target_email, "phone": target_phone},
         "template": "Candidate FollowUp",
-        "params": [payload.name, payload.job_role, fmt_date, payload.schedule_time],
+        "params": [payload.name, payload.job_role, fmt_date, payload.schedule_time, test_link],
         "status": "success" if ok else "failed",
         "failure_reason": None if ok else "AiSensy send failed",
         "retry_count": 1,

@@ -1245,6 +1245,29 @@ async def register_college_applicant(data: CollegeRegistrationBody):
                     )
                 except Exception as _e:
                     _logger.warning(f"[Pipeline:tester] college bb_registrations reset skipped: {_e}")
+                # iter70 (#6) — Clear applicant round scores so the freshly
+                # re-registered candidate starts a clean evaluation cycle.
+                # bb_rounds definitions are NOT touched; only the per-applicant
+                # `scores[]` array is wiped + status reset.
+                try:
+                    upd_res = await _db.bb_applicant_updates.update_many(
+                        {"$or": [{"email": target_email}, {"phone": phone_normalized}]},
+                        {"$set": {
+                            "scores": [],
+                            "status": "",
+                            "result_status": "",
+                            "rejection_notified": False,
+                            "import_rejection_notified": False,
+                            "scores_reset_at": submitted_at,
+                        }},
+                    )
+                    _logger.info(
+                        f"[Pipeline:tester] college_drive SCORES_RESET "
+                        f"matched={upd_res.matched_count} modified={upd_res.modified_count} "
+                        f"email={target_email} phone={phone_normalized}"
+                    )
+                except Exception as _e:
+                    _logger.warning(f"[Pipeline:tester] college bb_applicant_updates reset skipped: {_e}")
                 _logger.info(
                     f"[Pipeline:tester] college_drive FULL_OVERWRITE+CONSOLIDATE+RESET "
                     f"survivor_id={survivor['_id']} matched={len(all_matches)} "
@@ -3704,6 +3727,28 @@ async def register_applicant(data: RegistrationBody):
                 )
             except Exception as _e:
                 _logger.warning(f"[Pipeline:tester] bb_registrations reset skipped: {_e}")
+            # iter70 (#6) — Reset applicant round scores so the candidate
+            # restarts with a fresh evaluation cycle. bb_rounds definitions
+            # are NOT touched; only the per-applicant `scores[]` array.
+            try:
+                upd_res = await _db.bb_applicant_updates.update_many(
+                    match_filter,
+                    {"$set": {
+                        "scores": [],
+                        "status": "",
+                        "result_status": "",
+                        "rejection_notified": False,
+                        "import_rejection_notified": False,
+                        "scores_reset_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                _logger.info(
+                    f"[Pipeline:tester] SCORES_RESET matched={upd_res.matched_count} "
+                    f"modified={upd_res.modified_count} email={data.email.strip().lower()} "
+                    f"phone={phone_normalized}"
+                )
+            except Exception as _e:
+                _logger.warning(f"[Pipeline:tester] bb_applicant_updates reset skipped: {_e}")
             _logger.info(
                 f"[Pipeline:tester] FULL_OVERWRITE+CONSOLIDATE+RESET "
                 f"survivor_id={survivor['_id']} matched={len(all_matches)} "

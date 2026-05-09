@@ -138,7 +138,10 @@ async def send_whatsapp(campaign_name: str, phone: str, email: str, template_par
         "apiKey": AISENSY_API_KEY,
         "campaignName": campaign_name,
         "destination": safe_phone,
-        "userName": "Blubridge Technologies",
+        # iter70 — Match PHP integration exactly: AiSensy account holder name
+        # is "Blubridgetechnologies" (single word, no spaces). Verified from
+        # the JWT's `name` claim in AISENSY_API_KEY.
+        "userName": "Blubridgetechnologies",
         "templateParams": template_params,
         "source": "python-api",
         "media": [],
@@ -149,13 +152,23 @@ async def send_whatsapp(campaign_name: str, phone: str, email: str, template_par
         "paramsFallbackValue": {"FirstName": "user"},
     }
 
+    # iter70 — Detailed pre-send log so silent AiSensy drops can be traced.
+    _logger.info(
+        f"[WhatsApp:REQ] campaign={campaign_name} phone={safe_phone} "
+        f"params={template_params} userName=Blubridgetechnologies"
+    )
+
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(AISENSY_API_URL, json=payload)
-            _logger.info(f"[WhatsApp] campaign={campaign_name} phone={safe_phone} status={resp.status_code} body={resp.text[:200]}")
-            return resp.status_code == 200
+            ok = resp.status_code == 200
+            _logger.info(
+                f"[WhatsApp:RESP] campaign={campaign_name} phone={safe_phone} "
+                f"status={resp.status_code} ok={ok} body={resp.text[:300]}"
+            )
+            return ok
     except Exception as e:
-        _logger.error(f"[WhatsApp] FAILED campaign={campaign_name} phone={safe_phone}: {e}")
+        _logger.error(f"[WhatsApp:EXC] campaign={campaign_name} phone={safe_phone}: {e}")
         return False
 
 
@@ -321,20 +334,22 @@ async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str,
 
 
 async def notify_missed_reminder(name: str, phone: str, email: str, role: str, date: str, time: str, schedule_token: str, is_test: bool = False):
-    """Send missed interview reminder with reschedule link.
+    """Send missed-interview / candidate follow-up via WhatsApp + Email.
     Returns (wa_ok, em_ok).
 
-    AiSensy "Candidate FollowUp" template expects exactly 4 params:
-    [name, role, formattedDate, time]. The reschedule CTA URL is embedded
-    in the template body / button at the AiSensy dashboard side, NOT a
-    template variable. Sending more or fewer params returns
-    `{"message":"Template params does not match the campaign"}` → silent drop.
-    Verified empirically against AiSensy on 2026-05-08.
+    iter70 — Aligned with PHP reference (user spec):
+        $campaign_name = "Candidate FollowUp";
+        sendAiSensyMessage($campaign_name, $phone,
+            [$name, $role, $formattedDate, $time, $schedule_link],
+            "Blubridgetechnologies");
+    AiSensy "Candidate FollowUp" template now expects exactly 5 params:
+    [name, role, date, time, schedule_link]. The reschedule CTA URL is
+    delivered as the 5th template variable (NOT the button URL).
     """
-    schedule_link = f"{FRONTEND_URL}/schedule-interview/{schedule_token}"
+    schedule_link = f"{FRONTEND_URL}/schedule-interview/{schedule_token}" if schedule_token else FRONTEND_URL
     wa_ok = await send_whatsapp(
         "Candidate FollowUp", phone, email,
-        [name, role, date, time],
+        [name, role, date, time, schedule_link],
         is_test=is_test,
     )
     html = f"""

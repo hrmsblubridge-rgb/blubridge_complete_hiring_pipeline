@@ -1605,8 +1605,27 @@ async def get_attended_applicants(
     user: str = Depends(get_current_user)
 ):
     """Global attended applicants table (HR-internal pipeline_data) with scores.
-    OPTIMIZED: filters pushed to DB; pagination at DB level; scores fetched
-    for the current page only."""
+
+    iter70 — Round columns are now built DYNAMICALLY from `bb_rounds` (DISTINCT
+    `name`, alphabetical, displayed AFTER `result_status`) and per-applicant
+    scores are fetched from `bb_applicant_updates.scores[]` (matched by
+    email OR phone). This keeps the table in lock-step with Update Applicant
+    Scores + Score Sheet Import.
+    """
+
+    # ---- iter70 — Build dynamic round columns from bb_rounds ----
+    round_cursor = db.bb_rounds.find(
+        {"$or": [{"active": {"$ne": False}}, {"active": {"$exists": False}}]},
+        {"_id": 0, "name": 1},
+    )
+    seen_lower = set()
+    dynamic_rounds: list = []
+    async for r in round_cursor:
+        rn = (r.get("name") or "").strip()
+        if rn and rn.lower() not in seen_lower:
+            seen_lower.add(rn.lower())
+            dynamic_rounds.append(rn)
+    dynamic_rounds.sort(key=lambda x: x.lower())
 
     match = {"isTest": {"$ne": True}, "otp_verified": _not_null_filter}
 
@@ -1634,35 +1653,40 @@ async def get_attended_applicants(
             {"phone": search_re}, {"_normalized_job_role": search_re},
         ]
 
-    # Round filter requires score data; if specified, intersect with score_sheet identifiers
+    # Round filter — match against bb_applicant_updates.scores[].round_name
     if round:
-        canonical_round = ROUND_NAME_MAP.get(round.strip().lower())
-        if canonical_round:
-            score_emails = set()
-            score_phones = set()
-            async for sr in db.score_sheet.find(
-                {"round_name": {"$regex": f"^{re.escape(canonical_round)}$", "$options": "i"}},
-                {"_id": 0, "email": 1, "phone": 1}
-            ):
-                se = normalize_email(sr.get("email"))
-                sp = normalize_phone(sr.get("phone"))
-                if se: score_emails.add(se)
-                if sp: score_phones.add(sp)
-            id_filter = []
-            if score_emails:
-                id_filter.append({"email": {"$in": list(score_emails)}})
-            if score_phones:
-                id_filter.append({"phone": {"$in": list(score_phones)}})
-            if id_filter:
-                # combine with existing match (preserve existing $or if any)
-                round_or = {"$or": id_filter} if len(id_filter) > 1 else id_filter[0]
-                match = {"$and": [match, round_or]}
-            else:
-                # No scores for this round — empty result
-                return {"data": [], "total": 0, "page": page, "limit": limit,
-                        "columns": ["name", "email", "phone", "college_status", "college",
-                                    "degree", "course", "year_of_graduation", "job_role",
-                                    "schedule_date", "result_status"] + SCORE_ROUND_COLUMNS}
+        target_lower = round.strip().lower()
+        score_emails = set()
+        score_phones = set()
+        async for sr in db.bb_applicant_updates.find(
+            {"scores.round_name": {"$regex": f"^{re.escape(round.strip())}$", "$options": "i"}},
+            {"_id": 0, "email": 1, "phone": 1, "scores": 1},
+        ):
+            # Confirm at least one score entry matches the requested round (case-insensitive)
+            has_round = any(
+                (s.get("round_name") or "").strip().lower() == target_lower
+                for s in (sr.get("scores") or [])
+            )
+            if not has_round:
+                continue
+            se = normalize_email(sr.get("email"))
+            sp = normalize_phone(sr.get("phone"))
+            if se: score_emails.add(se)
+            if sp: score_phones.add(sp)
+        id_filter = []
+        if score_emails:
+            id_filter.append({"email": {"$in": list(score_emails)}})
+        if score_phones:
+            id_filter.append({"phone": {"$in": list(score_phones)}})
+        if id_filter:
+            round_or = {"$or": id_filter} if len(id_filter) > 1 else id_filter[0]
+            match = {"$and": [match, round_or]}
+        else:
+            base_cols = ["name", "email", "phone", "college_status", "college",
+                         "degree", "course", "year_of_graduation", "job_role",
+                         "schedule_date", "result_status"]
+            return {"data": [], "total": 0, "page": page, "limit": limit,
+                    "columns": base_cols + dynamic_rounds, "round_columns": dynamic_rounds}
 
     total = await db.pipeline_data.count_documents(match)
     skip = (page - 1) * limit
@@ -1683,26 +1707,35 @@ async def get_attended_applicants(
     ]
     docs = await db.pipeline_data.aggregate(pipeline, allowDiskUse=False).to_list(None)
 
-    # Fetch scores ONLY for this page's emails/phones
+    # ---- iter70 — Fetch scores from bb_applicant_updates (NOT score_sheet) ----
     page_emails = list({normalize_email(d.get("email")) for d in docs if d.get("email")})
     page_phones = list({normalize_phone(d.get("phone")) for d in docs if d.get("phone")})
-    score_query = []
-    if page_emails: score_query.append({"email": {"$in": page_emails}})
-    if page_phones: score_query.append({"phone": {"$in": page_phones}})
-    score_records = []
-    if score_query:
-        score_records = await db.score_sheet.find(
-            {"$or": score_query} if len(score_query) > 1 else score_query[0],
-            {"_id": 0}
+    upd_query = []
+    if page_emails: upd_query.append({"email": {"$in": page_emails}})
+    if page_phones: upd_query.append({"phone": {"$in": page_phones}})
+    upd_records = []
+    if upd_query:
+        upd_records = await db.bb_applicant_updates.find(
+            {"$or": upd_query} if len(upd_query) > 1 else upd_query[0],
+            {"_id": 0, "email": 1, "phone": 1, "scores": 1},
         ).to_list(None)
 
-    score_by_email = {}
-    score_by_phone = {}
-    for sr in score_records:
-        se = normalize_email(sr.get("email"))
-        sp = normalize_phone(sr.get("phone"))
-        if se: score_by_email.setdefault(se, []).append(sr)
-        if sp: score_by_phone.setdefault(sp, []).append(sr)
+    # Index applicant scores by normalized email + phone
+    scores_by_email: Dict[str, Dict[str, Any]] = {}
+    scores_by_phone: Dict[str, Dict[str, Any]] = {}
+    for upd in upd_records:
+        ue = normalize_email(upd.get("email"))
+        up_ = normalize_phone(upd.get("phone"))
+        # Build {round_name_lower: score} map for this applicant
+        s_map: Dict[str, Any] = {}
+        for s in (upd.get("scores") or []):
+            rn = (s.get("round_name") or "").strip()
+            if rn:
+                s_map[rn.lower()] = s.get("score")
+        if ue:
+            scores_by_email.setdefault(ue, {}).update(s_map)
+        if up_:
+            scores_by_phone.setdefault(up_, {}).update(s_map)
 
     applicants = []
     for doc in docs:
@@ -1712,20 +1745,13 @@ async def get_attended_applicants(
         doc_email = normalize_email(doc.get("email"))
         doc_phone = normalize_phone(doc.get("phone"))
 
-        matched_scores = []
-        if doc_email and doc_email in score_by_email:
-            matched_scores.extend(score_by_email[doc_email])
-        if doc_phone and doc_phone in score_by_phone:
-            for s in score_by_phone[doc_phone]:
-                if s not in matched_scores:
-                    matched_scores.append(s)
-
-        round_scores = {}
-        for sr in matched_scores:
-            rn = sr.get("round_name", "").strip().lower()
-            canonical = ROUND_NAME_MAP.get(rn)
-            if canonical:
-                round_scores[canonical] = sr.get("score", 0)
+        # Resolve per-applicant round → score lookup
+        round_lookup: Dict[str, Any] = {}
+        if doc_email and doc_email in scores_by_email:
+            round_lookup.update(scores_by_email[doc_email])
+        if doc_phone and doc_phone in scores_by_phone:
+            for k, v in scores_by_phone[doc_phone].items():
+                round_lookup.setdefault(k, v)
 
         row = {
             "name": doc.get("name") or "-",
@@ -1741,12 +1767,15 @@ async def get_attended_applicants(
             "schedule_date": doc.get("schedule_date") or "-",
             "result_status": doc.get("result_status") or "-",
         }
-        for col in SCORE_ROUND_COLUMNS:
-            row[col] = round_scores.get(col, "-")
+        # Populate dynamic round columns (display "-" when no score recorded)
+        for rn in dynamic_rounds:
+            v = round_lookup.get(rn.lower())
+            row[rn] = v if v not in (None, "", "-") else "-"
         applicants.append(row)
 
-    columns = ["name", "email", "phone", "college_status", "college", "degree", "course",
-               "year_of_graduation", "job_role", "schedule_date", "result_status"] + SCORE_ROUND_COLUMNS
+    base_cols = ["name", "email", "phone", "college_status", "college", "degree", "course",
+                 "year_of_graduation", "job_role", "schedule_date", "result_status"]
+    columns = base_cols + dynamic_rounds
 
     return {
         "data": applicants,
@@ -1754,6 +1783,7 @@ async def get_attended_applicants(
         "page": page,
         "limit": limit,
         "columns": columns,
+        "round_columns": dynamic_rounds,
     }
 
 

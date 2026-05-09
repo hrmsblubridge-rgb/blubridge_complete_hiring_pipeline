@@ -9,7 +9,7 @@ import SortableHeader from '../components/SortableHeader';
 const API = process.env.REACT_APP_BACKEND_URL;
 const PAGE_SIZE = 100;
 
-const SCORE_COLS = ['ZA', 'C++', 'Java', 'BA', 'LA', 'Mensa Org', 'Accounts2', 'Accounts1', 'BE', 'Mensa', 'BP'];
+// iter70 — Round columns supplied dynamically by backend (`/api/attended`).
 const BASE_COLS = [
     { key: 'name', label: 'Name', sortable: true },
     { key: 'email', label: 'Email', sortable: true },
@@ -22,10 +22,6 @@ const BASE_COLS = [
     { key: 'year_of_graduation', label: 'Year of Graduation', sortable: true },
     { key: 'job_role', label: 'Job Role', sortable: true },
     { key: 'schedule_date', label: 'Schedule Date', sortable: true },
-];
-const ALL_COLS = [
-    ...BASE_COLS,
-    ...SCORE_COLS.map(c => ({ key: c, label: c })),
     { key: 'result_status', label: 'Result Status', sortable: true },
 ];
 
@@ -43,6 +39,13 @@ export default function AttendedDrillDown() {
     const [round, setRound] = useState('');
     const [goToPage, setGoToPage] = useState('');
     const [sort, setSort] = useState(null);
+    // iter70 — Round columns from backend (bb_rounds, alphabetical, AFTER Result Status).
+    const [roundCols, setRoundCols] = useState([]);
+    const ALL_COLS = [
+        ...BASE_COLS,
+        ...roundCols.map(c => ({ key: c, label: c })),
+    ];
+    const SCORE_COLS = roundCols;
 
     const fetchData = useCallback(async (filters = {}, pg = 1, sortState = null) => {
         setLoading(true);
@@ -56,6 +59,7 @@ export default function AttendedDrillDown() {
             const res = await axios.get(`${API}/api/attended`, { params, withCredentials: true });
             setData(res.data.data);
             setTotal(res.data.total);
+            if (Array.isArray(res.data.round_columns)) setRoundCols(res.data.round_columns);
         } catch (err) {
             toast.error('Failed to load attended applicants');
         } finally {

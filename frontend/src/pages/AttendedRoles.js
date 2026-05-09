@@ -10,7 +10,9 @@ import CandidateJourneyModal from '../components/CandidateJourneyModal';
 const API = process.env.REACT_APP_BACKEND_URL;
 const PAGE_SIZES = [10, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500];
 
-const SCORE_COLS = ['Accounts1', 'Accounts2', 'BA', 'BE', 'BP', 'C++', 'Java', 'LA', 'Mensa', 'Mensa Org', 'ZA'];
+// iter70 — Round columns are now built DYNAMICALLY from the backend response
+// (`/api/attended` returns `round_columns` from `bb_rounds`, sorted alphabetically).
+// The base columns are static and always rendered before round columns.
 const BASE_COLS = [
     { key: 'name', label: 'Name', sortable: true },
     { key: 'email', label: 'Email', sortable: true },
@@ -23,10 +25,6 @@ const BASE_COLS = [
     { key: 'job_role', label: 'Job Role', sortable: true },
     { key: 'schedule_date', label: 'Scheduled Date', sortable: true },
     { key: 'result_status', label: 'Result Status', sortable: true },
-];
-const ALL_COLS = [
-    ...BASE_COLS,
-    ...SCORE_COLS.map(c => ({ key: c, label: c })),
 ];
 
 const DATE_COLS = ['schedule_date'];
@@ -55,6 +53,14 @@ export default function AttendedApplicants() {
     const [goToPage, setGoToPage] = useState('');
     const [sort, setSort] = useState(null);
     const [journeyCandidate, setJourneyCandidate] = useState(null);  // Iter52
+    // iter70 — Round columns supplied by backend (dynamic, from bb_rounds).
+    const [roundCols, setRoundCols] = useState([]);
+
+    const ALL_COLS = [
+        ...BASE_COLS,
+        ...roundCols.map(c => ({ key: c, label: c })),
+    ];
+    const SCORE_COLS = roundCols;
 
     useEffect(() => {
         (async () => {
@@ -79,6 +85,10 @@ export default function AttendedApplicants() {
             const res = await axios.get(`${API}/api/attended`, { params, withCredentials: true });
             setData(res.data.data);
             setTotal(res.data.total);
+            // iter70 — adopt dynamic round columns from backend
+            if (Array.isArray(res.data.round_columns)) {
+                setRoundCols(res.data.round_columns);
+            }
         } catch {
             toast.error('Failed to load attended applicants');
         } finally {
