@@ -45,6 +45,14 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter81)** — PRODUCTION ROLLOUT: TEST MODE OFF + cutoff bumped to NOW to prevent historical replay.
+  - `/.env`: `TEST_MODE=true → false`; `MESSAGING_CUTOFF_TS=2026-05-04T18:07:51 → 2026-05-11T18:30:00+00:00`.
+  - **Why bump the cutoff first**: 33 shortlisted + 10 rejected post-cutoff registrations had been blocked by TEST_MODE. With TEST_MODE off they would have been picked up by the next worker tick (24h upper bound) and replayed to real applicants — exactly what the spec forbids. Bumping the cutoff to "now" freezes them atomically.
+  - **Workers still filter by `registered_at >= MESSAGING_CUTOFF_TS`** on every loop, so only NEW post-cutoff registrations / actions trigger messages going forward.
+  - **No code refactor**, no DB record deletion, no notification queue replay. `bulk_upload_queue` already empty (no pending notification jobs).
+  - **Verified**: `/api/messaging/status → {test_mode: false}`. Worker queue counts after the cutoff bump: schedule-link=0, rejections=0, schedule-confirmations=0. 90s of post-restart logs show ZERO Gate decisions and ZERO `[ScheduleLink]` sends — confirming no historical replay.
+  - **Future**: Manual Alerts and Bulk Communication Center remain fully functional (admin-triggered, exempt from the cutoff). Inline send on new shortlisting (iter80) still fires within 3 s of submission.
+
 - **Feb 2026 (iter80)** — Removed 5-min schedule-link cooldown. As soon as an applicant is shortlisted via `POST /api/pub/register`, the inline `_instant_notify()` task in `bb_modules.py` now calls `messaging.notify_shortlisted(...)` immediately (Email + WhatsApp), then writes `schedule_link_sent=True`, `schedule_link_sent_at`, `shortlist_mail_sent=ok`, `shortlist_mail_sent_time` atomically. The `bg_workers._worker_schedule_link_sender` is now a pure retry safety-net — dropped the `five_min_ago` lower-bound on `registered_at`, kept the idempotent `schedule_link_sent={"$ne": True}` + `schedule_initiated={"$ne": True}` guards + 24h upper bound. Verified live: send completes 3 s after submission (vs 5m28s before). Single send confirmed; the worker logs `[ScheduleLink:Retry]` only when the inline send failed and was missed. Unaffected: scheduling/reschedule, OTP, follow-up, rejection, TEST_MODE gate, Manual Alerts, Bulk Comm Center.
 
 - **Feb 2026 (iter79)** — 6-item batch (View Attended dedup, OTP Source, Reschedule freshness, Date/Time formatting, Manual Alert button rules, past-slot guard):
