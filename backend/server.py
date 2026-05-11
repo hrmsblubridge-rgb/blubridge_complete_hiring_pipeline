@@ -273,36 +273,123 @@ _PIPELINE_CI_LOOKUP = {c.lower(): c for c in PIPELINE_EXPECTED_COLUMNS}
 
 # ============ AUTH ENDPOINTS ============
 
+import bcrypt as _bcrypt
+
+
+def _hash_pw(plain: str) -> str:
+    return _bcrypt.hashpw(plain.encode("utf-8"), _bcrypt.gensalt()).decode("utf-8")
+
+
+def _verify_pw(plain: str, hashed: str) -> bool:
+    try:
+        return _bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except Exception:
+        return False
+
+
+async def _seed_admin_user():
+    """iter77 — Idempotent admin seeding. On first boot, creates the
+    `Admin User` document in `bb_users` with bcrypt-hashed default
+    password. Subsequent boots do nothing if the user already exists —
+    so users can change the password without it being reset on restart."""
+    existing = await db.bb_users.find_one({"username": "Admin User"})
+    if existing is None:
+        await db.bb_users.insert_one({
+            "username": "Admin User",
+            "password_hash": _hash_pw("Admin User"),
+            "role": "admin",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
 
+
 @api_router.post("/login")
 async def login(response: Response, data: LoginRequest):
-    # Hardcoded credentials as per requirements
-    if data.username == "Admin User" and data.password == "Admin User":
-        token = create_token(data.username)
-        response.set_cookie(
-            key="access_token", 
-            value=token, 
-            httponly=True, 
-            secure=False, 
-            samesite="lax", 
-            max_age=86400, 
-            path="/"
-        )
-        return {"success": True, "message": "Login successful", "username": data.username}
+    # iter77 — Verify against bb_users (bcrypt). On miss, fall back to the
+    # legacy hardcoded default once and seed the user — keeps existing
+    # deployments unaffected during the migration window.
+    user_doc = await db.bb_users.find_one({"username": data.username})
+    if user_doc and _verify_pw(data.password, user_doc.get("password_hash", "")):
+        ok = True
+    elif data.username == "Admin User" and data.password == "Admin User" and user_doc is None:
+        await _seed_admin_user()
+        ok = True
     else:
+        ok = False
+
+    if not ok:
         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    token = create_token(data.username)
+    response.set_cookie(
+        key="access_token", value=token, httponly=True, secure=False,
+        samesite="lax", max_age=86400, path="/",
+    )
+    return {"success": True, "message": "Login successful", "username": data.username}
+
 
 @api_router.post("/logout")
 async def logout(response: Response):
     response.delete_cookie(key="access_token", path="/")
     return {"success": True, "message": "Logged out"}
 
+
 @api_router.get("/auth/check")
 async def check_auth(user: str = Depends(get_current_user)):
     return {"authenticated": True, "username": user}
+
+
+@api_router.get("/me")
+async def get_me(user: str = Depends(get_current_user)):
+    """iter77 — Profile info for the currently signed-in user."""
+    doc = await db.bb_users.find_one({"username": user}, {"_id": 0, "password_hash": 0})
+    if not doc:
+        return {"username": user, "role": "admin", "created_at": None}
+    return doc
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+
+@api_router.post("/auth/change-password")
+async def change_password(data: ChangePasswordRequest, user: str = Depends(get_current_user)):
+    """iter77 — Verify old password via bcrypt; replace stored hash."""
+    if not data.new_password or len(data.new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+    if data.old_password == data.new_password:
+        raise HTTPException(status_code=400, detail="New password must be different from old password")
+
+    user_doc = await db.bb_users.find_one({"username": user})
+    if user_doc is None:
+        # First-time path — accept legacy default once, then create the
+        # user with the new password. Defensive against accounts that
+        # somehow never got seeded.
+        if data.old_password != "Admin User":
+            raise HTTPException(status_code=401, detail="Old password is incorrect")
+        await db.bb_users.insert_one({
+            "username": user,
+            "password_hash": _hash_pw(data.new_password),
+            "role": "admin",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        return {"success": True, "message": "Password updated"}
+
+    if not _verify_pw(data.old_password, user_doc.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Old password is incorrect")
+    await db.bb_users.update_one(
+        {"username": user},
+        {"$set": {
+            "password_hash": _hash_pw(data.new_password),
+            "password_updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    return {"success": True, "message": "Password updated"}
 
 # ============ UPLOAD ENDPOINTS ============
 

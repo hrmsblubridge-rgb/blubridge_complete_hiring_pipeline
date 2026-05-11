@@ -102,15 +102,24 @@ export default function AppShell({ children }) {
 
                 {/* User block */}
                 <div className="border-t border-[#e5e3d8] p-3 bg-[#fffdf7]">
-                    <div className="flex items-center gap-3 px-2 py-2">
+                    <NavLink
+                        to="/profile"
+                        onClick={() => setOpen(false)}
+                        data-testid="sidenav-profile-link"
+                        className={({ isActive }) =>
+                            `flex items-center gap-3 px-2 py-2 rounded-lg transition-colors ${
+                                isActive ? 'bg-[#efede5]' : 'hover:bg-[#efede5]'
+                            }`
+                        }
+                    >
                         <div className="w-9 h-9 rounded-full bg-[#1d3a8a] text-white flex items-center justify-center text-sm font-semibold flex-shrink-0">
                             {initials}
                         </div>
                         <div className="flex-1 min-w-0">
                             <p className="text-[13px] font-semibold text-[#1a2332] truncate" data-testid="sidenav-user">{user || 'Admin'}</p>
-                            <p className="text-[11px] text-[#6b7280]">HR Team</p>
+                            <p className="text-[11px] text-[#6b7280]">View profile</p>
                         </div>
-                    </div>
+                    </NavLink>
                     <button
                         onClick={handleLogout}
                         data-testid="sidenav-logout-btn"

@@ -29,6 +29,7 @@ import Help from "./pages/Help";
 import ManualAlerts from "./pages/ManualAlerts";
 import ManualOtpVerify from "./pages/ManualOtpVerify";
 import TesterCredentials from "./pages/TesterCredentials";
+import Profile from "./pages/Profile";
 import { Toaster } from "./components/ui/sonner";
 
 function App() {
@@ -61,6 +62,7 @@ function App() {
                         <Route path="/manual-alerts" element={<ProtectedRoute><ManualAlerts /></ProtectedRoute>} />
                         <Route path="/manual-otp-verify" element={<ProtectedRoute><ManualOtpVerify /></ProtectedRoute>} />
                         <Route path="/tester-credentials" element={<ProtectedRoute><TesterCredentials /></ProtectedRoute>} />
+                        <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
                         <Route path="/register/college" element={<CollegeRegistration />} />
                         <Route path="/register/:formId" element={<PublicRegistration />} />
                         <Route path="/schedule-interview/:token" element={<InterviewSchedule />} />
