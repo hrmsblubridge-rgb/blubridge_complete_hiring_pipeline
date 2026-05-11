@@ -45,6 +45,8 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter78)** — Bug fix: Unified instruction-page gating in `PublicRegistration.js`. Previously, the toggle "Show Instruction Page = No" correctly suppressed the custom Instructions step BUT the AI/ML hardcoded interstitial (`What You Need to Know?`) still fired for any shortlisted candidate on an AI/ML role, ignoring the toggle. Fixed: both interstitials are now gated by `show_instruction_page`. When `false`, registrant goes straight to result. When `true`: custom instruction_content (if non-empty) → 'instructions' step (chains to AI/ML if applicable then result); else AI/ML shortlisted → 'aiml' step; else result.
+
 - **Feb 2026 (iter69f — Phase 3 of 11-item batch · #10 Job Keyword + Role Sync)**:
   - **#10A — Two-source sync**: `_sync_job_titles_master()` now extracts distinct job titles from BOTH `naukri_applies.job_title` AND `pipeline_data.job_role` (with `job_title` fallback), normalises, and upserts into `job_titles_master` AND auto-populates `bb_job_roles` (case-insensitive). The HR Pipeline upload (`/api/upload/pipeline`) now triggers the sync — previously only the Naukri upload did.
   - **#10B — `/manage-job-roles` page** already existed (cards + edit + delete via `/api/bb/job-roles` CRUD). No frontend changes needed.
