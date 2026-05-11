@@ -3116,91 +3116,122 @@ logger = logging.getLogger(__name__)
 # Startup event
 @app.on_event("startup")
 async def startup_event():
-    # Create indexes
-    await db.naukri_applies.create_index([("email", 1), ("phone", 1)])
-    await db.pipeline_data.create_index([("email", 1), ("phone", 1)])
-    await db.registered_candidates.create_index([("email", 1), ("phone", 1)])
-    await db.registered_candidates.create_index("email_type")
-    await db.registered_candidates.create_index("result_status")
-    await db.registered_candidates.create_index("schedule_date")
-    await db.registered_candidates.create_index("otp_verified")
-    await db.registered_candidates.create_index("_normalized_job_role")
-    await db.registered_candidates.create_index("_nirf_category")
-    await db.registered_candidates.create_index("_college_status")
-    await db.registered_candidates.create_index("name")
-    await db.naukri_applies.create_index("_normalized_job_role")
-    await db.naukri_applies.create_index("_nirf_category")
-    await db.job_titles_master.create_index("normalized_job_title", unique=True)
-    await db.job_titles_master.create_index("is_mapped")
-    await db.bulk_upload_queue.create_index([("status", 1), ("created_at", 1)])
+    # Create indexes — tolerate Atlas quota errors so the app still boots on
+    # an over-quota free tier (indexes most likely already exist anyway).
+    _index_specs = [
+        (db.naukri_applies, [("email", 1), ("phone", 1)]),
+        (db.pipeline_data, [("email", 1), ("phone", 1)]),
+        (db.registered_candidates, [("email", 1), ("phone", 1)]),
+        (db.registered_candidates, "email_type"),
+        (db.registered_candidates, "result_status"),
+        (db.registered_candidates, "schedule_date"),
+        (db.registered_candidates, "otp_verified"),
+        (db.registered_candidates, "_normalized_job_role"),
+        (db.registered_candidates, "_nirf_category"),
+        (db.registered_candidates, "_college_status"),
+        (db.registered_candidates, "name"),
+        (db.naukri_applies, "_normalized_job_role"),
+        (db.naukri_applies, "_nirf_category"),
+        (db.bulk_upload_queue, [("status", 1), ("created_at", 1)]),
+    ]
+    for coll, spec in _index_specs:
+        try:
+            await coll.create_index(spec)
+        except Exception as e:
+            logger.warning(f"[startup] create_index skipped on {coll.name} ({spec}): {e}")
+    try:
+        await db.job_titles_master.create_index("normalized_job_title", unique=True)
+    except Exception as e:
+        logger.warning(f"[startup] create_index skipped on job_titles_master (unique): {e}")
+    try:
+        await db.job_titles_master.create_index("is_mapped")
+    except Exception as e:
+        logger.warning(f"[startup] create_index skipped on job_titles_master.is_mapped: {e}")
 
     # Backfill slugs for existing hiring forms + ensure unique index
-    await backfill_form_slugs()
+    try:
+        await backfill_form_slugs()
+    except Exception as e:
+        logger.warning(f"[startup] backfill_form_slugs skipped: {e}")
     
     # Resume: reset any stuck "processing" records (from our own worker) back
     # to "queued_local". Only touches rows we own (this host) to avoid resurrecting
     # legacy/phantom rows from other deployments.
-    stuck = await db.bulk_upload_queue.update_many(
-        {"status": "processing", "owner": "e1_recruitment_app", "host_id": HOST_ID},
-        {"$set": {"status": "queued_local", "updated_at": datetime.now(timezone.utc).isoformat()}}
-    )
-    if stuck.modified_count > 0:
-        logger.info(f"Reset {stuck.modified_count} stuck processing jobs to queued")
+    # All cleanup writes wrapped in try/except so Atlas free-tier quota errors
+    # don't kill the startup — login + reads still work even when DB is over quota.
+    try:
+        stuck = await db.bulk_upload_queue.update_many(
+            {"status": "processing", "owner": "e1_recruitment_app", "host_id": HOST_ID},
+            {"$set": {"status": "queued_local", "updated_at": datetime.now(timezone.utc).isoformat()}}
+        )
+        if stuck.modified_count > 0:
+            logger.info(f"Reset {stuck.modified_count} stuck processing jobs to queued")
+    except Exception as e:
+        logger.warning(f"[startup] stuck-job reset skipped: {e}")
 
     # One-time cleanup: archive legacy phantom records (pre-fix queue rows that
     # had `error: 'Invalid upload_type'` and a stray `started_at` field). They
     # are not actionable and clutter the UI's "failed" list.
-    legacy = await db.bulk_upload_queue.update_many(
-        {"status": "failed", "error": "Invalid upload_type"},
-        {"$set": {"status": "archived", "updated_at": datetime.now(timezone.utc).isoformat()}}
-    )
-    if legacy.modified_count > 0:
-        logger.info(f"Archived {legacy.modified_count} legacy phantom failed records")
+    try:
+        legacy = await db.bulk_upload_queue.update_many(
+            {"status": "failed", "error": "Invalid upload_type"},
+            {"$set": {"status": "archived", "updated_at": datetime.now(timezone.utc).isoformat()}}
+        )
+        if legacy.modified_count > 0:
+            logger.info(f"Archived {legacy.modified_count} legacy phantom failed records")
+    except Exception as e:
+        logger.warning(f"[startup] legacy-phantom archive skipped: {e}")
 
     # Iter67 — Archive orphan failed rows whose file no longer exists on disk
     # AND that belong to this host. Failed rows from OTHER hosts must not be
     # touched (those files only exist on the other deployment's filesystem).
-    orphan_count = 0
-    async for row in db.bulk_upload_queue.find(
-        {"status": "failed", "host_id": HOST_ID},
-        {"_id": 1, "file_path": 1}
-    ):
-        fp = row.get("file_path")
-        if fp and not Path(fp).exists():
-            await db.bulk_upload_queue.update_one(
-                {"_id": row["_id"]},
-                {"$set": {
-                    "status": "archived",
-                    "archive_reason": "orphan_file_missing_on_disk",
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }},
-            )
-            orphan_count += 1
-    if orphan_count > 0:
-        logger.info(f"Archived {orphan_count} orphan failed rows (file missing on disk)")
+    try:
+        orphan_count = 0
+        async for row in db.bulk_upload_queue.find(
+            {"status": "failed", "host_id": HOST_ID},
+            {"_id": 1, "file_path": 1}
+        ):
+            fp = row.get("file_path")
+            if fp and not Path(fp).exists():
+                await db.bulk_upload_queue.update_one(
+                    {"_id": row["_id"]},
+                    {"$set": {
+                        "status": "archived",
+                        "archive_reason": "orphan_file_missing_on_disk",
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                orphan_count += 1
+        if orphan_count > 0:
+            logger.info(f"Archived {orphan_count} orphan failed rows (file missing on disk)")
+    except Exception as e:
+        logger.warning(f"[startup] orphan archive skipped: {e}")
 
     # Iter67 — Reclaim cross-host failed rows that belong to us. The other
     # deployment's legacy worker may have sniped one of our jobs and falsely
     # marked it failed with "File not found on disk". If the file still exists
     # on OUR disk, restore the row to queued_local so we can retry.
-    reclaimed = 0
-    async for row in db.bulk_upload_queue.find(
-        {"status": "failed", "host_id": HOST_ID, "error_message": {"$regex": "^File not found on disk"}},
-        {"_id": 1, "file_path": 1}
-    ):
-        fp = row.get("file_path")
-        if fp and Path(fp).exists():
-            await db.bulk_upload_queue.update_one(
-                {"_id": row["_id"]},
-                {"$set": {
-                    "status": "queued_local",
-                    "error_message": None,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }, "$unset": {"worker_pid": "", "claimed_at": ""}},
-            )
-            reclaimed += 1
-    if reclaimed > 0:
-        logger.info(f"Reclaimed {reclaimed} cross-host falsely-failed rows back to queued_local")
+    try:
+        reclaimed = 0
+        async for row in db.bulk_upload_queue.find(
+            {"status": "failed", "host_id": HOST_ID, "error_message": {"$regex": "^File not found on disk"}},
+            {"_id": 1, "file_path": 1}
+        ):
+            fp = row.get("file_path")
+            if fp and Path(fp).exists():
+                await db.bulk_upload_queue.update_one(
+                    {"_id": row["_id"]},
+                    {"$set": {
+                        "status": "queued_local",
+                        "error_message": None,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }, "$unset": {"worker_pid": "", "claimed_at": ""}},
+                )
+                reclaimed += 1
+        if reclaimed > 0:
+            logger.info(f"Reclaimed {reclaimed} cross-host falsely-failed rows back to queued_local")
+    except Exception as e:
+        logger.warning(f"[startup] cross-host reclaim skipped: {e}")
 
     # Write test credentials
     try:
