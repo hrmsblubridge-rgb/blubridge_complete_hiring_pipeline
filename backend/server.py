@@ -1701,17 +1701,23 @@ async def get_attended_applicants(
     """
 
     # ---- iter70 — Build dynamic round columns from bb_rounds ----
+    # iter79 — Stricter dedup: collapse whitespace + lowercase so legacy
+    # variants ("Accounts1" vs "Accounts 1") do NOT produce duplicate columns.
     round_cursor = db.bb_rounds.find(
         {"$or": [{"active": {"$ne": False}}, {"active": {"$exists": False}}]},
         {"_id": 0, "name": 1},
     )
-    seen_lower = set()
+    seen_norm = set()
     dynamic_rounds: list = []
     async for r in round_cursor:
         rn = (r.get("name") or "").strip()
-        if rn and rn.lower() not in seen_lower:
-            seen_lower.add(rn.lower())
-            dynamic_rounds.append(rn)
+        if not rn:
+            continue
+        norm = re.sub(r"\s+", "", rn).lower()
+        if norm in seen_norm:
+            continue
+        seen_norm.add(norm)
+        dynamic_rounds.append(rn)
     dynamic_rounds.sort(key=lambda x: x.lower())
 
     match = {"isTest": {"$ne": True}, "otp_verified": _not_null_filter}
@@ -1808,17 +1814,22 @@ async def get_attended_applicants(
         ).to_list(None)
 
     # Index applicant scores by normalized email + phone
+    # iter79 — Match the column-dedup key (whitespace-collapsed + lowercased)
+    # so a score saved as "Accounts1" still surfaces in the "Accounts 1" column.
+    def _round_key(rn: str) -> str:
+        return re.sub(r"\s+", "", (rn or "")).lower()
+
     scores_by_email: Dict[str, Dict[str, Any]] = {}
     scores_by_phone: Dict[str, Dict[str, Any]] = {}
     for upd in upd_records:
         ue = normalize_email(upd.get("email"))
         up_ = normalize_phone(upd.get("phone"))
-        # Build {round_name_lower: score} map for this applicant
+        # Build {round_key: score} map for this applicant
         s_map: Dict[str, Any] = {}
         for s in (upd.get("scores") or []):
             rn = (s.get("round_name") or "").strip()
             if rn:
-                s_map[rn.lower()] = s.get("score")
+                s_map[_round_key(rn)] = s.get("score")
         if ue:
             scores_by_email.setdefault(ue, {}).update(s_map)
         if up_:
@@ -1856,7 +1867,7 @@ async def get_attended_applicants(
         }
         # Populate dynamic round columns (display "-" when no score recorded)
         for rn in dynamic_rounds:
-            v = round_lookup.get(rn.lower())
+            v = round_lookup.get(_round_key(rn))
             row[rn] = v if v not in (None, "", "-") else "-"
         applicants.append(row)
 

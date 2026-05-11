@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
+import { formatDateDDMMYYYY as fmtDate, formatTime12H as fmtTime } from '../utils/dateFormat';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 const TIME_SLOTS = ['10:00 AM','10:30 AM','11:00 AM','11:30 AM','12:00 PM','12:30 PM','01:00 PM','01:30 PM','02:00 PM','02:30 PM','03:00 PM','03:30 PM','04:00 PM','04:30 PM','05:00 PM'];
@@ -11,6 +12,15 @@ function convertTo24h(t) {
     if (period === 'PM' && h !== 12) h += 12;
     if (period === 'AM' && h === 12) h = 0;
     return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00`;
+}
+
+// iter79 — Convert a TIME_SLOTS label ('01:00 PM') to total minutes-of-day.
+function slotMinutes(label) {
+    const [tm, period] = label.split(' ');
+    let [h, m] = tm.split(':').map(Number);
+    if (period === 'PM' && h !== 12) h += 12;
+    if (period === 'AM' && h === 12) h = 0;
+    return h * 60 + m;
 }
 
 function isSunday(dateStr) {
@@ -53,9 +63,20 @@ export default function InterviewSchedule() {
         return (info?.holidays || []).includes(dateStr);
     };
 
+    // iter79 — Spec #6: When the selected date is today, disable all slots
+    // whose 12-hour label is earlier than the current LOCAL system time.
+    const today = new Date().toISOString().split('T')[0];
+    const minSlotMinutes = useMemo(() => {
+        if (!date || date !== today) return -1;
+        const now = new Date();
+        return now.getHours() * 60 + now.getMinutes();
+    }, [date, today]);
+    const isSlotDisabled = (label) => minSlotMinutes >= 0 && slotMinutes(label) <= minSlotMinutes;
+
     const handleSchedule = async () => {
         if (!date || !time) { alert('Please select date and time'); return; }
         if (isBlocked(date)) { alert('This date is a holiday or Sunday'); return; }
+        if (isSlotDisabled(time)) { alert('Selected time slot is in the past. Please pick a future slot.'); return; }
         setSubmitting(true);
         try {
             const time24 = convertTo24h(time);
@@ -78,26 +99,9 @@ export default function InterviewSchedule() {
     if (loading) return <div className="min-h-screen bg-[#f3f1e9] flex items-center justify-center text-gray-500">Loading...</div>;
     if (error) return <div className="min-h-screen bg-[#f3f1e9] flex items-center justify-center text-red-500">{error}</div>;
     if (done) {
-        const ddmmyyyy = (iso) => {
-            if (!iso) return '';
-            const [y, m, d] = iso.split('-');
-            return `${d}-${m}-${y}`;
-        };
-        // Prefer freshly-submitted values; fall back to already-scheduled values on reschedule GET.
-        const shownDate = ddmmyyyy(date) || ddmmyyyy(info?.schedule_date);
-        const to12h = (t) => {
-            if (!t) return '';
-            // If already 12-hour (e.g. '04:30 PM'), return as-is
-            if (/AM|PM/i.test(t)) return t.toUpperCase().replace(/\s+/g, '');
-            // Otherwise '16:30' or '16:30:00' → '04:30PM'
-            const [hStr, mStr] = t.split(':');
-            let h = parseInt(hStr, 10);
-            const m = mStr || '00';
-            const period = h >= 12 ? 'PM' : 'AM';
-            h = h % 12 || 12;
-            return `${String(h).padStart(2, '0')}:${m}${period}`;
-        };
-        const shownTime = to12h(time) || to12h(info?.schedule_time);
+        // iter79 — Use centralized fmtDate / fmtTime helpers (dd-mm-yyyy + hh:mm AM/PM)
+        const shownDate = fmtDate(date) || fmtDate(info?.schedule_date);
+        const shownTime = fmtTime(time) || fmtTime(info?.schedule_time);
         const COMPANY_ADDRESS = '30, Norton Road, Mandavelipakkam, Raja Annamalai Puram, Chennai, Tamil Nadu - 600028';
         return (
             <PageShell testid="schedule-success">
@@ -132,8 +136,6 @@ export default function InterviewSchedule() {
         );
     }
 
-    const today = new Date().toISOString().split('T')[0];
-
     return (
         <PageShell testid="schedule-page">
             <div className="w-full max-w-md">
@@ -151,20 +153,26 @@ export default function InterviewSchedule() {
                             <div><label className="text-xs text-gray-500 font-medium">EMAIL:</label><div className="mt-0.5 text-gray-700" data-testid="sched-email">{info?.email}</div></div>
                             <div><label className="text-xs text-gray-500 font-medium">PHONE:</label><div className="mt-0.5 text-gray-700" data-testid="sched-phone">{info?.phone}</div></div>
                             {info?.already_scheduled && info?.schedule_date && (
-                                <><div><label className="text-xs text-gray-500 font-medium">DATE:</label><div className="mt-0.5 text-gray-700">{info.schedule_date}</div></div>
-                                <div><label className="text-xs text-gray-500 font-medium">TIME:</label><div className="mt-0.5 text-gray-700">{info.schedule_time}</div></div></>
+                                <><div><label className="text-xs text-gray-500 font-medium">DATE:</label><div className="mt-0.5 text-gray-700" data-testid="sched-current-date">{fmtDate(info.schedule_date)}</div></div>
+                                <div><label className="text-xs text-gray-500 font-medium">TIME:</label><div className="mt-0.5 text-gray-700" data-testid="sched-current-time">{fmtTime(info.schedule_time)}</div></div></>
                             )}
                         </div>
 
                         <div className="border-t border-gray-200 pt-4 space-y-3">
                             <div className="space-y-1"><label className="text-xs text-gray-600 font-medium">Date:</label>
-                                <input type="date" value={date} min={today} onChange={e => { if (!isBlocked(e.target.value)) setDate(e.target.value); else alert('Sundays and holidays are not available'); }} data-testid="sched-date"
+                                <input type="date" value={date} min={today} onChange={e => {
+                                    if (!isBlocked(e.target.value)) { setDate(e.target.value); setTime(''); }
+                                    else alert('Sundays and holidays are not available');
+                                }} data-testid="sched-date"
                                     className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-3 py-2.5 text-sm focus:outline-none focus:border-blue-400 focus:bg-white" /></div>
                             <div className="space-y-1"><label className="text-xs text-gray-600 font-medium">Time:</label>
                                 <select value={time} onChange={e => setTime(e.target.value)} data-testid="sched-time"
                                     className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-3 py-2.5 text-sm focus:outline-none focus:border-blue-400 focus:bg-white">
                                     <option value="">Select Time</option>
-                                    {TIME_SLOTS.map(t => <option key={t}>{t}</option>)}
+                                    {TIME_SLOTS.map(t => {
+                                        const disabled = isSlotDisabled(t);
+                                        return <option key={t} value={t} disabled={disabled} data-testid={`sched-slot-${t.replace(/[^a-z0-9]/gi, '')}${disabled ? '-disabled' : ''}`}>{t}{disabled ? '  (past)' : ''}</option>;
+                                    })}
                                 </select></div>
                         </div>
 

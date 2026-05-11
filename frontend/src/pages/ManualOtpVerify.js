@@ -16,6 +16,7 @@ import {
     ArrowLeft, ShieldCheck, X, CheckCircle, MagnifyingGlass,
     WarningCircle, Clock,
 } from '@phosphor-icons/react';
+import { formatDateDDMMYYYY as fmtDate, formatTime12H as fmtTime } from '../utils/dateFormat';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -120,8 +121,8 @@ export default function ManualOtpVerify() {
                                     ['Job Role', applicant.job_role],
                                     ['College Type', applicant.college_type],
                                     ['Source (HR Team)', applicant.hr_team],
-                                    ['Schedule Date', applicant.schedule_date],
-                                    ['Schedule Time', applicant.schedule_time],
+                                    ['Schedule Date', fmtDate(applicant.schedule_date)],
+                                    ['Schedule Time', fmtTime(applicant.schedule_time)],
                                     ['OTP', applicant.otp],
                                     ['Currently Verified?', applicant.otp_verified ? 'Yes' : 'No'],
                                 ].map(([k, v]) => (
@@ -191,8 +192,8 @@ export default function ManualOtpVerify() {
                                     ['Job Role', verified.job_role],
                                     ['College Type', verified.college_type],
                                     ['Source (HR Team)', verified.source],
-                                    ['Schedule Date', verified.schedule_date],
-                                    ['Schedule Time', verified.schedule_time],
+                                    ['Schedule Date', fmtDate(verified.schedule_date)],
+                                    ['Schedule Time', fmtTime(verified.schedule_time)],
                                     ['OTP', verified.otp],
                                 ].map(([k, v]) => (
                                     <tr key={k} className="border-b border-[#ece9dc] last:border-b-0">

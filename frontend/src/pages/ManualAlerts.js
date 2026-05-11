@@ -28,16 +28,17 @@ const ENABLED_BY_STATUS = {
     '':                        [],   // unknown — keep all disabled, force admin to clarify
 };
 
+// iter79 — Spec #5 NEW RULE:
+// • The 4 buttons below are ALWAYS enabled regardless of applicant status:
+//   shortlist, schedule_detail, otp, followup
+// • The "Send Rejection" button is enabled ONLY when registered_status === 'Attended'
+//   (result_status is ignored).
 function _allowedActions(applicant) {
     if (!applicant) return [];
-    const rs = applicant.registered_status || '';
-    if (rs === 'Attended') {
-        const result = (applicant.result_status || '').trim().toLowerCase();
-        if (result === 'selected') return [];
-        if (result === 'rejected' || result === 'on hold') return ['reject'];
-        return [];
-    }
-    return ENABLED_BY_STATUS[rs] || [];
+    const allowed = ['shortlist', 'schedule_detail', 'otp', 'followup'];
+    const rs = (applicant.registered_status || '').trim();
+    if (rs === 'Attended') allowed.push('reject');
+    return allowed;
 }
 
 const ACTION_BUTTONS = [

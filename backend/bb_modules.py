@@ -3342,8 +3342,11 @@ async def verify_applicant_otp(data: OTPVerifyBody, request: Request):
     ) or {}
 
     # Initial values from pipeline_data (treat NULL/N/A/empty as missing)
+    # iter79 — Spec #2: Source must show `pipeline_data.hr_team` (the HR team
+    # that owns this candidate). Falls back to legacy `source`/`application_source`
+    # only when hr_team is blank, so existing legacy data still renders.
     college_type = pd.get("_college_status") or pd.get("college_type")
-    source = pd.get("source") or pd.get("application_source")
+    source = pd.get("hr_team") or pd.get("source") or pd.get("application_source")
     college = pd.get("college") or pd.get("_college_resolved")
     college_type = "" if _is_blank(college_type) else college_type
     source = "" if _is_blank(source) else source
@@ -3862,7 +3865,14 @@ async def schedule_click(token: str):
 
 @pub_router.get("/schedule/{token}")
 async def get_schedule_info(token: str):
-    """Get applicant info for interview scheduling (public, via unique token)."""
+    """Get applicant info for interview scheduling (public, via unique token).
+
+    iter79 — Spec #3: schedule_date / schedule_time are now sourced from
+    `pipeline_data` first (source of truth for HR), falling back to the
+    `bb_registrations` doc. This guarantees the reschedule form always shows
+    the LATEST values even when multiple reschedules have written to
+    pipeline_data more recently than the registration doc.
+    """
     reg = await _db.bb_registrations.find_one({"schedule_token": token})
     if not reg:
         raise HTTPException(status_code=404, detail="Invalid or expired link")
@@ -3870,13 +3880,29 @@ async def get_schedule_info(token: str):
     holidays = await _db.bb_holidays.find({}, {"_id": 0, "date": 1}).to_list(None)
     holiday_dates = [h["date"] for h in holidays]
 
+    # Prefer pipeline_data (HR source-of-truth). Match by email OR phone.
+    pd_doc = None
+    pd_query = []
+    if reg.get("email"):
+        pd_query.append({"email": reg.get("email")})
+    if reg.get("phone"):
+        pd_query.append({"phone": reg.get("phone")})
+    if pd_query:
+        pd_doc = await _db.pipeline_data.find_one(
+            {"$or": pd_query} if len(pd_query) > 1 else pd_query[0],
+            {"_id": 0, "schedule_date": 1, "schedule_time": 1, "last_update": 1},
+        )
+
+    latest_date = (pd_doc or {}).get("schedule_date") or reg.get("schedule_date")
+    latest_time = (pd_doc or {}).get("schedule_time") or reg.get("schedule_time")
+
     return {
         "name": reg.get("full_name", ""),
         "email": reg.get("email", ""),
         "phone": reg.get("phone", ""),
-        "already_scheduled": bool(reg.get("schedule_date")),
-        "schedule_date": reg.get("schedule_date"),
-        "schedule_time": reg.get("schedule_time"),
+        "already_scheduled": bool(latest_date),
+        "schedule_date": latest_date,
+        "schedule_time": latest_time,
         "reschedule_count": reg.get("reschedule_count", 0),
         "holidays": holiday_dates,
     }
@@ -3934,6 +3960,27 @@ async def schedule_interview(token: str, data: ScheduleBody):
         return t  # give up; store raw
 
     time_24 = _to_24h(data.time)
+
+    # iter79 — Spec #6: Server-side validation that the slot is not in the past.
+    # Combines selected date + time and compares against LOCAL system time.
+    # Frontend already disables past slots; this is defence-in-depth so a hand-
+    # crafted POST cannot bypass the rule.
+    try:
+        slot_dt = datetime.strptime(
+            f"{data.date.strip()} {time_24}",
+            "%Y-%m-%d %H:%M:%S",
+        )
+        if slot_dt < datetime.now():
+            raise HTTPException(
+                status_code=400,
+                detail="Selected time slot is in the past. Please pick a future slot.",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        # If the date/time string is malformed, fall through — downstream
+        # writes will surface the real error.
+        pass
 
     updates = {
         "schedule_date": data.date.strip(),

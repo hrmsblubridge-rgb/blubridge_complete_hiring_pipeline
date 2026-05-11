@@ -13,6 +13,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import httpx
 
+from _fmt import fmt_date, fmt_time
+
 _logger = logging.getLogger("messaging")
 
 # ============ CONFIG (from environment) ============
@@ -479,7 +481,10 @@ async def notify_rejected_with_reason(
 
 async def notify_schedule_confirmation(name: str, phone: str, email: str, date: str, time: str, is_test: bool = False):
     """Send schedule confirmation via WhatsApp + Email.
-    iter73 — Content verbatim from BluBridge PDF reference."""
+    iter73 — Content verbatim from BluBridge PDF reference.
+    iter79 — Date/time displayed as `dd-mm-yyyy` + `hh:mm AM/PM`."""
+    date = fmt_date(date)
+    time = fmt_time(time)
     wa_ok = await send_whatsapp("Schedule Detail", phone, email, [name, date, time, OFFICE_LOCATION], is_test=is_test)
     body = f"""
     <p style="margin:0 0 16px 0;">Hi {name},</p>
@@ -506,7 +511,10 @@ async def notify_schedule_confirmation(name: str, phone: str, email: str, date: 
 async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str, date: str, time: str, is_test: bool = False):
     """Send OTP notification via WhatsApp + Email.
     iter73 — Content + design verbatim from BluBridge PDF reference (OTP in
-    blue inside a light-grey rectangular box)."""
+    blue inside a light-grey rectangular box).
+    iter79 — Date/time displayed as `dd-mm-yyyy` + `hh:mm AM/PM`."""
+    date = fmt_date(date)
+    time = fmt_time(time)
     wa_ok = await send_whatsapp("OTP With Job", phone, email, [name, job_role, otp, phone, date, time, OFFICE_LOCATION], is_test=is_test)
     body = f"""
     <p style="margin:0 0 16px 0;">Hi {name},</p>
@@ -537,9 +545,12 @@ async def notify_missed_reminder(name: str, phone: str, email: str, role: str, d
     Returns (wa_ok, em_ok). iter73 — Email content verbatim from BluBridge
     PDF reference (no BLUBRIDGE footer logo per PDF; Reschedule button in
     brand blue).
+    iter79 — Date/time displayed as `dd-mm-yyyy` + `hh:mm AM/PM`.
 
     AiSensy "Candidate Followups1" template now expects exactly 5 params:
     [name, role, date, time, schedule_link]. Aligned with PHP reference."""
+    date = fmt_date(date)
+    time = fmt_time(time)
     schedule_link = f"{FRONTEND_URL}/schedule-interview/{schedule_token}" if schedule_token else FRONTEND_URL
     wa_ok = await send_whatsapp(
         "Candidate Followups1", phone, email,
