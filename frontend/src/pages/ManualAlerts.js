@@ -85,8 +85,17 @@ export default function ManualAlerts() {
                 { email: applicant.email, phone: applicant.phone },
                 { withCredentials: true }
             );
-            if (r.data?.success) toast.success(`${btn.label} — sent`);
-            else toast.error(`${btn.label} — failed`);
+            if (r.data?.success) {
+                // iter75 — Accurate UI status: AiSensy 200 only proves the
+                // payload was accepted, NOT that Meta delivered. The
+                // diagnostic page shows the live delivery state.
+                const wa = r.data?.wa_ok;
+                const em = r.data?.em_ok;
+                if (wa === true && em === true) toast.success(`${btn.label} — submitted (WhatsApp + Email)`);
+                else if (wa === true && em === false) toast.success(`${btn.label} — WhatsApp submitted (Email failed)`);
+                else if (wa === false && em === true) toast.warning(`${btn.label} — Email sent. WhatsApp blocked by Meta engagement policy. Check AiSensy logs.`);
+                else toast.success(`${btn.label} — submitted to AiSensy`);
+            } else toast.error(`${btn.label} — failed`);
         } catch (e) {
             const detail = e.response?.data?.detail || `${btn.label} failed`;
             toast.error(detail);
