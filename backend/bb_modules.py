@@ -3800,16 +3800,27 @@ async def register_applicant(data: RegistrationBody):
 
     async def _instant_notify():
         try:
-            from messaging import notify_rejected_with_reason
+            from messaging import notify_rejected_with_reason, notify_shortlisted
             now_iso = datetime.now(timezone.utc).isoformat()
             if is_shortlisted:
-                # ---- 5-MIN DELAYED SCHEDULE LINK ----
-                # Do NOT send immediately. The Schedule Link Sender worker
-                # (bg_workers.py) picks this up 5+ minutes after registration
-                # and skips the send entirely if the candidate clicked
-                # "Schedule Interview" within the 5-minute window
-                # (pub/schedule-click/{token} sets schedule_initiated=True).
-                _logger.info(f"[Eval] Shortlisted — schedule link deferred 5min for {data.email}")
+                # iter80 — Spec: send the interview-schedule link Email + WhatsApp
+                # IMMEDIATELY upon shortlisting. No 5-min wait. We mark the flags
+                # right after so the safety-net worker never double-fires.
+                ok = await notify_shortlisted(
+                    data.full_name.strip(), phone_normalized,
+                    data.email.strip().lower(), schedule_token,
+                    is_test=is_test_record,
+                )
+                await _db.bb_registrations.update_one(
+                    {"email": data.email.strip().lower(), "registered_at": reg_doc["registered_at"]},
+                    {"$set": {
+                        "schedule_link_sent": True,
+                        "schedule_link_sent_at": now_iso,
+                        "shortlist_mail_sent": bool(ok),
+                        "shortlist_mail_sent_time": now_iso,
+                    }},
+                )
+                _logger.info(f"[ScheduleLink] Immediate send for {data.email} ok={ok}")
             else:
                 ok = await notify_rejected_with_reason(
                     data.full_name.strip(), phone_normalized,

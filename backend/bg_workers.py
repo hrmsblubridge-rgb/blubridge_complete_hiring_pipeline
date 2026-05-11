@@ -158,22 +158,23 @@ async def _worker_otp_generator():
 # ============ WORKER B: Schedule Link Sender (every 60s) ============
 
 async def _worker_schedule_link_sender():
-    """Send schedule link 5+ minutes after registration for shortlisted applicants
-    who have NOT already clicked 'Schedule Interview' on the result page.
+    """Retry safety-net for shortlisted applicants whose inline schedule-link
+    send failed (network blip / AiSensy hiccup). Iter80 — the 5-minute delay
+    is REMOVED; the inline send in `register_applicant._instant_notify()` runs
+    immediately on shortlisting and marks `schedule_link_sent=True`. This worker
+    only re-tries rows that are still missing the flag.
 
     Behaviour:
-      - Skips if `schedule_initiated=True` (candidate already navigated to the
-        scheduling page within 5 min — no point spamming them).
-      - Skips if `schedule_link_sent=True` (idempotent).
+      - Skips if `schedule_link_sent=True` (idempotent — inline send already done).
+      - Skips if `schedule_initiated=True` (candidate has clicked the CTA).
       - Cutoff-guarded so legacy registrations are never contacted.
     """
-    _logger.info("Schedule Link Sender worker started (5-min delay, schedule_initiated-aware)")
+    _logger.info("Schedule Link Sender worker started (retry safety-net, no delay)")
     while True:
         try:
             now = datetime.now(timezone.utc)
-            # Pick rows registered >= 5 min ago (the delay window). 24h upper
-            # bound prevents re-sending after restart for very old rows.
-            five_min_ago = (now - timedelta(minutes=5)).isoformat()
+            # Iter80 — No `five_min_ago` filter. Pick up missing rows immediately,
+            # bounded by a 24h upper bound so post-restart we never re-send to old rows.
             twenty_four_h_ago = (now - timedelta(hours=24)).isoformat()
 
             cursor = _db.bb_registrations.find({
@@ -181,8 +182,7 @@ async def _worker_schedule_link_sender():
                 "is_shortlisted": True,
                 "schedule_link_sent": {"$ne": True},
                 "schedule_initiated": {"$ne": True},
-                "registered_at": {"$lte": five_min_ago,
-                                   "$gte": max(twenty_four_h_ago, MESSAGING_CUTOFF_TS)},
+                "registered_at": {"$gte": max(twenty_four_h_ago, MESSAGING_CUTOFF_TS)},
             })
             docs = await cursor.to_list(None)
 
@@ -209,14 +209,14 @@ async def _worker_schedule_link_sender():
                         "shortlist_mail_sent_time": now.isoformat(),
                     }}
                 )
-                _logger.info(f"[ScheduleLink] Sent to {doc.get('email')} (delay window passed, no schedule_initiated)")
+                _logger.info(f"[ScheduleLink:Retry] Sent to {doc.get('email')} (inline send missed)")
 
             # Also send rejection notifications for rejected applicants not yet notified (NEW only)
             rejected_cursor = _db.bb_registrations.find({
                 **_cutoff_filter(),
                 "is_shortlisted": False,
                 "reject_notified": {"$ne": True},
-                "registered_at": {"$lte": five_min_ago, "$gte": max(twenty_four_h_ago, MESSAGING_CUTOFF_TS)},
+                "registered_at": {"$gte": max(twenty_four_h_ago, MESSAGING_CUTOFF_TS)},
             })
             rejected_docs = await rejected_cursor.to_list(None)
 
