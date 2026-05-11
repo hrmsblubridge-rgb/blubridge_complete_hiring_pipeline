@@ -276,8 +276,7 @@ export default function WhatsAppResend() {
             }, { withCredentials: true });
             const { success = 0, failed = 0, blocked = 0, skipped = 0 } = r.data;
             // iter75 — "Submitted" wording: AiSensy 200 = accepted, NOT
-            // guaranteed Meta delivery. Use /whatsapp-diagnostics for actual
-            // delivery state per submitted_message_id.
+            // guaranteed Meta delivery.
             toast.success(`${action.label} → ${label}: ✅ ${success} submitted · ❌ ${failed} failed · 🚫 ${blocked} gated · ⏭ ${skipped}`);
             await loadPreview(upload.upload_id, page);
             setSelected(new Set());
@@ -357,10 +356,7 @@ export default function WhatsAppResend() {
                         </div>
                         <div>
                             <h1 data-testid="bulk-comm-heading" className="text-xl lg:text-2xl font-bold text-[#1a2332] tracking-tight">Bulk Communication Center</h1>
-                            <p className="text-xs text-[#6b7280] mt-0.5">
-                                Pick an action — fire Mail + WhatsApp to matched candidates. ·
-                                <a href="/whatsapp-diagnostics" className="text-[#1d3a8a] font-semibold hover:underline ml-1">Check Meta delivery state →</a>
-                            </p>
+                            <p className="text-xs text-[#6b7280] mt-0.5">Pick an action — fire Mail + WhatsApp to matched candidates</p>
                         </div>
                     </div>
                     <div className="flex items-center gap-2">

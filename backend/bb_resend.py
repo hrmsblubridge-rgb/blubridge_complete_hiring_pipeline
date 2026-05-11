@@ -718,55 +718,6 @@ async def send_test_message(payload: TestSendRequest, request: Request):
     return {"success": bool(ok), "to": target_phone}
 
 
-@resend_router.post("/diagnostics/whatsapp-probe")
-async def whatsapp_diagnostic_probe(request: Request):
-    """iter74 — Admin diagnostic probe. Fires all 5 AiSensy campaigns to the
-    first allowlisted tester from `bb_test_credentials` with realistic
-    sample params and returns a consolidated side-by-side report so the
-    user can compare exactly what's sent + what AiSensy returns per campaign.
-
-    Each entry includes: campaign, params (verbatim), HTTP status_code,
-    full response_body, parsed `success` flag, `submitted_message_id`,
-    `error_message` (if any), and `ok` (final pass/fail). This is the
-    definitive evidence to pin Meta-side delivery issues vs payload bugs."""
-    user = await _get_user(request)
-    from messaging import send_whatsapp_with_diagnostics
-
-    target_email = "rishi.nayak@blubridge.com"
-    target_phone = "9443109903"
-    OFFICE = "30, Norton Road, Mandavelipakkam, Raja Annamalai Puram, Chennai, Tamil Nadu - 600028."
-    LINK = f"{FRONTEND_URL}/schedule-interview/diagnostic-probe-token"
-    NAME = "Test_Rishi"
-    JOB = "AI/ML Engineer"
-    DATE = "07-03-2026"
-    TIME = "14:00:00"
-    OTP = "123456"
-
-    campaigns = [
-        ("ShortList", [NAME, LINK]),
-        ("Schedule Detail", [NAME, DATE, TIME, OFFICE]),
-        ("OTP With Job", [NAME, JOB, OTP, target_phone, DATE, TIME, OFFICE]),
-        ("Candidate Followups1", [NAME, JOB, DATE, TIME, LINK]),
-        ("Reject", []),
-    ]
-    results = []
-    for campaign, params in campaigns:
-        r = await send_whatsapp_with_diagnostics(campaign, target_phone, target_email, params)
-        results.append(r)
-
-    summary = {
-        "tested_by": user,
-        "tested_at": datetime.now(timezone.utc).isoformat(),
-        "target_phone": target_phone,
-        "target_email": target_email,
-        "campaigns_tested": len(results),
-        "passed": sum(1 for r in results if r.get("ok")),
-        "failed": sum(1 for r in results if not r.get("ok")),
-        "results": results,
-    }
-    return summary
-
-
 @resend_router.get("/history")
 async def get_history(
     request: Request,
