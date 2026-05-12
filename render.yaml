@@ -3,10 +3,8 @@ services:
     name: recruit-pipeline
     runtime: python
     pythonVersion: "3.11.9"
-    buildCommand: "pip install --upgrade pip setuptools wheel && pip install --only-binary=:all: -r backend/requirements.txt && cd frontend && rm -rf node_modules package-lock.json && npm install && npm run build"
+    buildCommand: "cd backend && pip install -r requirements.txt && cd ../frontend && rm -rf node_modules package-lock.json && npm install && npm run build"
     startCommand: "cd backend && uvicorn server:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
-      - key: PIP_ONLY_BINARY
-        value: ":all:"
