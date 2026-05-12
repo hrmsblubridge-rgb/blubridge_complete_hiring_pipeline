@@ -28,6 +28,7 @@ import WhatsAppResend from "./pages/WhatsAppResend";
 import Help from "./pages/Help";
 import ManualAlerts from "./pages/ManualAlerts";
 import ManualOtpVerify from "./pages/ManualOtpVerify";
+import MissingApplicants from "./pages/MissingApplicants";
 import TesterCredentials from "./pages/TesterCredentials";
 import Profile from "./pages/Profile";
 import { Toaster } from "./components/ui/sonner";
@@ -61,6 +62,7 @@ function App() {
                         <Route path="/help" element={<ProtectedRoute><Help /></ProtectedRoute>} />
                         <Route path="/manual-alerts" element={<ProtectedRoute><ManualAlerts /></ProtectedRoute>} />
                         <Route path="/manual-otp-verify" element={<ProtectedRoute><ManualOtpVerify /></ProtectedRoute>} />
+                        <Route path="/missing-applicants" element={<ProtectedRoute><MissingApplicants /></ProtectedRoute>} />
                         <Route path="/tester-credentials" element={<ProtectedRoute><TesterCredentials /></ProtectedRoute>} />
                         <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
                         <Route path="/register/college" element={<CollegeRegistration />} />

@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { ChartBar, FileText, CalendarCheck, PencilLine, Briefcase, FolderOpen, CalendarBlank, ShieldCheck, GraduationCap, MagnifyingGlass, Table, ArrowRight, WhatsappLogo, EnvelopeSimple, Flask } from '@phosphor-icons/react';
+import { ChartBar, FileText, CalendarCheck, PencilLine, Briefcase, FolderOpen, CalendarBlank, ShieldCheck, GraduationCap, MagnifyingGlass, Table, ArrowRight, WhatsappLogo, EnvelopeSimple, Flask, UserMinus } from '@phosphor-icons/react';
 
 const NAV_ITEMS = [
     { label: 'Analytics Dashboard', desc: 'Upload datasets, view summaries and applicants', icon: ChartBar, path: '/dashboard', tone: 'blue' },
@@ -12,6 +12,7 @@ const NAV_ITEMS = [
     { label: 'Bulk Communication Center', desc: 'Send Interview Schedule, Schedule Details, OTP, Follow-up or Rejection (Mail + WhatsApp)', icon: WhatsappLogo, path: '/whatsapp-resend', tone: 'whatsapp' },
     { label: 'Manual Applicant Alerts', desc: 'Manually trigger any messaging flow (shortlist / OTP / follow-up / reject) per candidate', icon: EnvelopeSimple, path: '/manual-alerts', tone: 'violet' },
     { label: 'Manual OTP Verify', desc: 'Mark a candidate as Attended (otp_verified=true) by email + phone', icon: ShieldCheck, path: '/manual-otp-verify', tone: 'orange' },
+    { label: 'Missing Applicants', desc: 'Shortlisted-but-not-scheduled · Scheduled-but-not-attended — filter and export', icon: UserMinus, path: '/missing-applicants', tone: 'rose' },
     { label: 'Tester Credentials', desc: 'Manage QA email/phone pairs that bypass the 4-month registration cooldown', icon: Flask, path: '/tester-credentials', tone: 'pink' },
     { label: 'Create Job Roles', desc: 'Define and manage job titles', icon: Briefcase, path: '/manage-job-roles', tone: 'navy' },
     { label: 'Create Job Openings', desc: 'Publish job openings for recruitment', icon: FolderOpen, path: '/job-openings', tone: 'rose' },

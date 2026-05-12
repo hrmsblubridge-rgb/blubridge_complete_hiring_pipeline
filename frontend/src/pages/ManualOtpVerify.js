@@ -20,6 +20,17 @@ import { formatDateDDMMYYYY as fmtDate, formatTime12H as fmtTime } from '../util
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
+// iter82 — Small row helper for the applicant details table. Keeps inline-edit
+// inputs and read-only cells visually consistent without re-templating each row.
+function Row({ k, v }) {
+    return (
+        <tr className="border-b border-[#ece9dc] last:border-b-0">
+            <td className="px-5 py-2.5 text-[#6b7280] w-44 align-top">{k}</td>
+            <td className="px-5 py-2.5 text-[#1a2332] font-medium">{v ?? '—'}</td>
+        </tr>
+    );
+}
+
 export default function ManualOtpVerify() {
     const navigate = useNavigate();
     const [query, setQuery] = useState('');
@@ -63,9 +74,53 @@ export default function ManualOtpVerify() {
 
     const handleCancel = () => {
         setQuery(''); setApplicant(null); setVerified(null);
+        setRescheduling(false); setEdit({});
     };
 
-    const interviewStatus = applicant?.interview_status || 'unknown';
+    // iter82 — Reschedule & Verify state
+    const [rescheduling, setRescheduling] = useState(false);
+    const [edit, setEdit] = useState({});      // {phone,email,job_role,schedule_date,schedule_time}
+    const [savingResch, setSavingResch] = useState(false);
+
+    // YYYY-MM-DD comparison (today < scheduled)
+    const _today = new Date().toISOString().slice(0, 10);
+    const _schedISO = (applicant?.schedule_date || '').slice(0, 10);
+    const canReschedule = !!_schedISO && _today < _schedISO;
+
+    const startReschedule = () => {
+        setRescheduling(true);
+        setEdit({
+            phone:         applicant.phone || '',
+            email:         applicant.email || '',
+            job_role:      applicant.job_role || '',
+            schedule_date: (applicant.schedule_date || '').slice(0, 10),
+            schedule_time: applicant.schedule_time || '',
+        });
+    };
+    const cancelReschedule = () => { setRescheduling(false); setEdit({}); };
+
+    const handleRescheduleVerify = async () => {
+        setSavingResch(true);
+        try {
+            const r = await axios.post(`${API}/api/bb/manual/otp/reschedule-verify`,
+                {
+                    original_email: applicant.email,
+                    original_phone: applicant.phone,
+                    phone:         edit.phone,
+                    email:         edit.email,
+                    job_role:      edit.job_role,
+                    schedule_date: edit.schedule_date,
+                    schedule_time: edit.schedule_time,
+                },
+                { withCredentials: true }
+            );
+            setVerified(r.data.applicant);
+            setRescheduling(false);
+            toast.success('Rescheduled and verified — applicant marked as Attended');
+        } catch (e) {
+            toast.error(e.response?.data?.detail || 'Reschedule & Verify failed');
+        } finally { setSavingResch(false); }
+    };
 
     return (
         <div className="min-h-screen" data-testid="manual-otp-verify-page">
@@ -108,68 +163,69 @@ export default function ManualOtpVerify() {
                     </button>
                 </div>
 
-                {/* Step 2 — Applicant details + conditional Verify */}
+                {/* Step 2 — Applicant details + Verify / Reschedule & Verify */}
                 {applicant && !verified && (
                     <div className="bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl overflow-hidden" data-testid="manual-otp-applicant">
-                        <div className="px-5 py-3 bg-[#faf9f1] border-b border-[#e5e3d8] text-sm font-semibold text-[#1a2332]">Applicant Details</div>
+                        <div className="px-5 py-3 bg-[#faf9f1] border-b border-[#e5e3d8] text-sm font-semibold text-[#1a2332] flex items-center justify-between">
+                            <span>Applicant Details</span>
+                            {rescheduling && <span className="text-amber-700 text-xs">Editing — Phone / Email / Job Role / Date / Time</span>}
+                        </div>
                         <table className="w-full text-sm">
                             <tbody>
-                                {[
-                                    ['Name', applicant.name],
-                                    ['Phone', applicant.phone],
-                                    ['Email', applicant.email],
-                                    ['Job Role', applicant.job_role],
-                                    ['College Type', applicant.college_type],
-                                    ['Source (HR Team)', applicant.hr_team],
-                                    ['Schedule Date', fmtDate(applicant.schedule_date)],
-                                    ['Schedule Time', fmtTime(applicant.schedule_time)],
-                                    ['OTP', applicant.otp],
-                                    ['Currently Verified?', applicant.otp_verified ? 'Yes' : 'No'],
-                                ].map(([k, v]) => (
-                                    <tr key={k} className="border-b border-[#ece9dc] last:border-b-0">
-                                        <td className="px-5 py-2.5 text-[#6b7280] w-44">{k}</td>
-                                        <td className="px-5 py-2.5 text-[#1a2332] font-medium">{v || '—'}</td>
-                                    </tr>
-                                ))}
+                                <Row k="Name" v={applicant.name} />
+                                <Row k="Phone" v={rescheduling
+                                    ? <input value={edit.phone} onChange={(e) => setEdit(s => ({...s, phone: e.target.value}))} data-testid="resch-phone" className="w-full bg-white border border-[#e5e3d8] rounded px-2 py-1.5 text-sm" />
+                                    : (applicant.phone || '—')} />
+                                <Row k="Email" v={rescheduling
+                                    ? <input value={edit.email} onChange={(e) => setEdit(s => ({...s, email: e.target.value}))} data-testid="resch-email" className="w-full bg-white border border-[#e5e3d8] rounded px-2 py-1.5 text-sm" />
+                                    : (applicant.email || '—')} />
+                                <Row k="Job Role" v={rescheduling
+                                    ? <input value={edit.job_role} onChange={(e) => setEdit(s => ({...s, job_role: e.target.value}))} data-testid="resch-jobrole" className="w-full bg-white border border-[#e5e3d8] rounded px-2 py-1.5 text-sm" />
+                                    : (applicant.job_role || '—')} />
+                                <Row k="College Type" v={applicant.college_type} />
+                                <Row k="Source (HR Team)" v={applicant.hr_team} />
+                                <Row k="Schedule Date" v={rescheduling
+                                    ? <input type="date" value={edit.schedule_date} min={_today} onChange={(e) => setEdit(s => ({...s, schedule_date: e.target.value}))} data-testid="resch-date" className="bg-white border border-[#e5e3d8] rounded px-2 py-1.5 text-sm" />
+                                    : (fmtDate(applicant.schedule_date) || '—')} />
+                                <Row k="Schedule Time" v={rescheduling
+                                    ? <input type="time" value={(edit.schedule_time || '').slice(0,5)} onChange={(e) => setEdit(s => ({...s, schedule_time: e.target.value + ':00'}))} data-testid="resch-time" className="bg-white border border-[#e5e3d8] rounded px-2 py-1.5 text-sm" />
+                                    : (fmtTime(applicant.schedule_time) || '—')} />
+                                <Row k="OTP" v={applicant.otp} />
+                                <Row k="Currently Verified?" v={applicant.otp_verified ? 'Yes' : 'No'} />
                             </tbody>
                         </table>
 
-                        {/* Date-based / verified-state conditional action */}
-                        <div className="px-5 py-4 border-t border-[#ece9dc] bg-[#faf9f1]">
+                        {/* iter82 — Always-enabled Verify + optional Reschedule & Verify */}
+                        <div className="px-5 py-4 border-t border-[#ece9dc] bg-[#faf9f1] flex flex-wrap gap-3">
                             {applicant.otp_verified ? (
-                                <div className="flex items-center gap-2 text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3 text-sm font-semibold"
+                                <div className="flex items-center gap-2 text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3 text-sm font-semibold w-full"
                                     data-testid="manual-otp-status-already-verified">
                                     <CheckCircle size={18} weight="fill" />
                                     Applicant has already verified their OTP !
                                 </div>
-                            ) : interviewStatus === 'today' ? (
-                                <button onClick={handleVerify} disabled={verifying} data-testid="manual-otp-verify-btn"
-                                    className="px-5 py-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm flex items-center gap-2 disabled:opacity-60">
-                                    <ShieldCheck size={16} weight="bold" /> {verifying ? 'Verifying…' : 'Verify'}
-                                </button>
-                            ) : interviewStatus === 'past' ? (
-                                <div className="flex items-center gap-2 text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-4 py-3 text-sm font-semibold"
-                                    data-testid="manual-otp-status-past">
-                                    <WarningCircle size={18} weight="duotone" />
-                                    Your interview is over !
-                                </div>
-                            ) : interviewStatus === 'future' ? (
-                                <div className="flex items-center gap-2 text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm font-semibold"
-                                    data-testid="manual-otp-status-future">
-                                    <Clock size={18} weight="duotone" />
-                                    Your interview is in future !
-                                </div>
+                            ) : rescheduling ? (
+                                <>
+                                    <button onClick={handleRescheduleVerify} disabled={savingResch} data-testid="manual-otp-resched-verify-save"
+                                        className="px-5 py-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm flex items-center gap-2 disabled:opacity-60">
+                                        <ShieldCheck size={16} weight="bold" /> {savingResch ? 'Saving…' : 'Save & Verify'}
+                                    </button>
+                                    <button onClick={cancelReschedule} disabled={savingResch} data-testid="manual-otp-resched-cancel"
+                                        className="px-5 py-2.5 rounded-lg border border-[#e5e3d8] bg-[#fffdf7] text-[#1a2332] font-semibold text-sm hover:bg-[#efede5]">
+                                        Discard changes
+                                    </button>
+                                </>
                             ) : (
                                 <>
-                                    <div className="flex items-center gap-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm font-semibold mb-3"
-                                        data-testid="manual-otp-status-unknown">
-                                        <WarningCircle size={18} weight="duotone" />
-                                        No schedule date on record — Verify is allowed.
-                                    </div>
                                     <button onClick={handleVerify} disabled={verifying} data-testid="manual-otp-verify-btn"
                                         className="px-5 py-2.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm flex items-center gap-2 disabled:opacity-60">
                                         <ShieldCheck size={16} weight="bold" /> {verifying ? 'Verifying…' : 'Verify'}
                                     </button>
+                                    {canReschedule && (
+                                        <button onClick={startReschedule} data-testid="manual-otp-reschedule-verify-btn"
+                                            className="px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm flex items-center gap-2">
+                                            <Clock size={16} weight="bold" /> Reschedule & Verify
+                                        </button>
+                                    )}
                                 </>
                             )}
                         </div>

@@ -1485,6 +1485,197 @@ def _format_time_12h(s: str) -> str:
         return s
 
 
+# ============ MISSING APPLICANTS (iter82) ============
+
+def _build_missing_applicants_match(
+    from_date: Optional[str], to_date: Optional[str],
+    date_filter: str, report_type: str,
+) -> dict:
+    """Filter builder for /missing-applicants and /export.
+
+    date_filter:
+      • registered  → DATE portion of `last_update`
+      • scheduled   → DATE portion of `schedule_date`
+
+    report_type:
+      • not_scheduled → email_type=shortlist AND schedule_date in (NULL/'')
+                        AND schedule_time in (NULL/'')
+      • not_attended  → schedule_date non-empty AND schedule_time non-empty
+                        AND otp_verified in (None/'', 0, "0")
+      • all           → union of the two via $or
+    """
+    NULL_OR_EMPTY = {"$in": [None, ""]}
+    NOT_NULL = {"$nin": [None, ""], "$exists": True}
+
+    cond_not_scheduled = {
+        "email_type": {"$regex": "^shortlist$", "$options": "i"},
+        "schedule_date": NULL_OR_EMPTY,
+        "schedule_time": NULL_OR_EMPTY,
+    }
+    cond_not_attended = {
+        "schedule_date": NOT_NULL,
+        "schedule_time": NOT_NULL,
+        "$or": [
+            {"otp_verified": {"$in": [None, "", 0, "0", False]}},
+            {"otp_verified": {"$exists": False}},
+        ],
+    }
+
+    rt = (report_type or "all").strip().lower()
+    if rt == "not_scheduled":
+        match = dict(cond_not_scheduled)
+    elif rt == "not_attended":
+        match = dict(cond_not_attended)
+    else:
+        match = {"$or": [cond_not_scheduled, cond_not_attended]}
+
+    # Date range — applies to either `last_update` or `schedule_date` depending
+    # on `date_filter`. DATE-portion match against the YYYY-MM-DD prefix.
+    if from_date or to_date:
+        if (date_filter or "registered").strip().lower() == "scheduled":
+            field = "schedule_date"
+        else:
+            field = "last_update"
+        # Build a regex that captures the YYYY-MM-DD prefix in lexicographic
+        # range. Easier: rely on string comparison since both formats start
+        # with YYYY-MM-DD.
+        rng = {}
+        if from_date:
+            rng["$gte"] = from_date
+        if to_date:
+            rng["$lte"] = to_date + "\uffff"  # include any time-suffix on `last_update`
+        match[field] = rng if field not in match or not isinstance(match.get(field), dict) else {**match.get(field), **rng}
+    return match
+
+
+def _missing_status(doc: dict) -> str:
+    """Derive the user-facing display status for one document."""
+    sched = (doc.get("schedule_date") or "").strip()
+    stime = (doc.get("schedule_time") or "").strip()
+    otp = doc.get("otp_verified")
+    if not sched and not stime:
+        return "Shortlisted but interview not scheduled"
+    if sched and stime and not otp:
+        return "Interview scheduled but not attended"
+    return "—"
+
+
+@bb_router.get("/missing-applicants")
+async def missing_applicants(
+    request: Request,
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    date_filter: str = Query("registered"),
+    report_type: str = Query("all"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """List candidates who missed downstream stages: shortlisted+not-scheduled
+    or scheduled+not-attended. Reads only `pipeline_data`."""
+    await _require_auth(request)
+    match = _build_missing_applicants_match(from_date, to_date, date_filter, report_type)
+    total = await _db.pipeline_data.count_documents(match)
+    skip = (page - 1) * limit
+    cursor = _db.pipeline_data.find(match, {"_id": 0}).skip(skip).limit(limit)
+    rows = []
+    async for d in cursor:
+        rows.append({
+            "name": d.get("name") or "",
+            "email": d.get("email") or "",
+            "phone": d.get("phone") or "",
+            "current_location": d.get("location") or d.get("current_location") or "",
+            "job_role": d.get("job_role") or d.get("job_title") or "",
+            "college": d.get("college") or d.get("_college_resolved") or "",
+            "college_type": d.get("college_type") or d.get("_college_status") or "",
+            "degree": d.get("degree") or "",
+            "course": d.get("course") or "",
+            "registered_date": d.get("last_update") or "",
+            "schedule_date": d.get("schedule_date") or "",
+            "schedule_time": d.get("schedule_time") or "",
+            "result_status": _missing_status(d),
+        })
+    return {"data": rows, "total": total, "page": page, "limit": limit}
+
+
+@bb_router.get("/missing-applicants/export")
+async def export_missing_applicants(
+    request: Request,
+    from_date: Optional[str] = Query(None),
+    to_date: Optional[str] = Query(None),
+    date_filter: str = Query("registered"),
+    report_type: str = Query("all"),
+    format: str = Query("xlsx", regex="^(xlsx|csv)$"),
+):
+    """Export the same rows as /missing-applicants (no pagination) in CSV/XLSX.
+    Dates render as dd-mm-yyyy and times as hh:mm AM/PM."""
+    await _require_auth(request)
+    from fastapi.responses import StreamingResponse
+    import io
+    import csv as _csv
+
+    match = _build_missing_applicants_match(from_date, to_date, date_filter, report_type)
+    cursor = _db.pipeline_data.find(match, {"_id": 0})
+    docs = await cursor.to_list(None)
+    if not docs:
+        raise HTTPException(status_code=404, detail="No data available to export")
+
+    headers = [
+        "Name", "Email", "Phone", "Current Location", "Job Role", "College",
+        "College Type", "Degree", "Course", "Registered Date",
+        "Scheduled Date", "Schedule Time", "Result Status",
+    ]
+
+    def _row(d):
+        # Registered Date: last_update may carry time → strip to date portion
+        reg_raw = (d.get("last_update") or "")[:10]
+        return [
+            d.get("name") or "",
+            d.get("email") or "",
+            d.get("phone") or "",
+            d.get("location") or d.get("current_location") or "",
+            d.get("job_role") or d.get("job_title") or "",
+            d.get("college") or d.get("_college_resolved") or "",
+            d.get("college_type") or d.get("_college_status") or "",
+            d.get("degree") or "",
+            d.get("course") or "",
+            _format_date_ddmmyyyy(reg_raw).replace("/", "-"),
+            _format_date_ddmmyyyy(d.get("schedule_date") or "").replace("/", "-"),
+            _format_time_12h(d.get("schedule_time") or ""),
+            _missing_status(d),
+        ]
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    filename_base = f"Missing_Applicants_{today}"
+
+    if format == "csv":
+        buf = io.StringIO()
+        w = _csv.writer(buf)
+        w.writerow(headers)
+        for d in docs:
+            w.writerow(_row(d))
+        buf.seek(0)
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename_base}.csv"'},
+        )
+
+    from openpyxl import Workbook
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("Missing Applicants")
+    ws.append(headers)
+    for d in docs:
+        ws.append(_row(d))
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return StreamingResponse(
+        iter([bio.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename_base}.xlsx"'},
+    )
+
+
 # ============ EXPORT FIELD CATALOG (Schema-aware Dynamic Export) ============
 #
 # Each entry maps an API key → user-facing label, section, the underlying DB

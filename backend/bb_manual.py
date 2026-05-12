@@ -379,18 +379,10 @@ async def manual_otp_verify(body: ManualVerifyBody, request: Request):
     if not rec:
         raise HTTPException(404, "Email and phone do not belong to the same applicant")
 
-    # Date guard — interview must be TODAY (matches the new UI rule). Past or
-    # future schedules cannot be OTP-verified manually.
-    full_for_date = await _db.pipeline_data.find_one(
-        {"_id": rec["_id"]}, {"_id": 0, "schedule_date": 1}
-    )
-    sched_iso = _parse_schedule_date_iso((full_for_date or {}).get("schedule_date"))
-    status_today = _interview_status_today(sched_iso)
-    if status_today == "past":
-        raise HTTPException(400, "Your interview is over !")
-    if status_today == "future":
-        raise HTTPException(400, "Your interview is in future !")
-    # 'today' or 'unknown' (no schedule_date set) → allow verify
+    # iter82 — Date-based Verify restriction REMOVED per spec.
+    # Verify is now ALWAYS allowed regardless of schedule_date (past/future/today).
+    # Future-date Reschedule edits go through the separate /otp/reschedule-verify
+    # endpoint which updates schedule_date/time before verifying.
 
     now_iso = datetime.now(timezone.utc).isoformat()
     await _db.pipeline_data.update_one(
@@ -405,6 +397,98 @@ async def manual_otp_verify(body: ManualVerifyBody, request: Request):
     _logger.info(f"[ManualOTP:verify] by={user} email={e} phone={p}")
 
     full = await _db.pipeline_data.find_one({"_id": rec["_id"]}, {"_id": 0})
+    return {
+        "success": True,
+        "applicant": {
+            "name":          full.get("name") or "",
+            "phone":         full.get("phone") or "",
+            "email":         full.get("email") or "",
+            "job_role":      full.get("job_role") or full.get("job_title") or "",
+            "college_type":  full.get("college_type") or "",
+            "source":        full.get("hr_team") or "",
+            "schedule_date": full.get("schedule_date") or "",
+            "schedule_time": full.get("schedule_time") or "",
+            "otp":           full.get("otp") or "",
+            "otp_verified":  True,
+        },
+    }
+
+
+# ============ RESCHEDULE & VERIFY (iter82) ============
+
+class RescheduleVerifyBody(BaseModel):
+    # Anchor — identifies the existing applicant we will overwrite
+    original_email: str
+    original_phone: str
+    # New values (any subset; missing keys are left untouched)
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    job_role: Optional[str] = None
+    schedule_date: Optional[str] = None
+    schedule_time: Optional[str] = None
+
+
+@manual_router.post("/otp/reschedule-verify")
+async def manual_otp_reschedule_verify(body: RescheduleVerifyBody, request: Request):
+    """iter82 — Update an applicant's contact/schedule fields AND mark
+    otp_verified=True in a single transaction. Matches the existing record by
+    original email OR phone (no duplicate creation). Used by the
+    "Reschedule & Verify" button in Manual OTP Verify when the candidate
+    arrives BEFORE their scheduled date.
+    """
+    user = await _get_user(request)
+    import re as _re
+    orig_e = _norm_email(body.original_email)
+    orig_p = _norm_phone(body.original_phone)
+    if not (orig_e or orig_p):
+        raise HTTPException(400, "Anchor email or phone required")
+
+    clauses = []
+    if orig_e:
+        clauses.append({"email": orig_e})
+    if orig_p:
+        clauses.append({"phone": {"$regex": f"{_re.escape(orig_p)}$"}})
+    rec = await _db.pipeline_data.find_one(
+        {"$or": clauses} if len(clauses) > 1 else clauses[0],
+        {"_id": 1},
+    )
+    if not rec:
+        raise HTTPException(404, "Applicant not found")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    set_fields = {"otp_verified": True, "otp_verified_at": now_iso, "last_update": now_iso}
+    if body.phone is not None:
+        set_fields["phone"] = _norm_phone(body.phone)
+    if body.email is not None:
+        set_fields["email"] = _norm_email(body.email)
+    if body.job_role is not None:
+        set_fields["job_role"] = (body.job_role or "").strip()
+        # Also keep `_normalized_job_role` (used by the Roles/Attended filters) in sync
+        set_fields["_normalized_job_role"] = (body.job_role or "").strip()
+    if body.schedule_date is not None:
+        set_fields["schedule_date"] = (body.schedule_date or "").strip()
+    if body.schedule_time is not None:
+        set_fields["schedule_time"] = (body.schedule_time or "").strip()
+
+    await _db.pipeline_data.update_one({"_id": rec["_id"]}, {"$set": set_fields})
+
+    # Mirror onto bb_registrations so OTP / Reminder workers and the public
+    # schedule page reflect the new values. Match by ORIGINAL anchor since
+    # email/phone may have just changed.
+    try:
+        await _db.bb_registrations.update_many(
+            {"$or": clauses} if len(clauses) > 1 else clauses[0],
+            {"$set": set_fields},
+        )
+    except Exception as _e:
+        _logger.warning(f"[ManualOTP:reschedule-verify] bb_registrations mirror skipped: {_e}")
+
+    full = await _db.pipeline_data.find_one({"_id": rec["_id"]}, {"_id": 0})
+    _logger.info(
+        f"[ManualOTP:reschedule-verify] by={user} orig_email={orig_e} orig_phone={orig_p} "
+        f"-> email={full.get('email')} phone={full.get('phone')} "
+        f"sched={full.get('schedule_date')} {full.get('schedule_time')}"
+    )
     return {
         "success": True,
         "applicant": {
