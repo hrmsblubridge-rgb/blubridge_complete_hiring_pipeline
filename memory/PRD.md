@@ -45,6 +45,12 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter85)** — Production-safety QA pass + 2 critical fixes.
+  - **Reschedule "already attended" bug — root cause**: iter82's `manual_otp_reschedule_verify` mirrored `otp_verified=True` to **every** `bb_registrations` row matching the tester's email|phone via `update_many` (26 rows polluted on `rajlearn06`, 21 on `rishi.nayak`). When the public reschedule page loaded by `schedule_token`, it landed on a polluted row → HTTP 409. **Fix**: replaced broad `update_many` with `update_one` scoped to the MOST RECENT row by `registered_at` desc. Tester rows cleaned. Zero real-applicant rows touched.
+  - **Public schedule POST silently accepted garbage time**: local `_to_24h` returned raw text on parse failure → `"BANANA"` got persisted as `schedule_time`. **Fix**: replaced with centralized `to_24h_db` from `_fmt.py`; malformed input now returns HTTP 400.
+  - **Full QA report** at `/app/memory/QA_iter85.md` — 17 backend cases, all PASS. Covers schedule lifecycle, OTP verify, Reschedule & Verify (time normalisation + malformed rejection), Manual Alerts lookup, Missing Applicants (pagination + CSV/XLSX export), Score & Round, Update Scores, View Attended round dedup, TEST_MODE status, auth.
+  - **Only tester credentials used**; no production-applicant data modified; no notifications sent during QA.
+
 - **Feb 2026 (iter84)** — Score & Round (and Update Scores / View Attended) now reflect Reschedule & Verify changes immediately.
   - **Root cause**: iter82's `manual_otp_reschedule_verify` only wrote `job_role` and `_normalized_job_role` to `pipeline_data` — it left `job_title` STALE. Several downstream surfaces (Score & Round table, Update Applicants Scores, exports) fall back to `job_title` when `job_role` is missing, OR display `job_title` directly in some projections. After a reschedule that changed the role, those pages kept showing the old role even though pipeline_data had the new one. Additionally, when email or phone changed, `bb_applicant_updates` and `score_sheet` still carried the OLD anchor, so the join broke and the candidate appeared to have lost their scores / status.
   - **Fix (`bb_manual.manual_otp_reschedule_verify`)**:

@@ -4174,7 +4174,15 @@ async def schedule_interview(token: str, data: ScheduleBody):
                 pass
         return t  # give up; store raw
 
-    time_24 = _to_24h(data.time)
+    # iter85 — Use centralized `to_24h_db` so malformed inputs are REJECTED
+    # rather than silently stored as raw text (e.g. "BANANA"). Matches the
+    # behaviour of `manual_otp_reschedule_verify` for consistency.
+    try:
+        time_24 = to_24h_db(data.time)
+        if not time_24:
+            raise ValueError("empty time")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid time: {e}")
 
     # iter79 — Spec #6: Server-side validation that the slot is not in the past.
     # Combines selected date + time and compares against LOCAL system time.

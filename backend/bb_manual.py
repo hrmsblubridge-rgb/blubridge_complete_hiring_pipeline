@@ -485,13 +485,22 @@ async def manual_otp_reschedule_verify(body: RescheduleVerifyBody, request: Requ
     await _db.pipeline_data.update_one({"_id": rec["_id"]}, {"$set": set_fields})
 
     # Mirror onto bb_registrations so OTP / Reminder workers and the public
-    # schedule page reflect the new values. Match by ORIGINAL anchor since
-    # email/phone may have just changed.
+    # schedule page reflect the new values. iter85 — Scope to the SINGLE most
+    # recent registration row (by `registered_at` desc) instead of update_many
+    # across every legacy row that ever shared this email/phone. The previous
+    # broad mirror polluted historical rows with `otp_verified=True`, which
+    # then blocked future reschedule attempts on fresh schedule tokens.
     try:
-        await _db.bb_registrations.update_many(
+        latest_reg = await _db.bb_registrations.find_one(
             {"$or": clauses} if len(clauses) > 1 else clauses[0],
-            {"$set": set_fields},
+            sort=[("registered_at", -1)],
+            projection={"_id": 1},
         )
+        if latest_reg:
+            await _db.bb_registrations.update_one(
+                {"_id": latest_reg["_id"]},
+                {"$set": set_fields},
+            )
     except Exception as _e:
         _logger.warning(f"[ManualOTP:reschedule-verify] bb_registrations mirror skipped: {_e}")
 
