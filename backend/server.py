@@ -3081,25 +3081,45 @@ async def root():
 # Include the router in the main app
 app.include_router(api_router)
 
-# Include BluBridge modules router
-from bb_modules import bb_router, pub_router, init_bb, backfill_form_slugs
-init_bb(db, get_current_user, _build_college_rank_lookup, _classify_college)
-app.include_router(bb_router)
-app.include_router(pub_router)
+# Include BluBridge modules router (with traceback safety per deployment spec)
+try:
+    from bb_modules import bb_router, pub_router, init_bb, backfill_form_slugs
+    init_bb(db, get_current_user, _build_college_rank_lookup, _classify_college)
+    app.include_router(bb_router)
+    app.include_router(pub_router)
+except Exception:
+    import traceback
+    traceback.print_exc()
+    raise
 
 # Include WhatsApp Resend module (iter67)
-from bb_resend import resend_router, init_resend
-init_resend(db, get_current_user)
-app.include_router(resend_router)
+try:
+    from bb_resend import resend_router, init_resend
+    init_resend(db, get_current_user)
+    app.include_router(resend_router)
+except Exception:
+    import traceback
+    traceback.print_exc()
+    raise
 
 # Include Help / Templates module (iter67)
-from bb_help import help_router
-app.include_router(help_router)
+try:
+    from bb_help import help_router
+    app.include_router(help_router)
+except Exception:
+    import traceback
+    traceback.print_exc()
+    raise
 
 # Include Manual Operations module (iter67)
-from bb_manual import manual_router, init_manual, _ensure_default_test_credentials
-init_manual(db, get_current_user)
-app.include_router(manual_router)
+try:
+    from bb_manual import manual_router, init_manual, _ensure_default_test_credentials
+    init_manual(db, get_current_user)
+    app.include_router(manual_router)
+except Exception:
+    import traceback
+    traceback.print_exc()
+    raise
 
 # Wire centralized messaging gate (TEST_MODE → bb_test_credentials lookup)
 from messaging import init_messaging, is_test_mode
@@ -3277,3 +3297,35 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+
+
+# ============================================================================
+# REACT SPA FALLBACK (production deployment, e.g. Render)
+# ----------------------------------------------------------------------------
+# Only activates when the built frontend exists on disk. In the Emergent dev
+# preview the frontend runs on its own webpack dev server (port 3000), so the
+# build folder is absent and this catch-all silently does nothing.
+# ============================================================================
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+_FRONTEND_BUILD_DIR = Path(__file__).resolve().parent.parent / "frontend" / "build"
+_FRONTEND_INDEX = _FRONTEND_BUILD_DIR / "index.html"
+
+if _FRONTEND_INDEX.exists():
+    # Serve hashed static assets (JS/CSS/images) under /static
+    _STATIC_DIR = _FRONTEND_BUILD_DIR / "static"
+    if _STATIC_DIR.exists():
+        app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_react_routes(full_path: str):
+        # Never shadow API or OpenAPI surfaces.
+        if full_path.startswith(("api/", "api", "docs", "openapi.json", "redoc")):
+            raise HTTPException(status_code=404)
+        # Serve any built static file directly if it exists (favicon, manifest, etc.).
+        candidate = _FRONTEND_BUILD_DIR / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(str(candidate))
+        # Otherwise fall through to React Router via index.html.
+        return FileResponse(str(_FRONTEND_INDEX))
