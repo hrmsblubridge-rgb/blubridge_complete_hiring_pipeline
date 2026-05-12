@@ -174,14 +174,23 @@ async def lookup_applicant(request: Request, email: Optional[str] = None, phone:
         raise HTTPException(404, "Applicant not found in pipeline_data")
     sched_iso = _parse_schedule_date_iso(rec.get("schedule_date"))
     interview_status = _interview_status_today(sched_iso)
-    # iter71 — Centralized OTP resolution. ONE OTP per (applicant, schedule_date)
-    # tied to bb_registrations. Never generates here; only reads. Falls back
-    # to pipeline_data.otp if a tester manually populated it.
-    otp_value = await get_otp_for_schedule(
-        rec.get("email") or "", rec.get("phone") or "", rec.get("schedule_date") or "",
-    )
+    # iter86 — Manual OTP Verify must ALWAYS show the candidate's LATEST OTP.
+    # Previously we called `get_otp_for_schedule(email, phone, schedule_date)`
+    # which preferred a date-matched historical OTP. That caused a critical
+    # bug: when an admin used "Reschedule & Verify" to revert schedule_date
+    # to an earlier value, the OLD OTP for that date got re-surfaced and
+    # appeared to overwrite the candidate's actual current OTP.
+    #
+    # New resolution order:
+    #   1) pipeline_data.otp (if non-empty)
+    #   2) most-recent bb_registrations.otp by otp_sent_at desc (any date)
+    otp_value = (rec.get("otp") or "").strip()
     if not otp_value:
-        otp_value = rec.get("otp") or ""
+        otp_value = await get_otp_for_schedule(
+            rec.get("email") or "", rec.get("phone") or "",
+            # Empty schedule_date forces the "latest overall" branch.
+            "",
+        )
     # Surface the fields the UI needs (drop legacy/internal-only keys).
     return {
         "name":            rec.get("name") or "",
@@ -384,17 +393,38 @@ async def manual_otp_verify(body: ManualVerifyBody, request: Request):
     # Verify is now ALWAYS allowed regardless of schedule_date (past/future/today).
     # Future-date Reschedule edits go through the separate /otp/reschedule-verify
     # endpoint which updates schedule_date/time before verifying.
+    #
+    # iter86 — But we MUST block verify when the applicant has not scheduled
+    # at all (no schedule_date AND no schedule_time). Without a schedule there
+    # is nothing to verify against.
+    full_for_sched = await _db.pipeline_data.find_one(
+        {"_id": rec["_id"]}, {"_id": 0, "schedule_date": 1, "schedule_time": 1}
+    )
+    sd = (full_for_sched or {}).get("schedule_date") or ""
+    st = (full_for_sched or {}).get("schedule_time") or ""
+    if not sd.strip() and not st.strip():
+        raise HTTPException(status_code=400, detail="Applicant has not scheduled their interview")
 
     now_iso = datetime.now(timezone.utc).isoformat()
     await _db.pipeline_data.update_one(
         {"_id": rec["_id"]},
         {"$set": {"otp_verified": True, "otp_verified_at": now_iso, "last_update": now_iso}},
     )
-    # Mirror to bb_registrations (best-effort) so analytics views stay aligned.
-    await _db.bb_registrations.update_many(
-        {"$or": [{"email": e}, {"phone": {"$regex": f"{re.escape(p)}$"}}]},
-        {"$set": {"otp_verified": True, "otp_verified_at": now_iso, "last_update": now_iso}},
-    )
+    # Mirror to bb_registrations — iter86 scopes to the most-recent row only
+    # (matches the same fix applied to /otp/reschedule-verify).
+    try:
+        latest_reg = await _db.bb_registrations.find_one(
+            {"$or": [{"email": e}, {"phone": {"$regex": f"{re.escape(p)}$"}}]},
+            sort=[("registered_at", -1)],
+            projection={"_id": 1},
+        )
+        if latest_reg:
+            await _db.bb_registrations.update_one(
+                {"_id": latest_reg["_id"]},
+                {"$set": {"otp_verified": True, "otp_verified_at": now_iso, "last_update": now_iso}},
+            )
+    except Exception as _e:
+        _logger.warning(f"[ManualOTP:verify] bb_registrations mirror skipped: {_e}")
     _logger.info(f"[ManualOTP:verify] by={user} email={e} phone={p}")
 
     full = await _db.pipeline_data.find_one({"_id": rec["_id"]}, {"_id": 0})
@@ -529,6 +559,14 @@ async def manual_otp_reschedule_verify(body: RescheduleVerifyBody, request: Requ
                 _logger.warning(f"[ManualOTP:reschedule-verify] {coll} relink skipped: {_e}")
 
     full = await _db.pipeline_data.find_one({"_id": rec["_id"]}, {"_id": 0})
+    # iter86 — Surface the LATEST OTP using the same resolution order as
+    # /manual/applicant/lookup. Never returns an old date-matched OTP, and
+    # never blanks the display when pipeline_data.otp is empty.
+    otp_value = (full.get("otp") or "").strip()
+    if not otp_value:
+        otp_value = await get_otp_for_schedule(
+            full.get("email") or "", full.get("phone") or "", "",
+        )
     _logger.info(
         f"[ManualOTP:reschedule-verify] by={user} orig_email={orig_e} orig_phone={orig_p} "
         f"-> email={full.get('email')} phone={full.get('phone')} "
@@ -545,7 +583,7 @@ async def manual_otp_reschedule_verify(body: RescheduleVerifyBody, request: Requ
             "source":        full.get("hr_team") or "",
             "schedule_date": full.get("schedule_date") or "",
             "schedule_time": full.get("schedule_time") or "",
-            "otp":           full.get("otp") or "",
+            "otp":           otp_value,
             "otp_verified":  True,
         },
     }

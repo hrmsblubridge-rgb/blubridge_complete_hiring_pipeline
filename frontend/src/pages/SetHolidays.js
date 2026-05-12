@@ -14,6 +14,7 @@ export default function SetHolidays() {
     const [editId, setEditId] = useState(null);
     const [formName, setFormName] = useState('');
     const [formDate, setFormDate] = useState('');
+    const [formType, setFormType] = useState('Recurring'); // iter86
 
     const fetchAll = useCallback(async () => {
         setLoading(true);
@@ -22,14 +23,15 @@ export default function SetHolidays() {
     }, []);
     useEffect(() => { fetchAll(); }, [fetchAll]);
 
-    const openAdd = () => { setEditId(null); setFormName(''); setFormDate(''); setShowModal(true); };
-    const openEdit = (h) => { setEditId(h.id); setFormName(h.name); setFormDate(h.date); setShowModal(true); };
+    const openAdd = () => { setEditId(null); setFormName(''); setFormDate(''); setFormType('Recurring'); setShowModal(true); };
+    const openEdit = (h) => { setEditId(h.id); setFormName(h.name); setFormDate(h.date); setFormType(h.holiday_type || 'Recurring'); setShowModal(true); };
 
     const handleSave = async () => {
         if (!formName.trim() || !formDate) { toast.error('Name and date required'); return; }
         try {
-            if (editId) await axios.put(`${API}/api/bb/holidays/${editId}`, { name: formName.trim(), date: formDate }, { withCredentials: true });
-            else await axios.post(`${API}/api/bb/holidays`, { name: formName.trim(), date: formDate }, { withCredentials: true });
+            const payload = { name: formName.trim(), date: formDate, holiday_type: formType };
+            if (editId) await axios.put(`${API}/api/bb/holidays/${editId}`, payload, { withCredentials: true });
+            else await axios.post(`${API}/api/bb/holidays`, payload, { withCredentials: true });
             toast.success(editId ? 'Updated' : 'Holiday set'); setShowModal(false); fetchAll();
         } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
     };
@@ -52,7 +54,9 @@ export default function SetHolidays() {
                  <div className="space-y-3" data-testid="holidays-list">
                     {holidays.map(h => (
                         <div key={h.id} className="bg-zinc-900 border border-zinc-800 px-5 py-4 flex items-center justify-between" data-testid={`holiday-${h.id}`}>
-                            <div><span className="font-medium">{h.name}</span><span className="ml-3 text-sm text-zinc-500">{h.date}</span></div>
+                            <div><span className="font-medium">{h.name}</span><span className="ml-3 text-sm text-zinc-500">{h.date}</span>
+                                <span className={`ml-3 px-2 py-0.5 text-[10px] uppercase tracking-wide font-semibold rounded ${h.holiday_type === 'Non-Recurring' ? 'bg-amber-900 text-amber-200' : 'bg-emerald-900 text-emerald-200'}`} data-testid={`holiday-type-${h.id}`}>{h.holiday_type || 'Recurring'}</span>
+                            </div>
                             <div className="flex gap-2">
                                 <button onClick={() => openEdit(h)} className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800"><PencilSimple size={16} /></button>
                                 <button onClick={() => handleDelete(h.id)} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800"><Trash size={16} /></button>
@@ -71,6 +75,12 @@ export default function SetHolidays() {
                         <div className="space-y-1.5"><label className="text-xs text-zinc-500 uppercase tracking-wider">Date</label>
                             <input type="date" value={formDate} onChange={e => setFormDate(e.target.value)} data-testid="holiday-date-input"
                                 className="w-full bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" /></div>
+                        <div className="space-y-1.5"><label className="text-xs text-zinc-500 uppercase tracking-wider">Holiday Type</label>
+                            <select value={formType} onChange={e => setFormType(e.target.value)} data-testid="holiday-type-input"
+                                className="w-full bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500">
+                                <option value="Recurring">Recurring (same day every year)</option>
+                                <option value="Non-Recurring">Non-Recurring (this year only)</option>
+                            </select></div>
                         <div className="flex justify-end gap-3">
                             <button onClick={() => setShowModal(false)} className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm">Cancel</button>
                             <button onClick={handleSave} data-testid="save-holiday-btn" className="px-4 py-2 bg-orange-700 hover:bg-orange-600 text-sm font-medium">Set holiday</button>

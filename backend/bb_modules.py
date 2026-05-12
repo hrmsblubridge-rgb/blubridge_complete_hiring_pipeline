@@ -3469,6 +3469,34 @@ def _parse_score_file(content: bytes, filename: str) -> tuple:
 class HolidayBody(BaseModel):
     name: str
     date: str
+    # iter86 — "Recurring" applies on the same MM-DD every year (past + future);
+    # "Non-Recurring" applies only to the exact stored date.
+    holiday_type: Optional[str] = "Recurring"
+
+
+def _expand_holiday_dates(doc: dict, *, years_back: int = 5, years_fwd: int = 10) -> list[str]:
+    """Return all ISO dates this holiday applies to.
+
+    - Non-Recurring → [exact date]
+    - Recurring     → [same MM-DD across years_back..years_fwd inclusive]
+    Returns [] if the stored date is malformed.
+    """
+    date_str = (doc.get("date") or "").strip()
+    if not date_str:
+        return []
+    htype = (doc.get("holiday_type") or "Recurring").strip().lower()
+    if htype != "recurring":
+        return [date_str]
+    try:
+        base_year = int(date_str[:4])
+        mmdd = date_str[5:]    # "MM-DD"
+    except Exception:
+        return [date_str]
+    out = []
+    for y in range(base_year - years_back, base_year + years_fwd + 1):
+        out.append(f"{y:04d}-{mmdd}")
+    return out
+
 
 @bb_router.get("/holidays")
 async def list_holidays(request: Request):
@@ -3476,19 +3504,35 @@ async def list_holidays(request: Request):
     docs = await _db.bb_holidays.find({}).sort("date", 1).to_list(None)
     for d in docs:
         d["id"] = str(d.pop("_id"))
+        # iter86 — Default legacy rows (no `holiday_type` field) to "Recurring".
+        d.setdefault("holiday_type", "Recurring")
     return {"holidays": docs}
 
 @bb_router.post("/holidays")
 async def create_holiday(data: HolidayBody, request: Request):
     await _require_auth(request)
-    doc = {"name": data.name.strip(), "date": data.date.strip(), "created_at": datetime.now(timezone.utc).isoformat()}
+    htype = (data.holiday_type or "Recurring").strip()
+    if htype not in ("Recurring", "Non-Recurring"):
+        raise HTTPException(status_code=400, detail="holiday_type must be 'Recurring' or 'Non-Recurring'")
+    doc = {
+        "name": data.name.strip(),
+        "date": data.date.strip(),
+        "holiday_type": htype,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
     result = await _db.bb_holidays.insert_one(doc)
     return {"success": True, "id": str(result.inserted_id)}
 
 @bb_router.put("/holidays/{holiday_id}")
 async def update_holiday(holiday_id: str, data: HolidayBody, request: Request):
     await _require_auth(request)
-    result = await _db.bb_holidays.update_one({"_id": _oid(holiday_id)}, {"$set": {"name": data.name.strip(), "date": data.date.strip()}})
+    htype = (data.holiday_type or "Recurring").strip()
+    if htype not in ("Recurring", "Non-Recurring"):
+        raise HTTPException(status_code=400, detail="holiday_type must be 'Recurring' or 'Non-Recurring'")
+    result = await _db.bb_holidays.update_one(
+        {"_id": _oid(holiday_id)},
+        {"$set": {"name": data.name.strip(), "date": data.date.strip(), "holiday_type": htype}},
+    )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     return {"success": True}
@@ -3969,10 +4013,43 @@ async def register_applicant(data: RegistrationBody):
                 f"email={data.email.strip().lower()} phone={phone_normalized}"
             )
     elif existing:
+        # iter86 — Re-registration must restore the candidate to a "fresh"
+        # workflow state (per spec). Wipe stale OTP / schedule / message flags
+        # so the new cycle behaves like a brand-new registration. Personal
+        # fields come from `set_fields`; flow-state fields get cleared here.
+        FLOW_STATE_FIELDS_NONTESTER = (
+            "otp", "otp_verified", "otp_sent", "otp_sent_at",
+            "email_type", "result_status",
+            "schedule_date", "schedule_time",
+            "whatsapp_reminder_sent", "whatsapp_followup_sent",
+            "shortlist_mail_sent", "interview_mail_sent",
+            "reject_notified", "schedule_message_sent",
+        )
+        nontester_reset = {k: "" for k in FLOW_STATE_FIELDS_NONTESTER}
         await _db.pipeline_data.update_one(
             {"_id": existing["_id"]},
-            {"$set": set_fields},
+            {"$set": {**set_fields, **nontester_reset}},
         )
+        # Mirror the reset on bb_registrations so worker flags actually clear.
+        try:
+            await _db.bb_registrations.update_many(
+                {"$or": [
+                    {"email": data.email.strip().lower()},
+                    {"phone": phone_normalized},
+                ]},
+                {"$unset": {
+                    "interview_mail_sent": "",
+                    "interview_mail_sent_at": "",
+                    "reject_notified": "",
+                    "reject_notified_at": "",
+                    "schedule_message_sent": "",
+                    "schedule_message_sent_at": "",
+                    "whatsapp_reminder_sent": "",
+                    "whatsapp_followup_sent": "",
+                }},
+            )
+        except Exception as _e:
+            _logger.warning(f"[Pipeline] non-tester re-register bb_registrations reset skipped: {_e}")
     else:
         await _db.pipeline_data.update_one(
             {"email": data.email.strip().lower()},
@@ -4091,9 +4168,14 @@ async def get_schedule_info(token: str):
     reg = await _db.bb_registrations.find_one({"schedule_token": token})
     if not reg:
         raise HTTPException(status_code=404, detail="Invalid or expired link")
-    # Get holidays
-    holidays = await _db.bb_holidays.find({}, {"_id": 0, "date": 1}).to_list(None)
-    holiday_dates = [h["date"] for h in holidays]
+    # Get holidays — iter86: expand Recurring holidays across past+future years
+    # so the public schedule form blocks the same MM-DD every year.
+    holidays = await _db.bb_holidays.find({}, {"_id": 0, "date": 1, "holiday_type": 1}).to_list(None)
+    holiday_dates = set()
+    for h in holidays:
+        for d in _expand_holiday_dates(h):
+            holiday_dates.add(d)
+    holiday_dates = sorted(holiday_dates)
 
     # Prefer pipeline_data (HR source-of-truth). Match by email OR phone.
     pd_doc = None

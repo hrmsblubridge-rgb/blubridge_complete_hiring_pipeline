@@ -20,7 +20,38 @@ import { formatDateDDMMYYYY as fmtDate, formatTime12H as fmtTime } from '../util
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
-// iter82 — Small row helper for the applicant details table. Keeps inline-edit
+// iter86 — Same slot grid as the public InterviewSchedule.js form.
+const TIME_SLOTS = ['10:00 AM','10:30 AM','11:00 AM','11:30 AM','12:00 PM','12:30 PM','01:00 PM','01:30 PM','02:00 PM','02:30 PM','03:00 PM','03:30 PM','04:00 PM','04:30 PM','05:00 PM'];
+
+function _slotMinutes(label) {
+    const [tm, period] = label.split(' ');
+    let [h, m] = tm.split(':').map(Number);
+    if (period === 'PM' && h !== 12) h += 12;
+    if (period === 'AM' && h === 12) h = 0;
+    return h * 60 + m;
+}
+function _slotToHMS(label) {
+    if (!label) return '';
+    const m = _slotMinutes(label);
+    const hh = Math.floor(m / 60), mm = m % 60;
+    return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}:00`;
+}
+function _hmsToSlot(hms) {
+    // Convert "13:30:00" → "01:30 PM" if matches a known slot; else the closest format
+    if (!hms) return '';
+    const [h, m] = hms.split(':').map(Number);
+    if (isNaN(h) || isNaN(m)) return '';
+    // iter86 — Match the display heuristic used elsewhere: hours < 6 are
+    // legacy mis-stored PM slots → shift to PM for the dropdown selection.
+    let hh = h;
+    if (hh >= 1 && hh < 6) hh += 12;
+    const period = hh >= 12 ? 'PM' : 'AM';
+    const h12 = ((hh % 12) || 12);
+    const label = `${String(h12).padStart(2,'0')}:${String(m).padStart(2,'0')} ${period}`;
+    return TIME_SLOTS.includes(label) ? label : '';
+}
+
+// iter86 — Small row helper for the applicant details table. Keeps inline-edit
 // inputs and read-only cells visually consistent without re-templating each row.
 function Row({ k, v }) {
     return (
@@ -94,7 +125,7 @@ export default function ManualOtpVerify() {
             email:         applicant.email || '',
             job_role:      applicant.job_role || '',
             schedule_date: (applicant.schedule_date || '').slice(0, 10),
-            schedule_time: applicant.schedule_time || '',
+            schedule_time: _hmsToSlot(applicant.schedule_time || ''),
         });
     };
     const cancelReschedule = () => { setRescheduling(false); setEdit({}); };
@@ -102,6 +133,10 @@ export default function ManualOtpVerify() {
     const handleRescheduleVerify = async () => {
         setSavingResch(true);
         try {
+            // iter86 — When current local time is past 5 PM, the slot is
+            // locked at 05:00 PM regardless of what the (hidden) state holds.
+            const _isAfter5PM = new Date().getHours() >= 17;
+            const slotLabel = _isAfter5PM ? '05:00 PM' : edit.schedule_time;
             const r = await axios.post(`${API}/api/bb/manual/otp/reschedule-verify`,
                 {
                     original_email: applicant.email,
@@ -110,7 +145,7 @@ export default function ManualOtpVerify() {
                     email:         edit.email,
                     job_role:      edit.job_role,
                     schedule_date: edit.schedule_date,
-                    schedule_time: edit.schedule_time,
+                    schedule_time: _slotToHMS(slotLabel),
                 },
                 { withCredentials: true }
             );
@@ -187,9 +222,32 @@ export default function ManualOtpVerify() {
                                 <Row k="Schedule Date" v={rescheduling
                                     ? <input type="date" value={edit.schedule_date} min={_today} onChange={(e) => setEdit(s => ({...s, schedule_date: e.target.value}))} data-testid="resch-date" className="bg-white border border-[#e5e3d8] rounded px-2 py-1.5 text-sm" />
                                     : (fmtDate(applicant.schedule_date) || '—')} />
-                                <Row k="Schedule Time" v={rescheduling
-                                    ? <input type="time" value={(edit.schedule_time || '').slice(0,5)} onChange={(e) => setEdit(s => ({...s, schedule_time: e.target.value + ':00'}))} data-testid="resch-time" className="bg-white border border-[#e5e3d8] rounded px-2 py-1.5 text-sm" />
-                                    : (fmtTime(applicant.schedule_time) || '—')} />
+                                <Row k="Schedule Time" v={rescheduling ? (() => {
+                                    // iter86 — Use the same TIME_SLOTS dropdown as the public
+                                    // Interview Schedule form. When current LOCAL time is past
+                                    // 5 PM, the slot is locked at 05:00 PM (read-only) per spec.
+                                    const _now = new Date();
+                                    const _isAfter5PM = _now.getHours() >= 17;
+                                    const _minMins = (edit.schedule_date === _today) ? (_now.getHours() * 60 + _now.getMinutes()) : -1;
+                                    if (_isAfter5PM) {
+                                        return (
+                                            <div className="flex items-center gap-2 text-sm" data-testid="resch-time-locked">
+                                                <span className="font-semibold text-[#1a2332]">05:00 PM</span>
+                                                <span className="text-[11px] text-[#9b9787]">(locked — current time is past 5 PM)</span>
+                                            </div>
+                                        );
+                                    }
+                                    return (
+                                        <select value={edit.schedule_time} onChange={(e) => setEdit(s => ({...s, schedule_time: e.target.value}))} data-testid="resch-time"
+                                            className="bg-white border border-[#e5e3d8] rounded px-2 py-1.5 text-sm">
+                                            <option value="">Select Time</option>
+                                            {TIME_SLOTS.map(t => {
+                                                const disabled = _minMins >= 0 && _slotMinutes(t) <= _minMins;
+                                                return <option key={t} value={t} disabled={disabled}>{t}{disabled ? '  (past)' : ''}</option>;
+                                            })}
+                                        </select>
+                                    );
+                                })() : (fmtTime(applicant.schedule_time) || '—')} />
                                 <Row k="OTP" v={applicant.otp} />
                                 <Row k="Currently Verified?" v={applicant.otp_verified ? 'Yes' : 'No'} />
                             </tbody>
