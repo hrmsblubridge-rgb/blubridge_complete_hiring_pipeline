@@ -44,7 +44,11 @@ def fmt_date(s: Optional[str]) -> str:
 
 
 def fmt_time(s: Optional[str]) -> str:
-    """Format a time string to `hh:mm AM/PM`. Returns '' on falsy input."""
+    """Format a time string to `hh:mm AM/PM`. Returns '' on falsy input.
+
+    iter83 — Display-only heuristic for legacy mis-stored PM slots: see
+    `_format_time_12h` for details. Applies to bare 24-hour input only.
+    """
     if not s:
         return ""
     raw = str(s).strip().upper().replace(".", "")
@@ -63,6 +67,8 @@ def fmt_time(s: Optional[str]) -> str:
     if m:
         h24 = int(m.group(1))
         mm = m.group(2)
+        if 1 <= h24 < 6:        # legacy PM stored as AM
+            h24 += 12
         period = "PM" if h24 >= 12 else "AM"
         h12 = h24 % 12 or 12
         return f"{h12:02d}:{mm} {period}"
@@ -75,3 +81,22 @@ def fmt_date_time(d: Optional[str], t: Optional[str]) -> str:
     if dd and tt:
         return f"{dd} {tt}"
     return dd or tt or ""
+
+
+# iter83 — Centralized UI → DB time normaliser. Accepts 12-hour ("01:30 PM"),
+# 24-hour ("13:30", "13:30:00"), and edge cases (midnight/noon). Returns strict
+# "HH:MM:SS" or "" for empty input. Raises ValueError on malformed input.
+def to_24h_db(t: Optional[str]) -> str:
+    if t is None:
+        return ""
+    raw = str(t).strip().upper().replace(".", "")
+    if not raw:
+        return ""
+    for fmt in ("%I:%M %p", "%I:%M%p", "%I %p", "%I%p",
+                "%H:%M:%S", "%H:%M"):
+        try:
+            parsed = datetime.strptime(raw, fmt)
+            return parsed.strftime("%H:%M:%S")
+        except ValueError:
+            continue
+    raise ValueError(f"Unrecognized time format: {t!r}")

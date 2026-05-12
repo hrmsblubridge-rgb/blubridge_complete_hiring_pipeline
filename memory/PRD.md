@@ -45,6 +45,18 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter83)** — Missing Applicants pagination + global schedule_time normalisation.
+  - **Root cause of "1 PM displayed as 1 AM"**: 9904 rows in `pipeline_data.schedule_time` are mis-stored as `01:00:00`–`05:30:00` (PM slots without the +12 offset) because a historical bulk importer never converted the 12-hour XLSX cells. The freshly-added `manual_otp_reschedule_verify` endpoint (iter82) also accepted user-supplied time AS-IS — would have grown the bad-data pile every reschedule. `bb_registrations` is clean (uses `_to_24h`).
+  - **Fix A — Centralized DB normaliser**: new `_fmt.to_24h_db(t)` converts 12-hour ("01:30 PM"), 24-hour ("13:30"), or noon/midnight inputs to strict `HH:MM:SS`. Raises `ValueError` on garbage so we never persist nonsense.
+  - **Fix B — All schedule_time WRITES go through it**:
+    - `bb_manual.manual_otp_reschedule_verify` — wraps in try/except → HTTP 400 on malformed.
+    - `bb_modules.create_college_schedule` and `update_college_schedule` — replaced brittle `len==3 else +":00"` with `to_24h_db`.
+    - `bb_modules._to_24h` already correct for `/api/pub/schedule/{token}` (left untouched per "no unnecessary refactor").
+  - **Fix C — Display heuristic for historical data**: `formatTime12H` (frontend) and `_format_time_12h` + `fmt_time` (backend) now treat any bare 24-hour input with hour ∈ [1, 5] as a mis-stored PM slot (interview window in this app is strictly 10:00-17:30 — values < 06:00 cannot legitimately be AM). Display-only, no DB mutation. Verified live via CSV export: legacy `01:00:00` rows now render `01:00 PM`, `02:00:00` → `02:00 PM`, etc.
+  - **Fix D — Backend validation**: `to_24h_db("banana")` → HTTP 400 `"Invalid schedule_time: Unrecognized time format: 'banana'"`. Tested live.
+  - **Missing Applicants pagination**: full `<<` `<` page-input `Go` `>` `>>` controls; records-per-page dropdown (25/50/100/200/500); first/last buttons auto-hide on first/last page; export still streams ALL filtered records (page/limit are intentionally NOT sent to `/export`). Verified live: total=1071, page=5/limit=25 returns the correct 25-row slice.
+  - **Tester credentials only**: live verification ran reschedule-verify on `rajlearn06@gmail.com` with `"01:00 PM"` → stored as `13:00:00` → reverted. Zero real-applicant rows touched.
+
 - **Feb 2026 (iter82)** — Manual OTP Verify always-enabled + Reschedule & Verify + new Missing Applicants module.
   - **Manual OTP Verify**: removed the date-based Verify restriction in `bb_manual.manual_otp_verify` ("Your interview is over!"/"in future!" branches gone). Verify is always shown and enabled (front + back). When `today < schedule_date`, the new **Reschedule & Verify** button appears alongside Verify; clicking it makes Phone / Email / Job Role / Schedule Date / Schedule Time editable inline (other fields stay read-only).
   - **`POST /api/bb/manual/otp/reschedule-verify`** (new) — anchors on `original_email|original_phone`, atomically writes any provided field updates, sets `otp_verified=True`, `otp_verified_at`, `last_update`, and `_normalized_job_role` so analytics filters stay in sync. Mirrors onto `bb_registrations` (so Reschedule page / OTP / Reminder workers see the new schedule). Updates the existing record only — never creates a duplicate.

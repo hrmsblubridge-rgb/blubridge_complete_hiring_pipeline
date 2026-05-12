@@ -30,6 +30,7 @@ from messaging import (
     notify_rejected,
     get_otp_for_schedule,
 )
+from _fmt import to_24h_db
 
 _logger = logging.getLogger("bb_manual")
 
@@ -468,7 +469,12 @@ async def manual_otp_reschedule_verify(body: RescheduleVerifyBody, request: Requ
     if body.schedule_date is not None:
         set_fields["schedule_date"] = (body.schedule_date or "").strip()
     if body.schedule_time is not None:
-        set_fields["schedule_time"] = (body.schedule_time or "").strip()
+        # iter83 — Always normalize to strict 24-hour HH:MM:SS before write.
+        # Rejects malformed values so we never persist garbage like "1 PM" raw.
+        try:
+            set_fields["schedule_time"] = to_24h_db(body.schedule_time)
+        except ValueError as e:
+            raise HTTPException(400, f"Invalid schedule_time: {e}")
 
     await _db.pipeline_data.update_one({"_id": rec["_id"]}, {"$set": set_fields})
 

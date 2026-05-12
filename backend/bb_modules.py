@@ -7,6 +7,7 @@ from typing import List, Optional
 from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 import hashlib, secrets, re, logging, uuid
+from _fmt import to_24h_db
 
 bb_router = APIRouter(prefix="/api/bb")
 # Public router — no auth prefix
@@ -929,7 +930,8 @@ async def create_college_schedule(data: CollegeScheduleBody, request: Request):
         "job_roles": roles,
         "job_role": ",".join(roles),  # legacy compat — used by register endpoint regex matcher
         "schedule_date": date,
-        "schedule_time": time if len(time.split(":")) == 3 else (time + ":00"),
+        # iter83 — Strict 24-hour normalization. Replaces brittle "len==3 else +':00'".
+        "schedule_time": to_24h_db(time),
         "notes": (data.notes or "").strip(),
         "active": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -959,8 +961,11 @@ async def update_college_schedule(sched_id: str, data: CollegeScheduleUpdate, re
     if data.schedule_date is not None:
         updates["schedule_date"] = data.schedule_date.strip()
     if data.schedule_time is not None:
-        t = data.schedule_time.strip()
-        updates["schedule_time"] = t if len(t.split(":")) == 3 else (t + ":00")
+        # iter83 — Strict 24-hour normalization on update too.
+        try:
+            updates["schedule_time"] = to_24h_db(data.schedule_time)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid schedule_time: {e}")
     if data.notes is not None:
         updates["notes"] = data.notes.strip()
     await _db.bb_college_schedules.update_one({"_id": oid}, {"$set": updates})
@@ -1470,7 +1475,13 @@ def _format_date_ddmmyyyy(s: str) -> str:
 
 
 def _format_time_12h(s: str) -> str:
-    """Convert 'HH:MM:SS' or 'HH:MM' (24h) → '12-hour AM/PM'. Falls back to input."""
+    """Convert 'HH:MM:SS' or 'HH:MM' (24h) → '12-hour AM/PM'. Falls back to input.
+
+    iter83 — Display-only heuristic: legacy importer dropped the +12 PM offset
+    on 9904 pipeline_data rows (e.g. "01:00:00" really means 1 PM). Interview
+    slots only exist between 10:00 and 17:30, so any stored hour < 6 is
+    unambiguously a mis-stored PM slot. Storage stays untouched.
+    """
     if not s or not isinstance(s, str):
         return ""
     parts = s.split(":")
@@ -1478,6 +1489,8 @@ def _format_time_12h(s: str) -> str:
         return s
     try:
         h = int(parts[0]); m = int(parts[1])
+        if 1 <= h < 6:
+            h += 12
         period = "AM" if h < 12 else "PM"
         h12 = h % 12 or 12
         return f"{h12:02d}:{m:02d} {period}"

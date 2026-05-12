@@ -10,10 +10,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { ArrowLeft, FunnelSimple, ArrowClockwise, DownloadSimple, UserMinus } from '@phosphor-icons/react';
+import {
+    ArrowLeft, FunnelSimple, ArrowClockwise, DownloadSimple, UserMinus,
+    CaretDoubleLeft, CaretLeft, CaretRight, CaretDoubleRight,
+} from '@phosphor-icons/react';
 import { formatDateDDMMYYYY as fmtDate, formatTime12H as fmtTime } from '../utils/dateFormat';
 
 const API = process.env.REACT_APP_BACKEND_URL;
+const PAGE_SIZES = [25, 50, 100, 200, 500];
 const today = () => new Date().toISOString().slice(0, 10);
 
 const REPORT_TYPES = [
@@ -35,19 +39,26 @@ export default function MissingApplicants() {
     const [rows, setRows] = useState([]);
     const [total, setTotal] = useState(0);
     const [loading, setLoading] = useState(false);
+    // Pagination state (iter83)
+    const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(100);
+    const [goToPage, setGoToPage] = useState('');
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-    const params = useMemo(() => ({
+    const filterParams = useMemo(() => ({
         from_date: fromDate,
         to_date:   toDate,
         date_filter: dateFilter,
         report_type: reportType,
-        page: 1, limit: 500,
     }), [fromDate, toDate, dateFilter, reportType]);
 
-    const fetchRows = async () => {
+    const fetchRows = async (pg = page, sz = pageSize) => {
         setLoading(true);
         try {
-            const r = await axios.get(`${API}/api/bb/missing-applicants`, { withCredentials: true, params });
+            const r = await axios.get(`${API}/api/bb/missing-applicants`, {
+                withCredentials: true,
+                params: { ...filterParams, page: pg, limit: sz },
+            });
             setRows(r.data.data || []);
             setTotal(r.data.total || 0);
         } catch (e) {
@@ -55,18 +66,40 @@ export default function MissingApplicants() {
         } finally { setLoading(false); }
     };
 
-    useEffect(() => { fetchRows(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    useEffect(() => { fetchRows(1, pageSize); /* eslint-disable-next-line */ }, []);
+
+    const handleFilter = () => {
+        setPage(1);
+        fetchRows(1, pageSize);
+    };
 
     const handleReset = () => {
         setFromDate(today()); setToDate(today());
         setDateFilter('registered'); setReportType('all');
-        setTimeout(fetchRows, 0);
+        setPage(1); setPageSize(100); setGoToPage('');
+        setTimeout(() => fetchRows(1, 100), 0);
+    };
+
+    const navigatePage = (pg) => {
+        const target = Math.max(1, Math.min(totalPages, pg));
+        setPage(target);
+        fetchRows(target, pageSize);
+    };
+    const handleGoToPage = () => {
+        const n = parseInt(goToPage, 10);
+        if (!isNaN(n)) navigatePage(n);
+        setGoToPage('');
+    };
+    const handlePageSizeChange = (sz) => {
+        setPageSize(sz); setPage(1); fetchRows(1, sz);
     };
 
     const handleExport = async (format) => {
         try {
+            // iter83 — Export sends ONLY filter params, NOT page/limit, so it
+            // streams ALL filtered records (not just the current page).
             const r = await axios.get(`${API}/api/bb/missing-applicants/export`, {
-                withCredentials: true, params: { ...params, format }, responseType: 'blob',
+                withCredentials: true, params: { ...filterParams, format }, responseType: 'blob',
             });
             const blob = new Blob([r.data]);
             const url = URL.createObjectURL(blob);
@@ -127,7 +160,7 @@ export default function MissingApplicants() {
                         </div>
                     </div>
                     <div className="flex flex-wrap gap-3 mt-4">
-                        <button onClick={fetchRows} disabled={loading} data-testid="missing-filter-btn"
+                        <button onClick={handleFilter} disabled={loading} data-testid="missing-filter-btn"
                             className="px-5 py-2.5 rounded-lg bg-[#1d3a8a] hover:bg-[#162d6e] text-white font-semibold text-sm flex items-center gap-2 disabled:opacity-60">
                             <FunnelSimple size={16} weight="bold" /> {loading ? 'Filtering…' : 'Filter'}
                         </button>
@@ -200,6 +233,39 @@ export default function MissingApplicants() {
                             </tbody>
                         </table>
                     </div>
+
+                    {/* Pagination — iter83 */}
+                    {total > 0 && (
+                        <div className="flex items-center justify-between px-5 py-3 border-t border-[#ece9dc] bg-[#faf9f1] flex-wrap gap-3" data-testid="missing-pagination">
+                            <div className="flex items-center gap-3">
+                                <span className="text-sm text-[#6b7280]">Page <strong>{page}</strong> of {totalPages} <span className="text-[#9b9787]">({total} records)</span></span>
+                                <select value={pageSize} onChange={(e) => handlePageSizeChange(Number(e.target.value))} data-testid="missing-page-size"
+                                    className="bg-white border border-[#e5e3d8] rounded-lg px-2 py-1.5 text-sm">
+                                    {PAGE_SIZES.map(s => <option key={s} value={s}>{s} / page</option>)}
+                                </select>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                {page > 1 && (<>
+                                    <button onClick={() => navigatePage(1)} data-testid="missing-first-btn"
+                                        className="px-2 py-1.5 rounded border border-[#e5e3d8] bg-white hover:bg-[#efede5]"><CaretDoubleLeft size={14} /></button>
+                                    <button onClick={() => navigatePage(page - 1)} data-testid="missing-prev-btn"
+                                        className="px-2 py-1.5 rounded border border-[#e5e3d8] bg-white hover:bg-[#efede5]"><CaretLeft size={14} /></button>
+                                </>)}
+                                <input type="number" value={goToPage} onChange={(e) => setGoToPage(e.target.value)}
+                                    onKeyDown={(e) => e.key === 'Enter' && handleGoToPage()}
+                                    placeholder={page} data-testid="missing-page-input"
+                                    className="w-16 bg-white border border-[#e5e3d8] rounded px-2 py-1.5 text-sm text-center" />
+                                <button onClick={handleGoToPage} data-testid="missing-go-btn"
+                                    className="px-3 py-1.5 rounded bg-[#1d3a8a] hover:bg-[#162d6e] text-white text-sm font-semibold">Go</button>
+                                {page < totalPages && (<>
+                                    <button onClick={() => navigatePage(page + 1)} data-testid="missing-next-btn"
+                                        className="px-2 py-1.5 rounded border border-[#e5e3d8] bg-white hover:bg-[#efede5]"><CaretRight size={14} /></button>
+                                    <button onClick={() => navigatePage(totalPages)} data-testid="missing-last-btn"
+                                        className="px-2 py-1.5 rounded border border-[#e5e3d8] bg-white hover:bg-[#efede5]"><CaretDoubleRight size={14} /></button>
+                                </>)}
+                            </div>
+                        </div>
+                    )}
                 </div>
             </main>
         </div>
