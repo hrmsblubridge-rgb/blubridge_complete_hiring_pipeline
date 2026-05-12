@@ -3978,6 +3978,14 @@ async def register_applicant(data: RegistrationBody):
                 )
             except Exception as _e:
                 _logger.warning(f"[Pipeline:tester] bb_registrations reset skipped: {_e}")
+            # iter87 — Wipe OTP from EVERY bb_registrations doc so Manual OTP
+            # Verify never re-surfaces a previous-cycle OTP via the
+            # latest-OTP fallback.
+            try:
+                from messaging import reset_otp_on_reschedule
+                await reset_otp_on_reschedule(data.email.strip().lower(), phone_normalized)
+            except Exception as _e:
+                _logger.warning(f"[Pipeline:tester] OTP wipe skipped: {_e}")
             # iter70 (#6) — Reset applicant round scores so the candidate
             # restarts with a fresh evaluation cycle. bb_rounds definitions
             # are NOT touched; only the per-applicant `scores[]` array.
@@ -4050,6 +4058,15 @@ async def register_applicant(data: RegistrationBody):
             )
         except Exception as _e:
             _logger.warning(f"[Pipeline] non-tester re-register bb_registrations reset skipped: {_e}")
+        # iter87 — Wipe OTP from EVERY bb_registrations doc for this applicant.
+        # The Manual OTP Verify lookup falls back to the most-recent
+        # bb_registrations.otp; without this wipe, the OLD OTP from a previous
+        # registration cycle re-surfaces on the new (un-scheduled) record.
+        try:
+            from messaging import reset_otp_on_reschedule
+            await reset_otp_on_reschedule(data.email.strip().lower(), phone_normalized)
+        except Exception as _e:
+            _logger.warning(f"[Pipeline] non-tester re-register OTP wipe skipped: {_e}")
     else:
         await _db.pipeline_data.update_one(
             {"email": data.email.strip().lower()},

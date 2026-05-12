@@ -45,6 +45,19 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter87)** — Re-registration OTP wipe + holiday label contrast + lock-at-5PM scoping.
+  - **Item 1 — OTP still surfacing after re-registration**: iter86 cleared `pipeline_data.otp` but left `bb_registrations.otp` intact across all 29 historical rows for the tester. The Manual OTP Verify lookup's iter86 fallback (`get_otp_for_schedule(..., "")` → most-recent `bb_registrations.otp`) then re-surfaced the OLD OTP. **Fix**: both re-registration paths (non-tester + tester) now invoke `messaging.reset_otp_on_reschedule(email, phone)` after the field-reset, which `$unset`s `otp`, `otp_sent`, `otp_sent_at`, `otp_verified` on every matching `bb_registrations` row.
+  - **Item 2 — Verified the OTP-lifecycle rules end-to-end**:
+    - S1 re-register → `pipeline_data.otp=''` + `0/29` bb_registrations rows retain OTP ✅
+    - S2 unscheduled lookup → `otp=''` ✅
+    - S3 schedule → fresh `532416` ✅
+    - S4 reschedule → fresh `758976` (different from S3) ✅
+    - S5 Manual OTP Verify → Reschedule&Verify → **preserves `758976`** (no regeneration) ✅
+    No code change needed for S3-S5 — the public schedule POST already generates a fresh OTP per call, and `manual_otp_reschedule_verify` does not touch `pipeline_data.otp`.
+  - **Item 3 — Holiday badge contrast**: switched from `bg-{color}-900 text-{color}-200` (dark on dark) to `bg-{color}-100 text-{color}-800 border border-{color}-300` (light bg + dark text). Recurring → emerald; Non-Recurring → amber.
+  - **Item 4 — Lock-at-5PM scoping**: lock now applies ONLY when `edit.schedule_date === today` AND `now.getHours() >= 17`. Future dates always show the fully-editable dropdown with no past-slot disabling. Applied to both render path and save handler.
+  - **Tester-only verification**, no real-applicant data touched.
+
 - **Feb 2026 (iter86)** — 5-item batch: OTP preservation + re-registration reset + UI dropdown + recurring holidays.
   - **Item 1+2 — OTP overwrite bug**: Root cause was `bb_manual._resolve_candidate_extras` calling `get_otp_for_schedule(email, phone, schedule_date)`. The "one OTP per (applicant, schedule_date)" rule favoured a date-matched historical OTP, so when admin reverted `schedule_date` to an earlier value via Reschedule & Verify, the OLD OTP re-surfaced and appeared to overwrite the candidate's actual latest OTP. **Fix**: `lookup_applicant` + `manual_otp_reschedule_verify` response now resolve OTP in two steps: (1) `pipeline_data.otp` if non-empty; (2) `get_otp_for_schedule(..., "")` which falls back to the most-recent `bb_registrations.otp` by `otp_sent_at` desc regardless of schedule_date. Verified: setting `pipeline_data.otp=663456` and reverting schedule_date to a historical match still returns `663456` (not `213456`).
   - **Item 3 — Re-registration didn't reset workflow fields** for non-tester applicants. Path at `bb_modules.py:3973` just `update_one`-ed personal fields, leaving stale `otp`, `schedule_date`, `otp_verified`, `result_status`, `email_type`, `*_sent` flags. **Fix**: added `FLOW_STATE_FIELDS_NONTESTER` reset alongside `set_fields` write, mirrored on `bb_registrations` via `$unset` for worker flags. Verified live: post-register pipeline_data → `{otp:'', schedule_date:'', schedule_time:'', otp_verified:'', result_status:'', email_type:''}`. Tester path unchanged.

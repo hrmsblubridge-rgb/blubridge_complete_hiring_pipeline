@@ -133,10 +133,10 @@ export default function ManualOtpVerify() {
     const handleRescheduleVerify = async () => {
         setSavingResch(true);
         try {
-            // iter86 — When current local time is past 5 PM, the slot is
-            // locked at 05:00 PM regardless of what the (hidden) state holds.
-            const _isAfter5PM = new Date().getHours() >= 17;
-            const slotLabel = _isAfter5PM ? '05:00 PM' : edit.schedule_time;
+            // iter87 — Lock-at-5PM ONLY when selected date is today AND past 5 PM.
+            const _now = new Date();
+            const _isLockedToday = edit.schedule_date === _today && _now.getHours() >= 17;
+            const slotLabel = _isLockedToday ? '05:00 PM' : edit.schedule_time;
             const r = await axios.post(`${API}/api/bb/manual/otp/reschedule-verify`,
                 {
                     original_email: applicant.email,
@@ -223,12 +223,14 @@ export default function ManualOtpVerify() {
                                     ? <input type="date" value={edit.schedule_date} min={_today} onChange={(e) => setEdit(s => ({...s, schedule_date: e.target.value}))} data-testid="resch-date" className="bg-white border border-[#e5e3d8] rounded px-2 py-1.5 text-sm" />
                                     : (fmtDate(applicant.schedule_date) || '—')} />
                                 <Row k="Schedule Time" v={rescheduling ? (() => {
-                                    // iter86 — Use the same TIME_SLOTS dropdown as the public
-                                    // Interview Schedule form. When current LOCAL time is past
-                                    // 5 PM, the slot is locked at 05:00 PM (read-only) per spec.
+                                    // iter87 — Use the same TIME_SLOTS dropdown as the public
+                                    // Interview Schedule form. Lock-at-5PM ONLY applies when
+                                    // the selected date IS today AND current local hour ≥ 17.
+                                    // Future dates always show a fully-editable dropdown.
                                     const _now = new Date();
-                                    const _isAfter5PM = _now.getHours() >= 17;
-                                    const _minMins = (edit.schedule_date === _today) ? (_now.getHours() * 60 + _now.getMinutes()) : -1;
+                                    const _isToday = edit.schedule_date === _today;
+                                    const _isAfter5PM = _isToday && _now.getHours() >= 17;
+                                    const _minMins = _isToday ? (_now.getHours() * 60 + _now.getMinutes()) : -1;
                                     if (_isAfter5PM) {
                                         return (
                                             <div className="flex items-center gap-2 text-sm" data-testid="resch-time-locked">

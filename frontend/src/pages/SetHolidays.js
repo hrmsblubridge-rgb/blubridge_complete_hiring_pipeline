@@ -55,7 +55,7 @@ export default function SetHolidays() {
                     {holidays.map(h => (
                         <div key={h.id} className="bg-zinc-900 border border-zinc-800 px-5 py-4 flex items-center justify-between" data-testid={`holiday-${h.id}`}>
                             <div><span className="font-medium">{h.name}</span><span className="ml-3 text-sm text-zinc-500">{h.date}</span>
-                                <span className={`ml-3 px-2 py-0.5 text-[10px] uppercase tracking-wide font-semibold rounded ${h.holiday_type === 'Non-Recurring' ? 'bg-amber-900 text-amber-200' : 'bg-emerald-900 text-emerald-200'}`} data-testid={`holiday-type-${h.id}`}>{h.holiday_type || 'Recurring'}</span>
+                                <span className={`ml-3 px-2 py-0.5 text-[10px] uppercase tracking-wide font-semibold rounded ${h.holiday_type === 'Non-Recurring' ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-emerald-100 text-emerald-800 border border-emerald-300'}`} data-testid={`holiday-type-${h.id}`}>{h.holiday_type || 'Recurring'}</span>
                             </div>
                             <div className="flex gap-2">
                                 <button onClick={() => openEdit(h)} className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800"><PencilSimple size={16} /></button>
