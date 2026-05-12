@@ -1,5 +1,15 @@
 from dotenv import load_dotenv
 from pathlib import Path
+import sys as _sys
+
+# Ensure the backend directory is on sys.path so bare imports like
+# `from bb_modules import ...`, `from messaging import ...`, `from _fmt import ...`
+# resolve regardless of how uvicorn loads this module:
+#   • `cd backend && uvicorn server:app`           (dev / supervisor)
+#   • `uvicorn backend.server:app` from repo root  (Render start command)
+_BACKEND_DIR = str(Path(__file__).resolve().parent)
+if _BACKEND_DIR not in _sys.path:
+    _sys.path.insert(0, _BACKEND_DIR)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
