@@ -2,6 +2,9 @@ from dotenv import load_dotenv
 from pathlib import Path
 import sys as _sys
 
+# Startup debug — surfaces in Render logs to pinpoint where boot stops.
+print("SERVER STARTING...", flush=True)
+
 # Ensure the backend directory is on sys.path so bare imports like
 # `from bb_modules import ...`, `from messaging import ...`, `from _fmt import ...`
 # resolve regardless of how uvicorn loads this module:
@@ -33,9 +36,15 @@ import re
 from bson import ObjectId
 
 # MongoDB connection
-mongo_url = os.environ['MONGO_URL']
+try:
+    mongo_url = os.environ['MONGO_URL']
+    _db_name = os.environ['DB_NAME']
+except KeyError as _e:
+    print(f"[startup] FATAL: required env var {_e} is missing.", flush=True)
+    raise
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = client[_db_name]
+print("MONGO CLIENT INITIALIZED", flush=True)
 
 # JWT Configuration
 JWT_SECRET = os.environ.get("JWT_SECRET", "recruitment-analytics-secret-key")
@@ -43,6 +52,7 @@ JWT_ALGORITHM = "HS256"
 
 # Create the main app
 app = FastAPI()
+print("FASTAPI APP CREATED", flush=True)
 api_router = APIRouter(prefix="/api")
 
 # ============ AUTH HELPERS ============
@@ -3135,8 +3145,13 @@ except Exception:
     raise
 
 # Wire centralized messaging gate (TEST_MODE → bb_test_credentials lookup)
-from messaging import init_messaging, is_test_mode
-init_messaging(db)
+try:
+    from messaging import init_messaging, is_test_mode
+    init_messaging(db)
+except Exception:
+    import traceback
+    traceback.print_exc()
+    raise
 
 
 @app.get("/api/messaging/status")
@@ -3145,13 +3160,19 @@ async def messaging_status(user: str = Depends(get_current_user)):
     return {"test_mode": is_test_mode()}
 
 # CORS Configuration
+try:
+    _cors_origins = [os.environ['FRONTEND_URL']]
+except KeyError:
+    print("[startup] FATAL: FRONTEND_URL env var is required but missing.", flush=True)
+    raise
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.environ['FRONTEND_URL']],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+print("MIDDLEWARE + ROUTERS REGISTERED", flush=True)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
