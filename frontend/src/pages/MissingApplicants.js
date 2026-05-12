@@ -6,7 +6,7 @@
 // Filters: From/To date range, Date Filter (registered|scheduled), Report Type.
 // Reads from GET /api/bb/missing-applicants and exports via …/export.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
@@ -52,7 +52,7 @@ export default function MissingApplicants() {
         report_type: reportType,
     }), [fromDate, toDate, dateFilter, reportType]);
 
-    const fetchRows = async (pg = page, sz = pageSize) => {
+    const fetchRows = useCallback(async (pg = page, sz = pageSize) => {
         setLoading(true);
         try {
             const r = await axios.get(`${API}/api/bb/missing-applicants`, {
@@ -64,9 +64,9 @@ export default function MissingApplicants() {
         } catch (e) {
             toast.error(e.response?.data?.detail || 'Failed to load Missing Applicants');
         } finally { setLoading(false); }
-    };
+    }, [page, pageSize, filterParams]);
 
-    useEffect(() => { fetchRows(1, pageSize); /* eslint-disable-next-line */ }, []);
+    useEffect(() => { fetchRows(1, pageSize); }, [fetchRows, pageSize]);
 
     const handleFilter = () => {
         setPage(1);

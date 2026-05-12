@@ -54,7 +54,7 @@ export default function Help() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const modules = manifest?.modules || [];
+    const modules = useMemo(() => manifest?.modules || [], [manifest]);
     const filtered = useMemo(() => {
         const q = search.trim().toLowerCase();
         if (!q) return modules;
