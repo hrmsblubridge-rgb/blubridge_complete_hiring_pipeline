@@ -2346,14 +2346,17 @@ def _classify_college(doc: dict, rank_lookup: dict) -> dict:
     return {"college_status": "Non NIRF", "college": ug_text or pg_text or fallback_text or "-",
             "match_confidence": ug_match.get("confidence") or pg_match.get("confidence")}
 
-UPLOAD_BASE = Path("/app/uploads")
-PROCESSED_BASE = Path("/app/processed_files")
+UPLOAD_BASE = Path(os.getenv("UPLOAD_BASE", "/tmp/uploads"))
+PROCESSED_BASE = Path(os.getenv("PROCESSED_BASE", "/tmp/processed_files"))
 BULK_TYPES_LIST = ["naukri", "pipeline", "score"]
 
-# Create directories on module load
-for _bt in BULK_TYPES_LIST:
-    (UPLOAD_BASE / _bt).mkdir(parents=True, exist_ok=True)
-    (PROCESSED_BASE / _bt).mkdir(parents=True, exist_ok=True)
+# Create directories on module load (best-effort — on hardened FS just skip)
+try:
+    for _bt in BULK_TYPES_LIST:
+        (UPLOAD_BASE / _bt).mkdir(parents=True, exist_ok=True)
+        (PROCESSED_BASE / _bt).mkdir(parents=True, exist_ok=True)
+except (PermissionError, OSError) as _e:
+    logging.warning(f"[startup] could not create upload dirs at {UPLOAD_BASE} / {PROCESSED_BASE}: {_e}")
 
 
 
