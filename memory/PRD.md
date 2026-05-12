@@ -45,6 +45,20 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter84)** — Score & Round (and Update Scores / View Attended) now reflect Reschedule & Verify changes immediately.
+  - **Root cause**: iter82's `manual_otp_reschedule_verify` only wrote `job_role` and `_normalized_job_role` to `pipeline_data` — it left `job_title` STALE. Several downstream surfaces (Score & Round table, Update Applicants Scores, exports) fall back to `job_title` when `job_role` is missing, OR display `job_title` directly in some projections. After a reschedule that changed the role, those pages kept showing the old role even though pipeline_data had the new one. Additionally, when email or phone changed, `bb_applicant_updates` and `score_sheet` still carried the OLD anchor, so the join broke and the candidate appeared to have lost their scores / status.
+  - **Fix (`bb_manual.manual_otp_reschedule_verify`)**:
+    - When `job_role` is updated, ALSO mirror to `job_title` AND `_normalized_job_role` — eliminates stale-fallback display across every page.
+    - When `email` or `phone` changes (detected by `new != original`), re-link `bb_applicant_updates` and `score_sheet` rows to the new anchor so scores + status surveys stay attached to the candidate.
+  - **No frontend caching issue**: React-Router remounts the destination component, so navigating Manual OTP Verify → Score & Round triggers a fresh `GET /api/bb/score-round/table` automatically — no extra refresh logic required.
+  - **Verified live with tester `rajlearn06@gmail.com`**:
+    - Seeded: `result_status=Shortlisted`, schedule=`2026-05-15 14:00`, `job_role=AI System Engineer`.
+    - Reschedule & Verify: schedule→today `11:00 AM`, `job_role=Python Developer`.
+    - pipeline_data after: `job_role=job_title=_normalized_job_role=Python Developer`, `schedule_date=today`, `schedule_time=11:00:00`, `otp_verified=True`, `result_status=Shortlisted` (preserved).
+    - Score & Round (status=Shortlisted): finds the row with the new role + new date.
+    - Update Applicants Scores: same.
+    - Tester reverted post-test; zero real-applicant rows touched.
+
 - **Feb 2026 (iter83)** — Missing Applicants pagination + global schedule_time normalisation.
   - **Root cause of "1 PM displayed as 1 AM"**: 9904 rows in `pipeline_data.schedule_time` are mis-stored as `01:00:00`–`05:30:00` (PM slots without the +12 offset) because a historical bulk importer never converted the 12-hour XLSX cells. The freshly-added `manual_otp_reschedule_verify` endpoint (iter82) also accepted user-supplied time AS-IS — would have grown the bad-data pile every reschedule. `bb_registrations` is clean (uses `_to_24h`).
   - **Fix A — Centralized DB normaliser**: new `_fmt.to_24h_db(t)` converts 12-hour ("01:30 PM"), 24-hour ("13:30"), or noon/midnight inputs to strict `HH:MM:SS`. Raises `ValueError` on garbage so we never persist nonsense.

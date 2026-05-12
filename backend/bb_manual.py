@@ -463,9 +463,15 @@ async def manual_otp_reschedule_verify(body: RescheduleVerifyBody, request: Requ
     if body.email is not None:
         set_fields["email"] = _norm_email(body.email)
     if body.job_role is not None:
-        set_fields["job_role"] = (body.job_role or "").strip()
-        # Also keep `_normalized_job_role` (used by the Roles/Attended filters) in sync
-        set_fields["_normalized_job_role"] = (body.job_role or "").strip()
+        new_role = (body.job_role or "").strip()
+        set_fields["job_role"] = new_role
+        # iter84 — Mirror to `job_title` and `_normalized_job_role` so every
+        # downstream surface (Score & Round, Update Scores, View Attended,
+        # exports, analytics) sees the same value. Otherwise pages that fall
+        # back to job_title display the OLD role even after a successful
+        # reschedule.
+        set_fields["job_title"] = new_role
+        set_fields["_normalized_job_role"] = new_role
     if body.schedule_date is not None:
         set_fields["schedule_date"] = (body.schedule_date or "").strip()
     if body.schedule_time is not None:
@@ -488,6 +494,30 @@ async def manual_otp_reschedule_verify(body: RescheduleVerifyBody, request: Requ
         )
     except Exception as _e:
         _logger.warning(f"[ManualOTP:reschedule-verify] bb_registrations mirror skipped: {_e}")
+
+    # iter84 — Re-link bb_applicant_updates + score_sheet when email/phone
+    # changed. These collections are joined by email (primary) / phone
+    # (fallback) on every Score & Round / Update Scores / View Attended read.
+    # If we leave the OLD email/phone on those docs, the join breaks and the
+    # candidate appears to have lost their scores / status.
+    new_email = set_fields.get("email")
+    new_phone = set_fields.get("phone")
+    email_changed = (new_email is not None) and (new_email != orig_e)
+    phone_changed = (new_phone is not None) and (new_phone != orig_p)
+    if email_changed or phone_changed:
+        link_set = {}
+        if new_email is not None:
+            link_set["email"] = new_email
+        if new_phone is not None:
+            link_set["phone"] = new_phone
+        for coll in ("bb_applicant_updates", "score_sheet"):
+            try:
+                await _db[coll].update_many(
+                    {"$or": clauses} if len(clauses) > 1 else clauses[0],
+                    {"$set": link_set},
+                )
+            except Exception as _e:
+                _logger.warning(f"[ManualOTP:reschedule-verify] {coll} relink skipped: {_e}")
 
     full = await _db.pipeline_data.find_one({"_id": rec["_id"]}, {"_id": 0})
     _logger.info(
