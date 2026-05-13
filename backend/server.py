@@ -3298,16 +3298,22 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"[startup] cross-host reclaim skipped: {e}")
 
-    # Write test credentials
+    # Write test credentials (dev-only aid). Render's filesystem is read-only
+    # under /app, so skip silently in production. Override via TEST_CRED_DIR env
+    # var if you ever want it written elsewhere (e.g. a persistent disk).
+    _cred_dir = Path(os.getenv("TEST_CRED_DIR", "/app/memory"))
     try:
-        os.makedirs("/app/memory", exist_ok=True)
-        with open("/app/memory/test_credentials.md", "w") as f:
+        _cred_dir.mkdir(parents=True, exist_ok=True)
+        with open(_cred_dir / "test_credentials.md", "w") as f:
             f.write("# Test Credentials\n\n")
             f.write("## Admin Account (RecruitIQ)\n")
             f.write("- Username: `Admin User`\n")
             f.write("- Password: `Admin User`\n")
+    except (PermissionError, OSError):
+        # Read-only FS (Render, Heroku, etc.) — not fatal, just skip.
+        logger.info(f"[startup] test_credentials.md write skipped — {_cred_dir} not writable")
     except Exception as e:
-        logger.error(f"Failed to write test credentials: {e}")
+        logger.warning(f"Failed to write test credentials: {e}")
 
     # iter68 — Seed default tester credentials BEFORE messaging workers start
     # so the centralized TEST_MODE gate has a non-empty allow list on first run.
