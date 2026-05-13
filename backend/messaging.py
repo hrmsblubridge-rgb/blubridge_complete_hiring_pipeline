@@ -236,6 +236,15 @@ async def send_whatsapp(campaign_name: str, phone: str, email: str, template_par
         _logger.info(f"[SKIP] WhatsApp disabled: campaign={campaign_name}")
         return False
 
+    # Tester-only debug — surfaces exact template params reaching the provider
+    # so we can confirm the right name/role/date arrived from the new submission.
+    if is_test_mode():
+        _logger.info(
+            f"[MSG DEBUG] channel=wa campaign={campaign_name} "
+            f"template_email={email} template_phone={phone} "
+            f"template_params={template_params}"
+        )
+
     safe_phone = _norm_phone(phone)
     if len(safe_phone) == 10:
         safe_phone = "91" + safe_phone
@@ -343,6 +352,13 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str, is
     if not _is_enabled("ENABLE_EMAIL"):
         _logger.info(f"[SKIP] Email disabled: to={to_email}, subject={subject}")
         return False
+
+    # Tester-only debug — confirms recipient + subject reaching SMTP layer.
+    if is_test_mode():
+        _logger.info(
+            f"[MSG DEBUG] channel=email template_email={to_email} "
+            f"template_phone={phone} subject={subject!r}"
+        )
 
     try:
         msg = MIMEMultipart("alternative")
