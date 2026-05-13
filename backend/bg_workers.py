@@ -428,10 +428,11 @@ async def _worker_missed_interview():
 
 
 async def _worker_import_rejection_mailer():
-    """iter88 — Evening rejection dispatcher (19:00 IST).
+    """iter88 — Evening rejection dispatcher (default 19:00 IST).
 
-    Runs every 5 minutes. ONLY performs sends when the LOCAL (IST) hour == 19.
-    Outside that window, the worker wakes, logs a short status, and sleeps again.
+    Runs every 5 minutes. ONLY performs sends when the LOCAL (IST) hour matches
+    `REJECTION_DISPATCH_HOUR` env var (default 19). Override the env var
+    temporarily for testing, then revert to 19.
 
     Two sources are processed in a single tick:
       A) `bb_applicant_updates` with status='Rejected' — post-interview rejections
@@ -446,17 +447,24 @@ async def _worker_import_rejection_mailer():
     Cutoff guard: source A still respects `MESSAGING_CUTOFF_TS`. Source B is
     naturally post-cutoff since it's only written by new registrations.
     """
-    _logger.info("Rejection mailer worker started (evening dispatcher @ 19:00 IST)")
+    try:
+        _dispatch_hour = int(os.environ.get("REJECTION_DISPATCH_HOUR", "19"))
+        if not (0 <= _dispatch_hour <= 23):
+            raise ValueError("must be 0-23")
+    except (ValueError, TypeError) as _e:
+        _logger.warning(f"[Reject:Evening] invalid REJECTION_DISPATCH_HOUR ({_e!r}), defaulting to 19")
+        _dispatch_hour = 19
+    _logger.info(f"Rejection mailer worker started (evening dispatcher @ {_dispatch_hour:02d}:00 IST)")
     while _running:
         try:
             now_local = _local_now()  # IST
-            # Outside the 19:00–19:59 window → skip sends entirely.
-            if now_local.hour != 19:
-                _logger.debug(f"[Reject:Evening] outside window (IST hour={now_local.hour}), sleeping")
+            # Outside the dispatch window → skip sends entirely.
+            if now_local.hour != _dispatch_hour:
+                _logger.debug(f"[Reject:Evening] outside window (IST hour={now_local.hour}, target={_dispatch_hour}), sleeping")
                 await asyncio.sleep(300)
                 continue
 
-            _logger.info(f"[Reject:Evening] window OPEN (IST {now_local.isoformat()}) — processing pending rejections")
+            _logger.info(f"[Reject:Evening] window OPEN (IST {now_local.isoformat()}, target_hour={_dispatch_hour}) — processing pending rejections")
             sent = 0
 
             # ---- Source A: post-interview rejections (bb_applicant_updates) ----
