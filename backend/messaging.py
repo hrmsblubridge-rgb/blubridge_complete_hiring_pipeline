@@ -27,6 +27,9 @@ SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
 SMTP_USER = os.environ.get("SMTP_USER", "hiring@blubridge.com")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "zfdb buxc ehyq gctr")
 FROM_EMAIL = os.environ.get("FROM_EMAIL", "hiring@blubridge.com")
+# iter89 — Resend HTTPS API replaces SMTP path when RESEND_API_KEY is set.
+# Falls back to SMTP if the key is absent (e.g. local dev).
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
 
 OFFICE_LOCATION = "30, Norton Road, Mandavelipakkam, Raja Annamalai Puram, Chennai, Tamil Nadu - 600028."
 
@@ -361,23 +364,47 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str, is
         )
 
     try:
+        # iter89 — Resend HTTPS API (port 443) — preferred path. SMTP fallback
+        # only runs when RESEND_API_KEY is not configured. Keeps the same
+        # signature, gates, and idempotency contract.
+        if RESEND_API_KEY:
+            import asyncio
+            import resend as _resend
+            _resend.api_key = RESEND_API_KEY
+            if is_test_mode():
+                _logger.info(
+                    f"[SMTP DEBUG] provider=resend api=https port=443 "
+                    f"from={FROM_EMAIL} to={to_email}"
+                )
+            params = {
+                "from": FROM_EMAIL,
+                "to": [to_email],
+                "subject": subject,
+                "html": html_body,
+            }
+            # SDK is synchronous → run in thread to keep the event loop free.
+            result = await asyncio.to_thread(_resend.Emails.send, params)
+            _logger.info(
+                f"[Email] SENT via=resend to={to_email} subject={subject} "
+                f"id={(result or {}).get('id')}"
+            )
+            return True
+
+        # ---- Legacy SMTP path (only when RESEND_API_KEY is unset) ----
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"] = FROM_EMAIL
         msg["To"] = to_email
         msg.attach(MIMEText(html_body, "html"))
 
-        # iter88 FIX 2B/2C/2D — auto-pick SSL vs STARTTLS based on port,
-        # 20s timeout, tester-only SMTP debug log (NEVER logs password).
         context = ssl.create_default_context()
         _port = int(SMTP_PORT or 465)
         if is_test_mode():
             _logger.info(
-                f"[SMTP DEBUG] host={SMTP_HOST} port={_port} "
+                f"[SMTP DEBUG] provider=smtp host={SMTP_HOST} port={_port} "
                 f"ssl={_port == 465} starttls={_port == 587} from={FROM_EMAIL}"
             )
         if _port == 587:
-            # STARTTLS path (port 587)
             with smtplib.SMTP(SMTP_HOST, _port, timeout=20) as server:
                 server.ehlo()
                 server.starttls(context=context)
@@ -385,11 +412,10 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str, is
                 server.login(SMTP_USER, SMTP_PASSWORD)
                 server.sendmail(FROM_EMAIL, to_email, msg.as_string())
         else:
-            # SMTPS path (port 465 or any other implicit-SSL port)
             with smtplib.SMTP_SSL(SMTP_HOST, _port, context=context, timeout=20) as server:
                 server.login(SMTP_USER, SMTP_PASSWORD)
                 server.sendmail(FROM_EMAIL, to_email, msg.as_string())
-        _logger.info(f"[Email] SENT to={to_email} subject={subject}")
+        _logger.info(f"[Email] SENT via=smtp to={to_email} subject={subject}")
         return True
     except Exception as e:
         _logger.error(f"[Email] FAILED to={to_email} subject={subject}: {e}")
