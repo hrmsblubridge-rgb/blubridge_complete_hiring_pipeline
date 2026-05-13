@@ -2,7 +2,24 @@
 Separate router to avoid modifying existing server.py logic."""
 
 from fastapi import APIRouter, HTTPException, Request, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+import re as _re
+
+
+def _validate_phone_10digits(v):
+    """Shared Pydantic validator — phone must be exactly 10 digits, digits only."""
+    s = (v or "").strip()
+    if not _re.fullmatch(r"[0-9]{10}", s):
+        raise ValueError("Phone must be exactly 10 digits — no +91, no spaces, no leading 0, no extensions.")
+    return s
+
+
+def _validate_nonempty(v, field_name="field"):
+    """Shared Pydantic validator — string must be non-empty after trim."""
+    s = (v or "").strip()
+    if not s:
+        raise ValueError(f"{field_name} is required")
+    return s
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta
 from bson import ObjectId
@@ -1080,6 +1097,22 @@ class CollegeRegistrationBody(BaseModel):
     year_of_graduation: Optional[int] = None
     current_location_state: Optional[str] = ""
     preferred_location_city: Optional[str] = ""
+
+    @field_validator("phone")
+    @classmethod
+    def _phone_10(cls, v): return _validate_phone_10digits(v)
+
+    @field_validator("email")
+    @classmethod
+    def _email_required(cls, v): return _validate_nonempty(v, "Email")
+
+    @field_validator("full_name")
+    @classmethod
+    def _name_required(cls, v): return _validate_nonempty(v, "Full name")
+
+    @field_validator("preferred_location_city")
+    @classmethod
+    def _city_required(cls, v): return _validate_nonempty(v, "Preferred location (city)")
 
 
 @pub_router.post("/college-form/register")
@@ -3655,6 +3688,22 @@ class RegistrationBody(BaseModel):
     college: Optional[str] = ""
     location_change: Optional[str] = None
     attend_in_person: Optional[str] = None
+
+    @field_validator("phone")
+    @classmethod
+    def _phone_10(cls, v): return _validate_phone_10digits(v)
+
+    @field_validator("email")
+    @classmethod
+    def _email_required(cls, v): return _validate_nonempty(v, "Email")
+
+    @field_validator("full_name")
+    @classmethod
+    def _name_required(cls, v): return _validate_nonempty(v, "Full name")
+
+    @field_validator("preferred_location_city")
+    @classmethod
+    def _city_required(cls, v): return _validate_nonempty(v, "Preferred location (city)")
 
 @pub_router.get("/form/{form_id}")
 async def get_public_form(form_id: str):

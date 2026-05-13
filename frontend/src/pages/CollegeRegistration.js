@@ -95,7 +95,14 @@ export default function CollegeRegistration() {
     }, [f.college]);
 
     const handleSubmit = async () => {
-        if (!f.full_name.trim() || !f.email.trim() || !f.phone.trim()) { alert('Name, Email and Phone are required'); return; }
+        const phone = (f.phone || '').trim();
+        const email = (f.email || '').trim();
+        const fullName = (f.full_name || '').trim();
+        const city = (f.preferred_location_city || '').trim();
+        const state = (f.current_location_state || '').trim();
+        if (!fullName || !email || !phone) { alert('Name, Email and Phone are required'); return; }
+        if (!/^[0-9]{10}$/.test(phone)) { alert('Phone must be exactly 10 digits — no +91, no spaces, no leading 0, no extensions.'); return; }
+        if (!state || !city) { alert('Current Location (State) and Preferred Location (City) are required'); return; }
         if (!f.college || !f.job_role) { alert('Please select both College and Job Role'); return; }
         setSubmitting(true);
         try {
@@ -158,8 +165,18 @@ export default function CollegeRegistration() {
                             </div>
                             <div>
                                 <label className="text-xs text-gray-600 font-medium">Phone *</label>
-                                <input type="tel" value={f.phone} onChange={e => setF(p => ({ ...p, phone: e.target.value }))}
-                                    data-testid="reg-phone" className="w-full mt-1 bg-[#f5f5f5] border border-gray-200 rounded px-3 py-2.5 text-sm focus:outline-none focus:border-blue-400 focus:bg-white" />
+                                <input
+                                    type="tel"
+                                    inputMode="numeric"
+                                    pattern="[0-9]{10}"
+                                    value={f.phone}
+                                    onChange={e => setF(p => ({ ...p, phone: e.target.value.replace(/\D/g, '').slice(0, 10) }))}
+                                    data-testid="reg-phone"
+                                    maxLength="10"
+                                    placeholder="9876543210"
+                                    title="Enter only 10-digit mobile number without +91, 0, spaces or extensions."
+                                    className="w-full mt-1 bg-[#f5f5f5] border border-gray-200 rounded px-3 py-2.5 text-sm focus:outline-none focus:border-blue-400 focus:bg-white" />
+                                <p className="text-[11px] text-gray-500 mt-1 italic">Enter only 10-digit mobile number without +91, 0, spaces or extensions.</p>
                             </div>
                             <div>
                                 <label className="text-xs text-gray-600 font-medium">Age</label>

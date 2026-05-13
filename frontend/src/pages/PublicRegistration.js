@@ -41,7 +41,14 @@ export default function PublicRegistration() {
     };
 
     const handleSubmit = async () => {
-        if (!f.full_name.trim() || !f.email.trim() || !f.phone.trim()) { alert('Full Name, Email, and Phone are required'); return; }
+        const phone = (f.phone || '').trim();
+        const email = (f.email || '').trim();
+        const fullName = (f.full_name || '').trim();
+        const city = (f.preferred_location_city || '').trim();
+        const state = (f.current_location_state || '').trim();
+        if (!fullName || !email || !phone) { alert('Full Name, Email, and Phone are required'); return; }
+        if (!/^[0-9]{10}$/.test(phone)) { alert('Phone must be exactly 10 digits — no +91, no spaces, no leading 0, no extensions.'); return; }
+        if (!state || !city) { alert('Current Location (State) and Preferred Location (City) are required'); return; }
         setSubmitting(true);
         try {
             const payload = { form_id: formId, ...f, age: f.age ? Number(f.age) : null, year_of_graduation: f.year_of_graduation ? Number(f.year_of_graduation) : null };
@@ -369,9 +376,19 @@ export default function PublicRegistration() {
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5 mb-5">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Phone Number:</label>
-                                    <input type="text" value={f.phone} onChange={e => setF(p => ({...p, phone:e.target.value}))} data-testid="reg-phone" required maxLength="10"
+                                    <input
+                                        type="tel"
+                                        inputMode="numeric"
+                                        pattern="[0-9]{10}"
+                                        value={f.phone}
+                                        onChange={e => setF(p => ({...p, phone: e.target.value.replace(/\D/g, '').slice(0, 10)}))}
+                                        data-testid="reg-phone"
+                                        required
+                                        maxLength="10"
+                                        title="Enter only 10-digit mobile number without +91, 0, spaces or extensions."
+                                        placeholder="9876543210"
                                         className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-400 focus:bg-white" />
-                                    <p className="text-xs text-gray-500 mt-1 italic">Note: Active WhatsApp number (Required)</p>
+                                    <p className="text-xs text-gray-500 mt-1 italic">Enter only 10-digit mobile number without +91, 0, spaces or extensions.</p>
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Age:</label>
