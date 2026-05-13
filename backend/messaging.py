@@ -367,10 +367,28 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str, is
         msg["To"] = to_email
         msg.attach(MIMEText(html_body, "html"))
 
+        # iter88 FIX 2B/2C/2D — auto-pick SSL vs STARTTLS based on port,
+        # 20s timeout, tester-only SMTP debug log (NEVER logs password).
         context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=15) as server:
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(FROM_EMAIL, to_email, msg.as_string())
+        _port = int(SMTP_PORT or 465)
+        if is_test_mode():
+            _logger.info(
+                f"[SMTP DEBUG] host={SMTP_HOST} port={_port} "
+                f"ssl={_port == 465} starttls={_port == 587} from={FROM_EMAIL}"
+            )
+        if _port == 587:
+            # STARTTLS path (port 587)
+            with smtplib.SMTP(SMTP_HOST, _port, timeout=20) as server:
+                server.ehlo()
+                server.starttls(context=context)
+                server.ehlo()
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.sendmail(FROM_EMAIL, to_email, msg.as_string())
+        else:
+            # SMTPS path (port 465 or any other implicit-SSL port)
+            with smtplib.SMTP_SSL(SMTP_HOST, _port, context=context, timeout=20) as server:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.sendmail(FROM_EMAIL, to_email, msg.as_string())
         _logger.info(f"[Email] SENT to={to_email} subject={subject}")
         return True
     except Exception as e:

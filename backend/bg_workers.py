@@ -211,29 +211,15 @@ async def _worker_schedule_link_sender():
                 )
                 _logger.info(f"[ScheduleLink:Retry] Sent to {doc.get('email')} (inline send missed)")
 
-            # Also send rejection notifications for rejected applicants not yet notified (NEW only)
-            rejected_cursor = _db.bb_registrations.find({
-                **_cutoff_filter(),
-                "is_shortlisted": False,
-                "reject_notified": {"$ne": True},
-                "registered_at": {"$gte": max(twenty_four_h_ago, MESSAGING_CUTOFF_TS)},
-            })
-            rejected_docs = await rejected_cursor.to_list(None)
-
-            for doc in rejected_docs:
-                from messaging import notify_rejected
-                await notify_rejected(
-                    doc.get("full_name", ""),
-                    doc.get("phone", ""),
-                    doc.get("email", ""),
-                    job_role=doc.get("job_role") or doc.get("job_title") or "",
-                    is_test=bool(doc.get("isTest")),
-                )
-                await _db.bb_registrations.update_one(
-                    {"_id": doc["_id"]},
-                    {"$set": {"reject_notified": True, "reject_notified_at": now.isoformat()}}
-                )
-                _logger.info(f"[Reject] Notified {doc.get('email')}")
+            # iter88 — Rejection sends are NO LONGER fired from this worker.
+            # Form-condition rejections are now flagged with `rejection_pending=True`
+            # by `_instant_notify` (bb_modules.py) and dispatched ONLY by
+            # `_worker_import_rejection_mailer` at REJECTION_DISPATCH_HOUR IST
+            # (default 19:00). The previous code here fired the AiSensy "Reject"
+            # campaign within 60s of every non-shortlisted registration, which
+            # broke the deferral contract and caused rejection WhatsApp to leak
+            # into the shortlist flow window. DO NOT re-introduce immediate
+            # rejection sends in this worker.
 
             # Send deferred interview mails (NEW only): shortlist sent but interview mail not yet sent
             deferred_cursor = _db.bb_registrations.find({
@@ -478,8 +464,15 @@ async def _worker_import_rejection_mailer():
             async for doc in cursor_a:
                 email = (doc.get("email") or "").strip()
                 phone = (doc.get("phone") or "").strip()
-                name = doc.get("name") or "Candidate"
-                if not email and not phone:
+                name = (doc.get("name") or "").strip()
+                # iter88 — ABORT if any required template field is missing.
+                # Never send a rejection with a placeholder/dummy name.
+                if not name or (not email and not phone):
+                    _logger.warning(
+                        f"[Reject:Evening:UI] SKIP — missing required field "
+                        f"(name={bool(name)} email={bool(email)} phone={bool(phone)}) "
+                        f"doc_id={doc.get('_id')}"
+                    )
                     continue
                 try:
                     from messaging import notify_rejected
@@ -512,8 +505,14 @@ async def _worker_import_rejection_mailer():
             async for doc in cursor_b:
                 email = (doc.get("email") or "").strip()
                 phone = (doc.get("phone") or "").strip()
-                name = doc.get("full_name") or doc.get("name") or "Candidate"
-                if not email and not phone:
+                name = (doc.get("full_name") or doc.get("name") or "").strip()
+                # iter88 — ABORT if any required template field is missing.
+                if not name or (not email and not phone):
+                    _logger.warning(
+                        f"[Reject:Evening:Form] SKIP — missing required field "
+                        f"(name={bool(name)} email={bool(email)} phone={bool(phone)}) "
+                        f"doc_id={doc.get('_id')}"
+                    )
                     continue
                 try:
                     from messaging import notify_rejected_with_reason
