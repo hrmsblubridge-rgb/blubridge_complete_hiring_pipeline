@@ -3324,6 +3324,17 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to seed default tester credentials: {e}")
 
+    # iter88 — One-shot historical rejection-flag backfill.
+    # Sets `rejection_sent=True` on every existing rejected applicant so the
+    # new evening dispatcher will never message any historical record.
+    # Idempotent: marker doc in `bb_migrations` short-circuits on subsequent boots.
+    try:
+        from maintenance.backfill_rejection_flags import run_backfill as _run_rej_backfill
+        result = await _run_rej_backfill(db)
+        logger.info(f"[Backfill:rejection_flags] result={result}")
+    except Exception as e:
+        logger.warning(f"[startup] rejection-flag backfill skipped: {e}")
+
     # Start persistent background queue worker
     asyncio.create_task(_bg_queue_worker())
     logger.info("DB-driven background queue worker launched")

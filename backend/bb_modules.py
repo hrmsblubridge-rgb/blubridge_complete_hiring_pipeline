@@ -4120,21 +4120,22 @@ async def register_applicant(data: RegistrationBody):
                 )
                 _logger.info(f"[ScheduleLink] Immediate send for {data.email} ok={ok}")
             else:
-                ok = await notify_rejected_with_reason(
-                    data.full_name.strip(), phone_normalized,
-                    data.email.strip().lower(), reason,
-                    grad_min=cond.get("grad_year_min"),
-                    grad_max=cond.get("grad_year_max"),
-                    is_test=is_test_record,
-                )
+                # iter88 — Defer rejection sends to the evening dispatcher
+                # (19:00 IST). We do NOT call notify_rejected_with_reason here
+                # anymore. Instead we flag the bb_registrations row so the
+                # evening worker picks it up and sends ONCE at the scheduled hour.
                 await _db.bb_registrations.update_one(
                     {"email": data.email.strip().lower(), "registered_at": reg_doc["registered_at"]},
                     {"$set": {
-                        "reject_notified": bool(ok),
-                        "reject_notified_at": now_iso if ok else None,
-                        "reject_reason_code": reason,
+                        "rejection_pending": True,
+                        "rejection_pending_at": now_iso,
+                        "rejection_reason_code": reason,
+                        "rejection_reason_grad_min": cond.get("grad_year_min"),
+                        "rejection_reason_grad_max": cond.get("grad_year_max"),
+                        # Legacy flag intentionally NOT set yet — worker will set it post-send.
                     }},
                 )
+                _logger.info(f"[InstantNotify] Rejection DEFERRED to evening dispatcher for {data.email} reason={reason}")
         except Exception as e:
             _logger.exception(f"[InstantNotify] failed for {data.email}: {e}")
 

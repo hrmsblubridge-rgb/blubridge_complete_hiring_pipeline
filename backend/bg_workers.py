@@ -428,37 +428,51 @@ async def _worker_missed_interview():
 
 
 async def _worker_import_rejection_mailer():
-    """Continuously mail (Email + WhatsApp) any applicant whose status was set
-    to 'Rejected' AFTER `MESSAGING_CUTOFF_TS` and not yet notified.
+    """iter88 — Evening rejection dispatcher (19:00 IST).
 
-    Scope:
-      - Reads `bb_applicant_updates` (the canonical store updated by Update Scores
-        / bulk imports / admin UI).
-      - Cutoff-guarded: `updated_at >= MESSAGING_CUTOFF_TS` so historical data
-        never receives a bulk send.
-      - Idempotent: sets `rejection_notified=True` after a successful send.
-      - Never re-sends if `rejection_notified=True` (or legacy
-        `import_rejection_notified=True`).
-      - Polls every 60s so admins see prompt delivery.
+    Runs every 5 minutes. ONLY performs sends when the LOCAL (IST) hour == 19.
+    Outside that window, the worker wakes, logs a short status, and sleeps again.
+
+    Two sources are processed in a single tick:
+      A) `bb_applicant_updates` with status='Rejected' — post-interview rejections
+         set by recruiters via Update Scores / bulk import.
+      B) `bb_registrations` with rejection_pending=True — form-condition rejections
+         deferred from `_instant_notify` during /api/pub/register.
+
+    Idempotency: each source row sets `rejection_sent=True` + `rejection_sent_at`
+    after a successful send. Records already flagged (including all historical
+    rows updated by the one-shot backfill migration) are skipped forever.
+
+    Cutoff guard: source A still respects `MESSAGING_CUTOFF_TS`. Source B is
+    naturally post-cutoff since it's only written by new registrations.
     """
-    _logger.info("Rejection mailer worker started (continuous)")
+    _logger.info("Rejection mailer worker started (evening dispatcher @ 19:00 IST)")
     while _running:
         try:
-            cursor = _db.bb_applicant_updates.find({
+            now_local = _local_now()  # IST
+            # Outside the 19:00–19:59 window → skip sends entirely.
+            if now_local.hour != 19:
+                _logger.debug(f"[Reject:Evening] outside window (IST hour={now_local.hour}), sleeping")
+                await asyncio.sleep(300)
+                continue
+
+            _logger.info(f"[Reject:Evening] window OPEN (IST {now_local.isoformat()}) — processing pending rejections")
+            sent = 0
+
+            # ---- Source A: post-interview rejections (bb_applicant_updates) ----
+            cursor_a = _db.bb_applicant_updates.find({
                 "status": "Rejected",
+                "rejection_sent": {"$ne": True},
                 "rejection_notified": {"$ne": True},
                 "import_rejection_notified": {"$ne": True},
                 "updated_at": {"$gte": MESSAGING_CUTOFF_TS},
             })
-
-            sent = 0
-            async for doc in cursor:
+            async for doc in cursor_a:
                 email = (doc.get("email") or "").strip()
                 phone = (doc.get("phone") or "").strip()
                 name = doc.get("name") or "Candidate"
                 if not email and not phone:
                     continue
-
                 try:
                     from messaging import notify_rejected
                     ok = await notify_rejected(
@@ -469,20 +483,60 @@ async def _worker_import_rejection_mailer():
                     await _db.bb_applicant_updates.update_one(
                         {"_id": doc["_id"]},
                         {"$set": {
+                            "rejection_sent": True,
+                            "rejection_sent_at": now_local.isoformat(),
                             "rejection_notified": True,
-                            "rejection_notified_at": _local_now().isoformat(),
+                            "rejection_notified_at": now_local.isoformat(),
                             "rejection_send_ok": bool(ok),
                         }},
                     )
                     sent += 1
-                    _logger.info(f"[Reject:UI] Sent to {email} ok={ok}")
+                    _logger.info(f"[Reject:Evening:UI] Sent to {email} ok={ok}")
                 except Exception as send_err:
-                    _logger.error(f"[Reject:UI] Send failed for {email}: {send_err}")
+                    _logger.error(f"[Reject:Evening:UI] Send failed for {email}: {send_err}")
+
+            # ---- Source B: form-condition rejections (bb_registrations) ----
+            cursor_b = _db.bb_registrations.find({
+                **_cutoff_filter(),
+                "rejection_pending": True,
+                "rejection_sent": {"$ne": True},
+            })
+            async for doc in cursor_b:
+                email = (doc.get("email") or "").strip()
+                phone = (doc.get("phone") or "").strip()
+                name = doc.get("full_name") or doc.get("name") or "Candidate"
+                if not email and not phone:
+                    continue
+                try:
+                    from messaging import notify_rejected_with_reason
+                    ok = await notify_rejected_with_reason(
+                        name, phone, email,
+                        doc.get("rejection_reason_code") or "",
+                        grad_min=doc.get("rejection_reason_grad_min"),
+                        grad_max=doc.get("rejection_reason_grad_max"),
+                        is_test=bool(doc.get("isTest")),
+                    )
+                    await _db.bb_registrations.update_one(
+                        {"_id": doc["_id"]},
+                        {"$set": {
+                            "rejection_sent": True,
+                            "rejection_sent_at": now_local.isoformat(),
+                            "rejection_pending": False,
+                            "reject_notified": bool(ok),
+                            "reject_notified_at": now_local.isoformat() if ok else None,
+                        }},
+                    )
+                    sent += 1
+                    _logger.info(f"[Reject:Evening:Form] Sent to {email} ok={ok}")
+                except Exception as send_err:
+                    _logger.error(f"[Reject:Evening:Form] Send failed for {email}: {send_err}")
 
             if sent:
-                _logger.info(f"[Reject:UI] Batch complete — {sent} rejection notifications sent")
+                _logger.info(f"[Reject:Evening] Batch complete — {sent} rejection notifications sent")
 
         except Exception as e:
             _logger.error(f"[Rejection Mailer Worker] Error: {e}")
 
-        await asyncio.sleep(60)
+        # Poll every 5 minutes. The hour-gate guarantees at most ~12 send-passes
+        # per day inside the 19:00 window; each pass is idempotent.
+        await asyncio.sleep(300)
