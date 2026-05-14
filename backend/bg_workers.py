@@ -191,6 +191,20 @@ async def _worker_schedule_link_sender():
                 if not token:
                     continue
 
+                # iter90 — Atomic CAS guard. Mirror the inline _instant_notify
+                # pattern: claim the row by flipping schedule_link_sent FIRST.
+                # If modified_count==0, the inline task already won; skip silently.
+                cas = await _db.bb_registrations.update_one(
+                    {"_id": doc["_id"], "schedule_link_sent": {"$ne": True}},
+                    {"$set": {
+                        "schedule_link_sent": True,
+                        "schedule_link_sent_at": now.isoformat(),
+                    }},
+                )
+                if cas.modified_count == 0:
+                    # Another runner (inline _instant_notify) already grabbed it.
+                    continue
+
                 from messaging import notify_shortlisted
                 ok = await notify_shortlisted(
                     doc.get("full_name", ""),
@@ -199,17 +213,19 @@ async def _worker_schedule_link_sender():
                     token,
                     is_test=bool(doc.get("isTest")),
                 )
-
+                wa_ok, em_ok = ok if isinstance(ok, tuple) else (bool(ok), False)
                 await _db.bb_registrations.update_one(
                     {"_id": doc["_id"]},
                     {"$set": {
-                        "schedule_link_sent": True,
-                        "schedule_link_sent_at": now.isoformat(),
-                        "shortlist_mail_sent": bool(ok),
+                        "shortlist_wa_sent": wa_ok,
+                        "shortlist_wa_sent_at": now.isoformat() if wa_ok else None,
+                        "shortlist_email_sent": em_ok,
+                        "shortlist_email_sent_at": now.isoformat() if em_ok else None,
+                        "shortlist_mail_sent": bool(em_ok),
                         "shortlist_mail_sent_time": now.isoformat(),
                     }}
                 )
-                _logger.info(f"[ScheduleLink:Retry] Sent to {doc.get('email')} (inline send missed)")
+                _logger.info(f"[ScheduleLink:Retry] Sent to {doc.get('email')} ok=(wa={wa_ok}, em={em_ok})")
 
             # iter88 — Rejection sends are NO LONGER fired from this worker.
             # Form-condition rejections are now flagged with `rejection_pending=True`

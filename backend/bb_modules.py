@@ -4150,24 +4150,50 @@ async def register_applicant(data: RegistrationBody):
             from messaging import notify_rejected_with_reason, notify_shortlisted
             now_iso = datetime.now(timezone.utc).isoformat()
             if is_shortlisted:
-                # iter80 — Spec: send the interview-schedule link Email + WhatsApp
-                # IMMEDIATELY upon shortlisting. No 5-min wait. We mark the flags
-                # right after so the safety-net worker never double-fires.
+                # iter90 — Atomic CAS guard. Set `schedule_link_sent=True` FIRST in a
+                # filter-with-flag-not-true update. If modified_count==0, another
+                # runner (the retry worker) already grabbed this registration and we
+                # MUST NOT call notify_shortlisted again. This eliminates the
+                # 500ms race window between this inline task and the safety-net
+                # worker that previously caused duplicate ShortList WhatsApps.
+                cas = await _db.bb_registrations.update_one(
+                    {"email": data.email.strip().lower(),
+                     "registered_at": reg_doc["registered_at"],
+                     "schedule_link_sent": {"$ne": True}},
+                    {"$set": {
+                        "schedule_link_sent": True,
+                        "schedule_link_sent_at": now_iso,
+                    }},
+                )
+                if cas.modified_count == 0:
+                    _logger.info(
+                        f"[ScheduleLink] SKIP duplicate — flag already set by another path "
+                        f"for {data.email}"
+                    )
+                    return
+
+                # We own the send.
                 ok = await notify_shortlisted(
                     data.full_name.strip(), phone_normalized,
                     data.email.strip().lower(), schedule_token,
                     is_test=is_test_record,
                 )
+                # Record per-channel outcome AFTER the send so retry logic for
+                # the email-only case (WA OK, email failed) can be added later.
+                wa_ok, em_ok = ok if isinstance(ok, tuple) else (bool(ok), False)
                 await _db.bb_registrations.update_one(
                     {"email": data.email.strip().lower(), "registered_at": reg_doc["registered_at"]},
                     {"$set": {
-                        "schedule_link_sent": True,
-                        "schedule_link_sent_at": now_iso,
-                        "shortlist_mail_sent": bool(ok),
+                        "shortlist_wa_sent": wa_ok,
+                        "shortlist_wa_sent_at": now_iso if wa_ok else None,
+                        "shortlist_email_sent": em_ok,
+                        "shortlist_email_sent_at": now_iso if em_ok else None,
+                        # Legacy aggregate flag kept for backward compatibility.
+                        "shortlist_mail_sent": bool(em_ok),
                         "shortlist_mail_sent_time": now_iso,
                     }},
                 )
-                _logger.info(f"[ScheduleLink] Immediate send for {data.email} ok={ok}")
+                _logger.info(f"[ScheduleLink] Immediate send for {data.email} ok=(wa={wa_ok}, em={em_ok})")
             else:
                 # iter88 — Defer rejection sends to the evening dispatcher
                 # (19:00 IST). We do NOT call notify_rejected_with_reason here
