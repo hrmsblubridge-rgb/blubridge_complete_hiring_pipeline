@@ -444,10 +444,34 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str, is
 FRONTEND_URL = os.environ["FRONTEND_URL"]
 
 
+def build_public_url(path: str) -> str:
+    """iter91 — Single source of truth for every public-facing URL we put
+    inside WhatsApp / email templates and API response payloads.
+
+    Reads PUBLIC_BASE_URL (preferred) and falls back to FRONTEND_URL for
+    backward compatibility. Read FRESH per call so a value change on the
+    hosting dashboard (Render / Emergent) takes effect on the NEXT request
+    without forcing a full backend restart.
+
+    Strips trailing slash on base and leading slash on path so concatenation
+    is deterministic regardless of how either side was provided.
+
+    Tester-only [LINK DEBUG] log surfaces the resolved base + final URL in
+    TEST_MODE so we can confirm uniformity across modules in production logs.
+    """
+    base = (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("FRONTEND_URL") or FRONTEND_URL or "").rstrip("/")
+    leaf = (path or "").lstrip("/")
+    url = f"{base}/{leaf}" if base else f"/{leaf}"
+    if is_test_mode():
+        _src = "PUBLIC_BASE_URL" if os.environ.get("PUBLIC_BASE_URL") else "FRONTEND_URL"
+        _logger.info(f"[LINK DEBUG] base_url_source={_src} generated_url={url}")
+    return url
+
+
 async def notify_shortlisted(name: str, phone: str, email: str, schedule_token: str, is_test: bool = False):
     """Send shortlist notification with schedule link via WhatsApp + Email.
     Returns (wa_ok, em_ok). iter73 — content verbatim from BluBridge PDF."""
-    schedule_link = f"{FRONTEND_URL}/schedule-interview/{schedule_token}"
+    schedule_link = build_public_url(f"/schedule-interview/{schedule_token}")
 
     # WhatsApp: ShortList campaign
     wa_ok = await send_whatsapp("ShortList", phone, email, [name, schedule_link], is_test=is_test)
@@ -626,7 +650,7 @@ async def notify_missed_reminder(name: str, phone: str, email: str, role: str, d
     [name, role, date, time, schedule_link]. Aligned with PHP reference."""
     date = fmt_date(date)
     time = fmt_time(time)
-    schedule_link = f"{FRONTEND_URL}/schedule-interview/{schedule_token}" if schedule_token else FRONTEND_URL
+    schedule_link = build_public_url(f"/schedule-interview/{schedule_token}") if schedule_token else build_public_url("/")
     wa_ok = await send_whatsapp(
         "Candidate Followups1", phone, email,
         [name, role, date, time, schedule_link],
@@ -651,7 +675,7 @@ async def notify_missed_reminder(name: str, phone: str, email: str, role: str, d
 async def notify_schedule_reminder(name: str, phone: str, email: str, schedule_token: str, is_test: bool = False):
     """Send 24h reminder to schedule interview. iter73 — uses the same
     PDF-aligned design as the shortlist email."""
-    schedule_link = f"{FRONTEND_URL}/schedule-interview/{schedule_token}"
+    schedule_link = build_public_url(f"/schedule-interview/{schedule_token}")
     await send_whatsapp("ShortList", phone, email, [name, schedule_link], is_test=is_test)
     body = f"""
     <p style="margin:0 0 16px 0;">Dear {name},</p>

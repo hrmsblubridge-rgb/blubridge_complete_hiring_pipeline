@@ -4135,8 +4135,8 @@ async def register_applicant(data: RegistrationBody):
     schedule_link = None
     if is_shortlisted and schedule_token:
         import os as _os
-        _frontend = _os.environ.get("FRONTEND_URL", "")
-        schedule_link = f"{_frontend}/schedule-interview/{schedule_token}" if _frontend else f"/schedule-interview/{schedule_token}"
+        from messaging import build_public_url as _build_public_url
+        schedule_link = _build_public_url(f"/schedule-interview/{schedule_token}")
 
     # ---- Trigger Email + WhatsApp instantly (fire-and-forget) ----
     # Background workers remain as fallback retry safety net (they skip records

@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from messaging import (
-    send_whatsapp, can_send_message, FRONTEND_URL,
+    send_whatsapp, can_send_message, FRONTEND_URL, build_public_url,
     notify_shortlisted, notify_schedule_confirmation, notify_otp,
     notify_missed_reminder, notify_rejected,
     get_otp_for_schedule,
@@ -261,8 +261,8 @@ async def _fetch_schedule(matched: dict, source_coll: str) -> Dict[str, Any]:
     has_active_schedule = bool(schedule_date and schedule_time)
 
     schedule_link = ""
-    if schedule_token and FRONTEND_URL:
-        schedule_link = f"{FRONTEND_URL}/schedule-interview/{schedule_token}"
+    if schedule_token and (os.environ.get("PUBLIC_BASE_URL") or FRONTEND_URL):
+        schedule_link = build_public_url(f"/schedule-interview/{schedule_token}")
 
     return {
         "schedule_date": str(schedule_date or ""),
@@ -574,7 +574,7 @@ async def _send_one(row: dict, user: str, upload_id: str, action_type: str = "ca
                 return "failed", "Could not generate schedule link"
             wa_ok, em_ok = await notify_shortlisted(name, phone, email, token, is_test=False)
             ok = bool(wa_ok or em_ok)
-            params = [name, f"{FRONTEND_URL}/schedule-interview/{token}"]
+            params = [name, build_public_url(f"/schedule-interview/{token}")]
 
         elif action_type == "schedule_details":
             if not (formatted_date and formatted_time):
@@ -696,7 +696,7 @@ async def send_test_message(payload: TestSendRequest, request: Request):
     target_email, target_phone = "rishi.nayak@blubridge.com", "9443109903"
     # iter70 — 5-param Candidate Followups1 template aligned with PHP reference.
     fmt_date = _fmt_date(payload.schedule_date)
-    test_link = f"{FRONTEND_URL}/schedule-interview/test-token"
+    test_link = build_public_url("/schedule-interview/test-token")
     ok = await send_whatsapp(
         "Candidate Followups1", target_phone, target_email,
         [payload.name, payload.job_role, fmt_date, payload.schedule_time, test_link],
