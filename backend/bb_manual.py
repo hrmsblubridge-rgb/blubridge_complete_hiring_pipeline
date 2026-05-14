@@ -71,6 +71,48 @@ async def _find_applicant(email: str, phone: str) -> Optional[dict]:
     return await _db.pipeline_data.find_one({"$or": clauses}, {"_id": 0})
 
 
+# iter95 — Partial / substring search across pipeline_data. Returns a
+# lightweight summary list for the multi-card picker. Distinct from
+# `_find_applicant` which is exact-match (email primary) for the detail view.
+async def _search_applicants(q: str, limit: int = 25) -> list:
+    """Case-insensitive substring search on name, email, phone.
+    `q` is whatever the admin typed (any length >= 2). Phone match strips
+    non-digits and matches as a substring (so "7890" matches "1234567890").
+    Email/name match using `re.escape(q)` so special chars are inert.
+    Returns at most `limit` summary dicts: {name, email, phone, job_role,
+    registered_status}. Empty list when q is too short or no matches.
+    """
+    import re
+    q = (q or "").strip()
+    if len(q) < 2 or _db is None:
+        return []
+    safe = re.escape(q)
+    digits = "".join(ch for ch in q if ch.isdigit())
+    clauses = [
+        {"name":  {"$regex": safe, "$options": "i"}},
+        {"email": {"$regex": safe, "$options": "i"}},
+    ]
+    if digits:
+        clauses.append({"phone": {"$regex": re.escape(digits)}})
+    cursor = _db.pipeline_data.find(
+        {"$or": clauses},
+        {"_id": 0, "name": 1, "email": 1, "phone": 1, "job_role": 1,
+         "job_title": 1, "schedule_date": 1, "schedule_time": 1,
+         "email_type": 1, "otp_verified": 1, "result_status": 1},
+    ).limit(limit + 1)
+    docs = await cursor.to_list(length=limit + 1)
+    items = []
+    for d in docs[:limit]:
+        items.append({
+            "name":  d.get("name") or "",
+            "email": d.get("email") or "",
+            "phone": d.get("phone") or "",
+            "job_role": d.get("job_role") or d.get("job_title") or "",
+            "registered_status": _derive_registered_status(d),
+        })
+    return items
+
+
 def _parse_schedule_date_iso(raw) -> str:
     """Coerce DB schedule_date into 'YYYY-MM-DD' (DATE-ONLY).
     Accepted inputs: 'YYYY-MM-DD', 'DD-MM-YYYY', 'DD/MM/YYYY', 'YYYY/MM/DD',
@@ -162,6 +204,18 @@ async def _ensure_default_test_credentials():
 class AlertSendBody(BaseModel):
     email: str
     phone: str
+
+
+@manual_router.get("/applicant/search")
+async def search_applicants(request: Request, q: str = Query(""), limit: int = Query(25, ge=1, le=50)):
+    """iter95 — Substring/regex search returning a list of summary cards
+    for the multi-result picker. The detail view still uses /applicant/lookup
+    with exact email/phone once the admin clicks a card.
+    Returns: { items: [...], truncated: bool }. Empty items when q < 2 chars."""
+    await _get_user(request)
+    items = await _search_applicants(q, limit=limit)
+    # Truncated marker — fetch one extra and check if we hit the cap.
+    return {"items": items, "truncated": len(items) >= limit}
 
 
 @manual_router.get("/applicant/lookup")

@@ -386,7 +386,14 @@ export default function PublicRegistration() {
                                         inputMode="tel"
                                         value={f.phone}
                                         onChange={e => setF(p => ({...p, phone: maskPhoneInput(e.target.value)}))}
-                                        onBlur={() => setPhoneTouched(true)}
+                                        onBlur={() => {
+                                            setPhoneTouched(true);
+                                            // iter95 — Visually replace the field with the 10-digit
+                                            // canonical form on blur so the user sees exactly what
+                                            // will be stored. Silent: no toast, only the helper text.
+                                            const n = normalizePhone(f.phone);
+                                            if (n.ok && n.value !== f.phone) setF(p => ({...p, phone: n.value}));
+                                        }}
                                         data-testid="reg-phone"
                                         required
                                         maxLength="13"

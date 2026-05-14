@@ -10,9 +10,11 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
 import {
-    ArrowLeft, MagnifyingGlass, X, EnvelopeSimple, ChatCircleText,
-    PaperPlaneTilt, ClipboardText, BellRinging, ShieldCheck, Prohibit,
+    ArrowLeft, EnvelopeSimple,
+    PaperPlaneTilt, ClipboardText,
+    BellRinging, ShieldCheck, Prohibit, ArrowLeft as ArrowLeftIcon,
 } from '@phosphor-icons/react';
+import ApplicantSearchCards from '../components/ApplicantSearchCards';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -53,29 +55,34 @@ export default function ManualAlerts() {
     const navigate = useNavigate();
     const [query, setQuery] = useState('');
     const [applicant, setApplicant] = useState(null);
-    const [loading, setLoading] = useState(false);
+    const [loadingDetail, setLoadingDetail] = useState(false);
     const [sending, setSending] = useState('');
 
-    const handleSearch = async () => {
-        const q = query.trim();
-        if (!q) { toast.error('Enter an email or phone number'); return; }
-        const isEmail = q.includes('@');
-        const params = isEmail ? { email: q } : { phone: q };
-        setLoading(true);
-        setApplicant(null);
+    // iter95 — Card click → fetch the full detail payload (registered_status,
+    // result_status etc.) via the existing /applicant/lookup endpoint with
+    // exact email+phone. Keeps the rest of the page (action buttons + state
+    // derivation) untouched.
+    const selectApplicant = async (card) => {
+        setLoadingDetail(true);
         try {
+            const params = {};
+            if (card.email) params.email = card.email;
+            if (card.phone) params.phone = card.phone;
             const r = await axios.get(`${API}/api/bb/manual/applicant/lookup`, {
                 withCredentials: true, params,
             });
             setApplicant(r.data);
-            toast.success('Applicant found');
         } catch (e) {
-            toast.error(e.response?.data?.detail || 'Applicant not found');
-        } finally { setLoading(false); }
+            toast.error(e.response?.data?.detail || 'Failed to load applicant');
+        } finally { setLoadingDetail(false); }
     };
 
-    const handleCancel = () => {
+    const handleClear = () => {
         setQuery(''); setApplicant(null);
+    };
+
+    const backToResults = () => {
+        setApplicant(null);
     };
 
     const fireAction = async (btn) => {
@@ -121,32 +128,34 @@ export default function ManualAlerts() {
             </header>
 
             <main className="max-w-5xl mx-auto px-6 lg:px-10 py-6 space-y-5">
-                {/* Search row */}
-                <div className="bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl p-5 flex flex-wrap items-end gap-3">
-                    <div className="flex-1 min-w-[260px]">
-                        <label className="text-[11px] font-semibold tracking-[0.16em] text-[#9b9787] uppercase block mb-1">Search</label>
-                        <input
-                            value={query}
-                            onChange={(e) => setQuery(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
-                            placeholder="Enter applicant email or phone number"
-                            data-testid="manual-alerts-query"
-                            className="w-full bg-[#faf9f1] border border-[#e5e3d8] rounded-lg px-3 py-2 text-sm text-[#1a2332] outline-none focus:border-[#1d3a8a]"
-                        />
+                {/* Search — show multi-card picker when no applicant selected */}
+                {!applicant && (
+                    <ApplicantSearchCards
+                        value={query}
+                        onChange={setQuery}
+                        onSelect={selectApplicant}
+                        onCancel={handleClear}
+                        testIdPrefix="manual-alerts"
+                        placeholder="Type name, email, or phone (min 2 chars)…"
+                    />
+                )}
+                {loadingDetail && (
+                    <div className="bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl p-6 text-center text-sm text-[#6b7280]" data-testid="manual-alerts-loading-detail">
+                        Loading applicant…
                     </div>
-                    <button onClick={handleSearch} disabled={loading} data-testid="manual-alerts-search-btn"
-                        className="px-5 py-2.5 rounded-lg bg-[#1d3a8a] hover:bg-[#162d6e] text-white font-semibold text-sm flex items-center gap-2 disabled:opacity-60">
-                        <MagnifyingGlass size={16} weight="bold" /> {loading ? 'Searching…' : 'Search'}
-                    </button>
-                    <button onClick={handleCancel} data-testid="manual-alerts-cancel-btn"
-                        className="px-5 py-2.5 rounded-lg border border-[#e5e3d8] bg-[#fffdf7] text-[#1a2332] font-semibold text-sm hover:bg-[#efede5] flex items-center gap-2">
-                        <X size={16} /> Cancel
-                    </button>
-                </div>
+                )}
 
                 {/* Applicant details */}
                 {applicant && (
-                    <div className="bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl overflow-hidden" data-testid="manual-alerts-details">
+                    <>
+                        <div className="flex items-center justify-between gap-3">
+                            <button onClick={backToResults} data-testid="manual-alerts-back-to-results"
+                                className="inline-flex items-center gap-2 text-sm font-semibold text-[#1d3a8a] hover:underline">
+                                <ArrowLeftIcon size={14} weight="bold" /> Back to results
+                            </button>
+                            <span className="text-[11px] text-[#9b9787]">Showing details for <strong className="text-[#1a2332]">{applicant.name || applicant.email}</strong></span>
+                        </div>
+                        <div className="bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl overflow-hidden" data-testid="manual-alerts-details">
                         <div className="px-5 py-3 bg-[#faf9f1] border-b border-[#e5e3d8] text-sm font-semibold text-[#1a2332]">Applicant Details</div>
                         <div className="overflow-x-auto">
                             <table className="w-full text-sm">
@@ -173,6 +182,7 @@ export default function ManualAlerts() {
                             </table>
                         </div>
                     </div>
+                    </>
                 )}
 
                 {/* Action buttons row */}

@@ -171,16 +171,26 @@ export default function CollegeRegistration() {
                                 <label className="text-xs text-gray-600 font-medium">Phone *</label>
                                 <input
                                     type="tel"
-                                    inputMode="numeric"
-                                    pattern="[0-9]{10}"
+                                    inputMode="tel"
                                     value={f.phone}
-                                    onChange={e => setF(p => ({ ...p, phone: e.target.value.replace(/\D/g, '').slice(0, 10) }))}
+                                    onChange={e => setF(p => ({ ...p, phone: maskPhoneInput(e.target.value) }))}
+                                    onBlur={() => {
+                                        setPhoneTouched(true);
+                                        // iter95 — Visually replace with the 10-digit canonical form
+                                        // on blur so the user sees what we store.
+                                        const n = normalizePhone(f.phone);
+                                        if (n.ok && n.value !== f.phone) setF(p => ({ ...p, phone: n.value }));
+                                    }}
                                     data-testid="reg-phone"
-                                    maxLength="10"
-                                    placeholder="9876543210"
-                                    title="Enter only 10-digit mobile number without +91, 0, spaces or extensions."
+                                    maxLength="13"
+                                    placeholder="9876543210 or +919876543210"
+                                    title={PHONE_HELPER_TEXT}
                                     className="w-full mt-1 bg-[#f5f5f5] border border-gray-200 rounded px-3 py-2.5 text-sm focus:outline-none focus:border-blue-400 focus:bg-white" />
-                                <p className="text-[11px] text-gray-500 mt-1 italic">Enter only 10-digit mobile number without +91, 0, spaces or extensions.</p>
+                                {phoneTouched && f.phone && !phoneNorm.ok ? (
+                                    <p className="text-[11px] text-red-600 mt-1" data-testid="reg-phone-error">{PHONE_ERROR_TEXT}</p>
+                                ) : (
+                                    <p className="text-[11px] text-gray-500 mt-1 italic">{PHONE_HELPER_TEXT}</p>
+                                )}
                             </div>
                             <div>
                                 <label className="text-xs text-gray-600 font-medium">Age</label>
@@ -267,14 +277,6 @@ export default function CollegeRegistration() {
                         <button onClick={handleSubmit} disabled={submitting} data-testid="submit-btn"
                             className="w-full py-3 bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-50 text-white font-bold rounded-lg tracking-wide">
                             {submitting ? 'Submitting…' : 'Submit Registration'}
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </PageShell>
-    );
-}
-' : 'Submit Registration'}
                         </button>
                     </div>
                 </div>

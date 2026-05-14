@@ -13,10 +13,11 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
 import {
-    ArrowLeft, ShieldCheck, X, CheckCircle, MagnifyingGlass,
-    WarningCircle, Clock,
+    ArrowLeft, ShieldCheck, CheckCircle,
+    Clock, ArrowLeft as ArrowLeftIcon,
 } from '@phosphor-icons/react';
 import { formatDateDDMMYYYY as fmtDate, formatTime12H as fmtTime } from '../utils/dateFormat';
+import ApplicantSearchCards from '../components/ApplicantSearchCards';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -65,28 +66,30 @@ function Row({ k, v }) {
 export default function ManualOtpVerify() {
     const navigate = useNavigate();
     const [query, setQuery] = useState('');
-    const [searching, setSearching] = useState(false);
+    const [loadingDetail, setLoadingDetail] = useState(false);
     const [verifying, setVerifying] = useState(false);
     const [applicant, setApplicant] = useState(null);  // lookup payload
     const [verified, setVerified] = useState(null);    // post-verify applicant payload
 
-    const handleSearch = async () => {
-        const q = query.trim();
-        if (!q) { toast.error('Enter an email or phone number'); return; }
-        const isEmail = q.includes('@');
-        const params = isEmail ? { email: q } : { phone: q };
-        setSearching(true);
-        setApplicant(null);
+    const selectApplicant = async (card) => {
+        setLoadingDetail(true);
         setVerified(null);
         try {
+            const params = {};
+            if (card.email) params.email = card.email;
+            if (card.phone) params.phone = card.phone;
             const r = await axios.get(`${API}/api/bb/manual/applicant/lookup`, {
                 withCredentials: true, params,
             });
             setApplicant(r.data);
-            toast.success('Applicant found');
         } catch (e) {
-            toast.error(e.response?.data?.detail || 'Applicant not found');
-        } finally { setSearching(false); }
+            toast.error(e.response?.data?.detail || 'Failed to load applicant');
+        } finally { setLoadingDetail(false); }
+    };
+
+    const backToResults = () => {
+        setApplicant(null); setVerified(null);
+        setRescheduling(false); setEdit({});
     };
 
     const handleVerify = async () => {
@@ -107,8 +110,6 @@ export default function ManualOtpVerify() {
         setQuery(''); setApplicant(null); setVerified(null);
         setRescheduling(false); setEdit({});
     };
-
-    // iter82 — Reschedule & Verify state
     const [rescheduling, setRescheduling] = useState(false);
     const [edit, setEdit] = useState({});      // {phone,email,job_role,schedule_date,schedule_time}
     const [savingResch, setSavingResch] = useState(false);
@@ -175,28 +176,31 @@ export default function ManualOtpVerify() {
             </header>
 
             <main className="max-w-3xl mx-auto px-6 lg:px-10 py-6 space-y-5">
-                {/* Step 1 — Search */}
-                <div className="bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl p-5 flex flex-wrap items-end gap-3">
-                    <div className="flex-1 min-w-[260px]">
-                        <label className="text-[11px] font-semibold tracking-[0.16em] text-[#9b9787] uppercase block mb-1">Search</label>
-                        <input
-                            value={query}
-                            onChange={(e) => setQuery(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') handleSearch(); }}
-                            placeholder="Enter applicant email or phone number"
-                            data-testid="manual-otp-query"
-                            className="w-full bg-[#faf9f1] border border-[#e5e3d8] rounded-lg px-3 py-2 text-sm text-[#1a2332] outline-none focus:border-[#1d3a8a]"
-                        />
+                {/* Step 1 — Search (multi-card picker) */}
+                {!applicant && !verified && (
+                    <ApplicantSearchCards
+                        value={query}
+                        onChange={setQuery}
+                        onSelect={selectApplicant}
+                        onCancel={handleCancel}
+                        testIdPrefix="manual-otp"
+                        placeholder="Type name, email, or phone (min 2 chars)…"
+                    />
+                )}
+                {loadingDetail && (
+                    <div className="bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl p-6 text-center text-sm text-[#6b7280]" data-testid="manual-otp-loading-detail">
+                        Loading applicant…
                     </div>
-                    <button onClick={handleSearch} disabled={searching} data-testid="manual-otp-search-btn"
-                        className="px-5 py-2.5 rounded-lg bg-[#1d3a8a] hover:bg-[#162d6e] text-white font-semibold text-sm flex items-center gap-2 disabled:opacity-60">
-                        <MagnifyingGlass size={16} weight="bold" /> {searching ? 'Searching…' : 'Search'}
-                    </button>
-                    <button onClick={handleCancel} data-testid="manual-otp-cancel-btn"
-                        className="px-5 py-2.5 rounded-lg border border-[#e5e3d8] bg-[#fffdf7] text-[#1a2332] font-semibold text-sm hover:bg-[#efede5] flex items-center gap-2">
-                        <X size={16} /> Cancel
-                    </button>
-                </div>
+                )}
+                {(applicant || verified) && (
+                    <div className="flex items-center justify-between gap-3">
+                        <button onClick={backToResults} data-testid="manual-otp-back-to-results"
+                            className="inline-flex items-center gap-2 text-sm font-semibold text-[#1d3a8a] hover:underline">
+                            <ArrowLeftIcon size={14} weight="bold" /> Back to results
+                        </button>
+                        <span className="text-[11px] text-[#9b9787]">Showing details for <strong className="text-[#1a2332]">{(applicant || verified)?.name || (applicant || verified)?.email}</strong></span>
+                    </div>
+                )}
 
                 {/* Step 2 — Applicant details + Verify / Reschedule & Verify */}
                 {applicant && !verified && (
