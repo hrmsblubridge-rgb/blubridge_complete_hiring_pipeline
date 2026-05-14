@@ -11,6 +11,12 @@ import os
 import sys
 import pytest
 import requests
+from dotenv import load_dotenv
+
+# Load backend .env so messaging.py imports cleanly (FRONTEND_URL, MONGO_URL, etc.)
+load_dotenv("/app/backend/.env")
+# Also load frontend .env to discover REACT_APP_BACKEND_URL if not exported in shell
+load_dotenv("/app/frontend/.env")
 
 BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 sys.path.insert(0, "/app/backend")
