@@ -146,10 +146,13 @@ async def get_otp_for_schedule(email: str, phone: str, schedule_date: str = "") 
         clauses.append({"phone": {"$regex": f"{_re.escape(p)}$"}})
 
     # Prefer exact schedule_date match (one OTP per interview date).
+    # iter92 — exclude superseded rows so OTP lookups never return a stale
+    # OTP from a previous tester re-registration session.
     if schedule_date:
         doc = await _db.bb_registrations.find_one(
             {"$or": clauses, "schedule_date": schedule_date,
-             "otp": {"$exists": True, "$nin": [None, ""]}},
+             "otp": {"$exists": True, "$nin": [None, ""]},
+             "superseded": {"$ne": True}},
             {"_id": 0, "otp": 1},
             sort=[("otp_sent_at", -1)],
         )
@@ -159,7 +162,8 @@ async def get_otp_for_schedule(email: str, phone: str, schedule_date: str = "") 
     # Fallback: latest OTP regardless of schedule_date (handles the
     # historical case where schedule_date wasn't recorded on the OTP doc).
     doc = await _db.bb_registrations.find_one(
-        {"$or": clauses, "otp": {"$exists": True, "$nin": [None, ""]}},
+        {"$or": clauses, "otp": {"$exists": True, "$nin": [None, ""]},
+         "superseded": {"$ne": True}},
         {"_id": 0, "otp": 1, "schedule_date": 1},
         sort=[("otp_sent_at", -1)],
     )

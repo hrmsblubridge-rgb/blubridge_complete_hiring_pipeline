@@ -3888,6 +3888,35 @@ async def register_applicant(data: RegistrationBody):
         "reschedule_count": 0,
         "registered_at": datetime.now(timezone.utc).isoformat(),
     }
+    # iter92 — Mark every existing bb_registrations row for this (email|phone)
+    # as superseded BEFORE inserting the new one. Background workers (OTP,
+    # ScheduleLink retry, 24hReminder, MissedInterview, Rejection dispatcher)
+    # all filter `superseded:{$ne:True}` so they will NEVER fire on a stale
+    # row again. This prevents the phantom-OTP / phantom-name leak where the
+    # OTP worker would generate a fresh random OTP for an old row from a
+    # previous test session whose flow flags had been reset.
+    _now_supersede_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        _sup = await _db.bb_registrations.update_many(
+            {"$or": [
+                {"email": data.email.strip().lower()},
+                {"phone": phone_normalized},
+            ],
+             "superseded": {"$ne": True}},
+            {"$set": {
+                "superseded": True,
+                "superseded_at": _now_supersede_iso,
+                "superseded_by_new_registration": True,
+            }},
+        )
+        if _sup.modified_count:
+            _logger.info(
+                f"[Re-register] Superseded {_sup.modified_count} old bb_registrations row(s) "
+                f"for {data.email}"
+            )
+    except Exception as _e:
+        _logger.warning(f"[Re-register] supersede step skipped: {_e}")
+
     await _db.bb_registrations.insert_one(reg_doc)
 
     # Also insert into pipeline_data (HR internal dataset — May 2026 source of truth).

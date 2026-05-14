@@ -37,8 +37,17 @@ MESSAGING_CUTOFF_TS = os.environ.get("MESSAGING_CUTOFF_TS", "9999-12-31T23:59:59
 
 
 def _cutoff_filter() -> dict:
-    """Mongo filter fragment — restricts to NEW records only (post-cutoff)."""
-    return {"registered_at": {"$gte": MESSAGING_CUTOFF_TS}}
+    """Mongo filter fragment — restricts to NEW records only (post-cutoff)
+    AND excludes superseded rows. iter92 — every worker that scans
+    `bb_registrations` uses this so stale rows from a tester's earlier
+    re-registration session can NEVER receive a fresh OTP or template send.
+    Re-registration (bb_modules.py:register_applicant) flips `superseded=True`
+    on all prior rows for the same email/phone before inserting the new row.
+    """
+    return {
+        "registered_at": {"$gte": MESSAGING_CUTOFF_TS},
+        "superseded": {"$ne": True},
+    }
 
 
 def init_workers(database):
