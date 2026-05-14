@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
+import { normalizePhone, maskPhoneInput, PHONE_HELPER_TEXT, PHONE_ERROR_TEXT } from '../utils/phone';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -40,14 +41,18 @@ export default function PublicRegistration() {
         return city && !form.conditions.locations.map(l => l.toLowerCase()).includes(city);
     };
 
+    const [phoneTouched, setPhoneTouched] = useState(false);
+    const phoneNorm = normalizePhone(f.phone);
+
     const handleSubmit = async () => {
-        const phone = (f.phone || '').trim();
         const email = (f.email || '').trim();
         const fullName = (f.full_name || '').trim();
         const city = (f.preferred_location_city || '').trim();
         const state = (f.current_location_state || '').trim();
-        if (!fullName || !email || !phone) { alert('Full Name, Email, and Phone are required'); return; }
-        if (!/^[0-9]{10}$/.test(phone)) { alert('Phone must be exactly 10 digits — no +91, no spaces, no leading 0, no extensions.'); return; }
+        if (!fullName || !email || !f.phone) { alert('Full Name, Email, and Phone are required'); return; }
+        if (!phoneNorm.ok) { alert(phoneNorm.error); return; }
+        // Replace raw input with normalized 10-digit form so backend sees the canonical value.
+        setF(p => ({ ...p, phone: phoneNorm.value }));
         if (!state || !city) { alert('Current Location (State) and Preferred Location (City) are required'); return; }
         setSubmitting(true);
         try {
@@ -378,17 +383,21 @@ export default function PublicRegistration() {
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Phone Number:</label>
                                     <input
                                         type="tel"
-                                        inputMode="numeric"
-                                        pattern="[0-9]{10}"
+                                        inputMode="tel"
                                         value={f.phone}
-                                        onChange={e => setF(p => ({...p, phone: e.target.value.replace(/\D/g, '').slice(0, 10)}))}
+                                        onChange={e => setF(p => ({...p, phone: maskPhoneInput(e.target.value)}))}
+                                        onBlur={() => setPhoneTouched(true)}
                                         data-testid="reg-phone"
                                         required
-                                        maxLength="10"
-                                        title="Enter only 10-digit mobile number without +91, 0, spaces or extensions."
-                                        placeholder="9876543210"
+                                        maxLength="13"
+                                        title={PHONE_HELPER_TEXT}
+                                        placeholder="9876543210 or +919876543210"
                                         className="w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-400 focus:bg-white" />
-                                    <p className="text-xs text-gray-500 mt-1 italic">Enter only 10-digit mobile number without +91, 0, spaces or extensions.</p>
+                                    {phoneTouched && f.phone && !phoneNorm.ok ? (
+                                        <p className="text-xs text-red-600 mt-1" data-testid="reg-phone-error">{PHONE_ERROR_TEXT}</p>
+                                    ) : (
+                                        <p className="text-xs text-gray-500 mt-1 italic">{PHONE_HELPER_TEXT}</p>
+                                    )}
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Age:</label>

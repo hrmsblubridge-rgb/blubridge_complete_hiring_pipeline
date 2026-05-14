@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import { normalizePhone, maskPhoneInput, PHONE_HELPER_TEXT, PHONE_ERROR_TEXT } from '../utils/phone';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -94,14 +95,17 @@ export default function CollegeRegistration() {
         return () => { cancelled = true; };
     }, [f.college]);
 
+    const [phoneTouched, setPhoneTouched] = useState(false);
+    const phoneNorm = normalizePhone(f.phone);
+
     const handleSubmit = async () => {
-        const phone = (f.phone || '').trim();
         const email = (f.email || '').trim();
         const fullName = (f.full_name || '').trim();
         const city = (f.preferred_location_city || '').trim();
         const state = (f.current_location_state || '').trim();
-        if (!fullName || !email || !phone) { alert('Name, Email and Phone are required'); return; }
-        if (!/^[0-9]{10}$/.test(phone)) { alert('Phone must be exactly 10 digits — no +91, no spaces, no leading 0, no extensions.'); return; }
+        if (!fullName || !email || !f.phone) { alert('Name, Email and Phone are required'); return; }
+        if (!phoneNorm.ok) { alert(phoneNorm.error); return; }
+        setF(p => ({ ...p, phone: phoneNorm.value }));
         if (!state || !city) { alert('Current Location (State) and Preferred Location (City) are required'); return; }
         if (!f.college || !f.job_role) { alert('Please select both College and Job Role'); return; }
         setSubmitting(true);
@@ -263,6 +267,14 @@ export default function CollegeRegistration() {
                         <button onClick={handleSubmit} disabled={submitting} data-testid="submit-btn"
                             className="w-full py-3 bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-50 text-white font-bold rounded-lg tracking-wide">
                             {submitting ? 'Submitting…' : 'Submit Registration'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </PageShell>
+    );
+}
+' : 'Submit Registration'}
                         </button>
                     </div>
                 </div>

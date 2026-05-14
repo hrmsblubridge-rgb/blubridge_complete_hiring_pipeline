@@ -503,7 +503,15 @@ async def notify_rejected(name: str, phone: str, email: str, job_role: str = "",
     including the blue 'Job Role' highlight section. `job_role` is optional;
     omitted from the highlight section when not supplied (registration-stage
     rejection)."""
-    wa_ok = await send_whatsapp("Reject", phone, email, [], is_test=is_test)
+    # iter94 — Post-interview rejection uses NEW "Final Reject" AiSensy template
+    # (params: [candidate_name, job_role]). Form-condition rejection continues
+    # to use existing "Reject" template via notify_rejected_with_reason — they
+    # are now strictly isolated campaigns.
+    wa_ok = await send_whatsapp(
+        "Final Reject", phone, email,
+        [name or "Candidate", job_role or "—"],
+        is_test=is_test,
+    )
 
     # Blue 'Job Role' highlight (table-style) — only if job_role supplied.
     job_role_block = ""

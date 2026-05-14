@@ -7,10 +7,31 @@ import re as _re
 
 
 def _validate_phone_10digits(v):
-    """Shared Pydantic validator — phone must be exactly 10 digits, digits only."""
-    s = (v or "").strip()
+    """Shared Pydantic validator — normalize and validate a 10-digit phone.
+
+    iter94 — Tolerant normalization (accepts the same formats the frontend
+    accepts so backend and frontend are aligned):
+      • bare 10 digits                          → keep
+      • leading "0"  (11 chars: 0 + 10 digits)  → strip the 0
+      • leading "+91" (13 chars: +91 + 10)      → strip the +91
+      • leading "91"  (12 chars: 91 + 10)       → strip the 91
+      • leading "91" but len==10 already        → keep (numbers like 9123456789
+                                                   that just happen to start
+                                                   with 91 are valid 10-digit
+                                                   numbers, NOT a prefix)
+    Anything else → 422 with the canonical helper-text message.
+    Storage contract: DB always holds the bare 10-digit form.
+    """
+    s = (v or "").strip().replace(" ", "")
+    if s.startswith("+91") and len(s) == 13 and s[3:].isdigit():
+        s = s[3:]
+    elif s.startswith("0") and len(s) == 11 and s.isdigit():
+        s = s[1:]
+    elif s.startswith("91") and len(s) == 12 and s.isdigit():
+        s = s[2:]
+    # else: leave as-is (len==10 numbers starting with 91 keep all 10 digits)
     if not _re.fullmatch(r"[0-9]{10}", s):
-        raise ValueError("Phone must be exactly 10 digits — no +91, no spaces, no leading 0, no extensions.")
+        raise ValueError("Phone must contain 10 digits (you may type it with +91, 91, or leading 0 — we normalize automatically).")
     return s
 
 
