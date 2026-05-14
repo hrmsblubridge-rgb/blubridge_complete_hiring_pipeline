@@ -8,6 +8,7 @@ or SMTP directly from anywhere else — always go through `send_whatsapp` /
 import os
 import logging
 import smtplib
+import socket
 import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -399,20 +400,34 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str, is
 
         context = ssl.create_default_context()
         _port = int(SMTP_PORT or 465)
+
+        # iter89 — Force IPv4 resolution. The `[Errno 101] Network is unreachable`
+        # symptom on cloud hosts is most often caused by `getaddrinfo` returning an
+        # IPv6 AAAA record first while the host has no v6 outbound routing. Resolving
+        # AF_INET only and connecting by literal IPv4 bypasses that path entirely.
+        # We disable hostname check (still verify cert chain via the default trust
+        # store) because we connect via IP literal — cert CN won't match.
+        try:
+            _ipv4 = socket.getaddrinfo(SMTP_HOST, _port, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
+        except socket.gaierror as _ge:
+            _logger.error(f"[Email] DNS A-record lookup failed for {SMTP_HOST}: {_ge}")
+            return False
+        context.check_hostname = False
+
         if is_test_mode():
             _logger.info(
-                f"[SMTP DEBUG] provider=smtp host={SMTP_HOST} port={_port} "
+                f"[SMTP DEBUG] provider=smtp host={SMTP_HOST} ipv4={_ipv4} port={_port} "
                 f"ssl={_port == 465} starttls={_port == 587} from={FROM_EMAIL}"
             )
         if _port == 587:
-            with smtplib.SMTP(SMTP_HOST, _port, timeout=20) as server:
-                server.ehlo()
+            with smtplib.SMTP(_ipv4, _port, timeout=20) as server:
+                server.ehlo(SMTP_HOST)
                 server.starttls(context=context)
-                server.ehlo()
+                server.ehlo(SMTP_HOST)
                 server.login(SMTP_USER, SMTP_PASSWORD)
                 server.sendmail(FROM_EMAIL, to_email, msg.as_string())
         else:
-            with smtplib.SMTP_SSL(SMTP_HOST, _port, context=context, timeout=20) as server:
+            with smtplib.SMTP_SSL(_ipv4, _port, context=context, timeout=20) as server:
                 server.login(SMTP_USER, SMTP_PASSWORD)
                 server.sendmail(FROM_EMAIL, to_email, msg.as_string())
         _logger.info(f"[Email] SENT via=smtp to={to_email} subject={subject}")
