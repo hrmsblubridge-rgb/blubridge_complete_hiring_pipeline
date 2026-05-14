@@ -420,14 +420,14 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str, is
                 f"ssl={_port == 465} starttls={_port == 587} from={FROM_EMAIL}"
             )
         if _port == 587:
-            with smtplib.SMTP(_ipv4, _port, timeout=20) as server:
+            with smtplib.SMTP(_ipv4, _port, timeout=15) as server:
                 server.ehlo(SMTP_HOST)
                 server.starttls(context=context)
                 server.ehlo(SMTP_HOST)
                 server.login(SMTP_USER, SMTP_PASSWORD)
                 server.sendmail(FROM_EMAIL, to_email, msg.as_string())
         else:
-            with smtplib.SMTP_SSL(_ipv4, _port, context=context, timeout=20) as server:
+            with smtplib.SMTP_SSL(_ipv4, _port, context=context, timeout=15) as server:
                 server.login(SMTP_USER, SMTP_PASSWORD)
                 server.sendmail(FROM_EMAIL, to_email, msg.as_string())
         _logger.info(f"[Email] SENT via=smtp to={to_email} subject={subject}")

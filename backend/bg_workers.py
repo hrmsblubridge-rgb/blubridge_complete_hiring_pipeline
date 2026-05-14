@@ -272,43 +272,62 @@ async def _worker_schedule_link_sender():
 # ============ WORKER C: 24h Reminder (every 5 min) ============
 
 async def _worker_24h_reminder():
-    """Remind shortlisted applicants who haven't scheduled after 24h."""
+    """Remind shortlisted applicants who haven't scheduled after 24h.
+
+    iter91 — Added a 7-day UPPER bound on `schedule_link_sent_at` to prevent
+    stale tester re-registration rows (from days/weeks earlier test sessions)
+    from being re-messaged with phantom data. Anything older than 7 days is
+    considered abandoned and is no longer eligible for the reminder.
+    """
     _logger.info("24h Reminder worker started")
     while True:
         try:
             now = datetime.now(timezone.utc)
             twenty_four_h_ago = (now - timedelta(hours=24)).isoformat()
+            seven_days_ago = (now - timedelta(days=7)).isoformat()
 
-            # Find applicants (NEW only): link sent > 24h ago, not scheduled, no reminder sent
+            # Find applicants (NEW only): link sent between 24h and 7d ago,
+            # not scheduled, no reminder sent, with REQUIRED template fields.
             cursor = _db.bb_registrations.find({
                 **_cutoff_filter(),
                 "is_shortlisted": True,
                 "schedule_link_sent": True,
                 "schedule_date": {"$in": [None, ""]},
                 "reminder_24h_sent": {"$ne": True},
-                "schedule_link_sent_at": {"$lte": twenty_four_h_ago},
+                "schedule_link_sent_at": {"$lte": twenty_four_h_ago, "$gte": seven_days_ago},
             })
             docs = await cursor.to_list(None)
 
             for doc in docs:
                 token = doc.get("schedule_token")
-                if not token:
+                name = (doc.get("full_name") or "").strip()
+                phone = (doc.get("phone") or "").strip()
+                email = (doc.get("email") or "").strip()
+                # iter91 FIX 2G — abort if any required template field is missing.
+                # Never send a reminder with a placeholder/dummy name.
+                if not token or not name or (not email and not phone):
+                    _logger.warning(
+                        f"[24hReminder] SKIP — missing required field "
+                        f"(name={bool(name)} email={bool(email)} phone={bool(phone)} "
+                        f"token={bool(token)}) doc_id={doc.get('_id')}"
+                    )
+                    # Flag as sent so the worker doesn't keep retrying this broken row.
+                    await _db.bb_registrations.update_one(
+                        {"_id": doc["_id"]},
+                        {"$set": {"reminder_24h_sent": True,
+                                   "reminder_24h_skipped_at": now.isoformat(),
+                                   "reminder_24h_skip_reason": "missing_required_field"}}
+                    )
                     continue
 
                 from messaging import notify_schedule_reminder
-                await notify_schedule_reminder(
-                    doc.get("full_name", ""),
-                    doc.get("phone", ""),
-                    doc.get("email", ""),
-                    token,
-                    is_test=bool(doc.get("isTest")),
-                )
+                await notify_schedule_reminder(name, phone, email, token, is_test=bool(doc.get("isTest")))
 
                 await _db.bb_registrations.update_one(
                     {"_id": doc["_id"]},
                     {"$set": {"reminder_24h_sent": True, "reminder_24h_sent_at": now.isoformat()}}
                 )
-                _logger.info(f"[24hReminder] Sent to {doc.get('email')}")
+                _logger.info(f"[24hReminder] Sent to {email}")
 
         except Exception as e:
             _logger.error(f"[24hReminder Worker] Error: {e}")
@@ -358,6 +377,10 @@ async def _worker_missed_interview():
         try:
             now = datetime.now(timezone.utc)
             today_str = now.strftime("%Y-%m-%d")
+            # iter91 — Stop scanning interviews older than 7 days. Stale tester
+            # re-registration rows from days/weeks ago would otherwise trigger
+            # phantom missed-reminder sends.
+            seven_days_ago_str = (now - timedelta(days=7)).strftime("%Y-%m-%d")
 
             # Find scheduled interviews (NEW only) for today/past that weren't attended
             cursor = _db.bb_registrations.find({
@@ -365,7 +388,7 @@ async def _worker_missed_interview():
                 "status": "Interview Scheduled",
                 "otp_verified": {"$ne": True},
                 "missed_marked": {"$ne": True},
-                "schedule_date": {"$lte": today_str},
+                "schedule_date": {"$lte": today_str, "$gte": seven_days_ago_str},
                 "schedule_time": {"$nin": [None, ""], "$exists": True},
             })
             docs = await cursor.to_list(None)
@@ -408,17 +431,25 @@ async def _worker_missed_interview():
 
                 # Send missed reminder with reschedule link
                 token = doc.get("schedule_token")
-                if token:
+                name = (doc.get("full_name") or "").strip()
+                phone = (doc.get("phone") or "").strip()
+                email = (doc.get("email") or "").strip()
+                # iter91 FIX 2G — abort if any required template field is missing.
+                if token and name and (email or phone):
                     from messaging import notify_missed_reminder
                     await notify_missed_reminder(
-                        doc.get("full_name", ""),
-                        doc.get("phone", ""),
-                        doc.get("email", ""),
+                        name, phone, email,
                         doc.get("job_role", ""),
                         schedule_date,
                         schedule_time_str,
                         token,
                         is_test=bool(doc.get("isTest")),
+                    )
+                elif token:
+                    _logger.warning(
+                        f"[Missed] SKIP missed-reminder send — missing required field "
+                        f"(name={bool(name)} email={bool(email)} phone={bool(phone)}) "
+                        f"doc_id={doc.get('_id')}"
                     )
 
                 _logger.info(f"[Missed] Marked {doc.get('email')} as Missed")
