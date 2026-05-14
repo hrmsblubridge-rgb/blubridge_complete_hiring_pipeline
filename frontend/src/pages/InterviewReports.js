@@ -29,8 +29,17 @@ export default function InterviewReports() {
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(100);
     const [loading, setLoading] = useState(true);
-    const [startDate, setStartDate] = useState('');
-    const [endDate, setEndDate] = useState('');
+    // iter93 — Default both date filters to today (local date) so the page
+    // initially shows ONLY today's interviews. Manual changes still work.
+    const _today_iso = (() => {
+        const d = new Date();
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+    })();
+    const [startDate, setStartDate] = useState(_today_iso);
+    const [endDate, setEndDate] = useState(_today_iso);
     const [jobRole, setJobRole] = useState('');
     const [attendance, setAttendance] = useState('');
     const [collegeType, setCollegeType] = useState('');

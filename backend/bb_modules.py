@@ -4224,22 +4224,55 @@ async def register_applicant(data: RegistrationBody):
                 )
                 _logger.info(f"[ScheduleLink] Immediate send for {data.email} ok=(wa={wa_ok}, em={em_ok})")
             else:
-                # iter88 — Defer rejection sends to the evening dispatcher
-                # (19:00 IST). We do NOT call notify_rejected_with_reason here
-                # anymore. Instead we flag the bb_registrations row so the
-                # evening worker picks it up and sends ONCE at the scheduled hour.
+                # iter93 — Form-condition rejections fire IMMEDIATELY during
+                # registration so the applicant gets prompt feedback. Only
+                # POST-INTERVIEW rejections (admin-driven via Update Scores)
+                # remain deferred to the 19:00 IST evening dispatcher.
+                #
+                # Independent channel handling: WhatsApp and Email send in
+                # parallel; if SMTP fails we DO NOT block the WhatsApp delivery.
+                # Required-field guard per FIX 1D — never send with placeholder data.
+                _name = (data.full_name or "").strip()
+                _phone = (phone_normalized or "").strip()
+                _email = (data.email or "").strip().lower()
+                if not _name or (not _email and not _phone):
+                    _logger.warning(
+                        f"[FORM REJECT] SKIP — missing required field "
+                        f"(name={bool(_name)} email={bool(_email)} phone={bool(_phone)}) "
+                        f"reason={reason}"
+                    )
+                    return
+
+                _logger.info(
+                    f"[FORM REJECT DEBUG] shortlisted=False campaign=Reject "
+                    f"applicant={_email} phone={_phone} name={_name} reason={reason}"
+                )
+                ok = await notify_rejected_with_reason(
+                    _name, _phone, _email,
+                    reason,
+                    grad_min=cond.get("grad_year_min"),
+                    grad_max=cond.get("grad_year_max"),
+                    is_test=is_test_record,
+                )
+                wa_ok, em_ok = ok if isinstance(ok, tuple) else (bool(ok), False)
                 await _db.bb_registrations.update_one(
-                    {"email": data.email.strip().lower(), "registered_at": reg_doc["registered_at"]},
+                    {"email": _email, "registered_at": reg_doc["registered_at"]},
                     {"$set": {
-                        "rejection_pending": True,
-                        "rejection_pending_at": now_iso,
-                        "rejection_reason_code": reason,
-                        "rejection_reason_grad_min": cond.get("grad_year_min"),
-                        "rejection_reason_grad_max": cond.get("grad_year_max"),
-                        # Legacy flag intentionally NOT set yet — worker will set it post-send.
+                        "reject_notified": bool(wa_ok or em_ok),
+                        "reject_notified_at": now_iso if (wa_ok or em_ok) else None,
+                        "reject_wa_sent": bool(wa_ok),
+                        "reject_email_sent": bool(em_ok),
+                        "reject_reason_code": reason,
+                        # Mark fully done so the evening dispatcher (which also
+                        # scans rejection_pending=True rows) will never re-fire.
+                        "rejection_pending": False,
+                        "rejection_sent": bool(wa_ok or em_ok),
+                        "rejection_sent_at": now_iso if (wa_ok or em_ok) else None,
                     }},
                 )
-                _logger.info(f"[InstantNotify] Rejection DEFERRED to evening dispatcher for {data.email} reason={reason}")
+                _logger.info(
+                    f"[FORM REJECT] Sent for {_email} ok=(wa={wa_ok}, em={em_ok}) reason={reason}"
+                )
         except Exception as e:
             _logger.exception(f"[InstantNotify] failed for {data.email}: {e}")
 
