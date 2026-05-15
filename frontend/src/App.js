@@ -31,6 +31,7 @@ import ManualOtpVerify from "./pages/ManualOtpVerify";
 import MissingApplicants from "./pages/MissingApplicants";
 import TesterCredentials from "./pages/TesterCredentials";
 import Profile from "./pages/Profile";
+import PublicJobView from "./pages/PublicJobView";
 import { Toaster } from "./components/ui/sonner";
 
 function App() {
@@ -68,6 +69,7 @@ function App() {
                         <Route path="/register/college" element={<CollegeRegistration />} />
                         <Route path="/register/:formId" element={<PublicRegistration />} />
                         <Route path="/schedule-interview/:token" element={<InterviewSchedule />} />
+                        <Route path="/jobs/view/:openingId" element={<PublicJobView />} />
                         <Route path="/" element={<Navigate to="/home" replace />} />
                         <Route path="*" element={<Navigate to="/home" replace />} />
                     </Routes>

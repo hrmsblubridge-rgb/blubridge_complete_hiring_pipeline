@@ -1480,6 +1480,33 @@ async def delete_job_opening(opening_id: str, request: Request):
     return {"success": True}
 
 
+# iter96 — Public view-only endpoint for sharing a job opening's description
+# externally without exposing the Apply / admin workflow. Read-only, no auth.
+# Returns only the public-safe display fields — never `_id`, `created_at`, or
+# any other internal metadata. Works for every existing and future opening
+# automatically (no migration needed — keys off the existing ObjectId).
+@pub_router.get("/job-opening/{opening_id}")
+async def get_public_job_opening(opening_id: str):
+    try:
+        oid = _oid(opening_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Job opening not found")
+    opening = await _db.bb_job_openings.find_one({"_id": oid})
+    if not opening:
+        raise HTTPException(status_code=404, detail="Job opening not found")
+    return {
+        "title":                opening.get("title", ""),
+        "job_role":             opening.get("job_role", ""),
+        "vacancies":            opening.get("vacancies"),
+        "years_of_graduation":  opening.get("years_of_graduation", []),
+        "education":            opening.get("education", []),
+        "salary_range":         opening.get("salary_range", ""),
+        "key_responsibilities": opening.get("key_responsibilities", ""),
+        "added_advantages":     opening.get("added_advantages", ""),
+        "what_we_offer":        opening.get("what_we_offer", ""),
+    }
+
+
 # ============ INTERVIEW SCHEDULE REPORTS ============
 
 def _build_interview_reports_match(startDate, endDate, jobRole, attendance, collegeType) -> dict:

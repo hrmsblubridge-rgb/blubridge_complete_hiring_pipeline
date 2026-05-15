@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { ArrowLeft, Plus, PencilSimple, Trash, X, FolderOpen } from '@phosphor-icons/react';
+import { ArrowLeft, Plus, PencilSimple, Trash, X, FolderOpen, Link as LinkIcon, Copy } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -83,8 +83,27 @@ export default function JobOpenings() {
                                     {o.education?.length > 0 && <div className="flex gap-1 mt-1">{o.education.map((e, i) => <span key={i} className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded">{e}</span>)}</div>}
                                 </div>
                                 <div className="flex gap-2 shrink-0">
-                                    <button onClick={() => openEdit(o)} className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800"><PencilSimple size={16} /></button>
-                                    <button onClick={() => handleDelete(o.id)} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800"><Trash size={16} /></button>
+                                    <a href={`/jobs/view/${o.id}`} target="_blank" rel="noreferrer"
+                                        data-testid={`opening-link-${o.id}`}
+                                        title="Open Public Job Description"
+                                        className="p-2 text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800"><LinkIcon size={16} /></a>
+                                    <button
+                                        onClick={() => {
+                                            // iter96 — Build absolute URL at runtime from current
+                                            // origin so the link always matches the live domain
+                                            // the recruiter is on (production / preview / custom
+                                            // subdomain). DB stores only the ObjectId; URL is
+                                            // constructed here. Mirrors HiringForms copy-link UX.
+                                            const url = `${window.location.origin}/jobs/view/${o.id}`;
+                                            navigator.clipboard.writeText(url)
+                                                .then(() => toast.success(`Copied: ${url}`))
+                                                .catch(() => toast.error('Clipboard write failed'));
+                                        }}
+                                        data-testid={`opening-copy-link-${o.id}`}
+                                        title="Copy Public Job Description URL"
+                                        className="p-2 text-zinc-500 hover:text-emerald-400 hover:bg-zinc-800"><Copy size={16} /></button>
+                                    <button onClick={() => openEdit(o)} data-testid={`opening-edit-${o.id}`} className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800"><PencilSimple size={16} /></button>
+                                    <button onClick={() => handleDelete(o.id)} data-testid={`opening-delete-${o.id}`} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800"><Trash size={16} /></button>
                                 </div>
                             </div>
                         </div>
