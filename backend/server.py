@@ -848,6 +848,43 @@ async def _get_job_keyword_mappings() -> list:
     return await db.job_keyword_mapping.find({}, {"_id": 0}).to_list(None)
 
 
+# iter99 — Single source of truth for keyword → canonical-title lookup.
+# Returns a dict[normalized_keyword] -> canonical_job_role and a set of all
+# normalized canonical titles. Callers pass this into per-row resolution
+# helpers so we hit Mongo only once per request, not once per row.
+async def _build_canonical_index() -> tuple:
+    """Returns (kw_to_canonical: dict, canonical_set: set). All keys are
+    normalized via `_normalize_text_for_matching`. The canonical_set also
+    includes each canonical role's own normalized name so an applicant
+    already on a canonical title resolves to itself."""
+    mappings = await _get_job_keyword_mappings()
+    kw_to_canonical = {}
+    canonical_set = set()
+    for m in mappings:
+        canonical = (m.get("job_role") or "").strip()
+        if not canonical:
+            continue
+        canonical_set.add(_normalize_text_for_matching(canonical))
+        for kw in m.get("keywords", []) or []:
+            nk = _normalize_text_for_matching(kw)
+            if nk:
+                kw_to_canonical[nk] = canonical
+        # Also map the canonical-name → itself so reverse lookups are cheap.
+        kw_to_canonical[_normalize_text_for_matching(canonical)] = canonical
+    return kw_to_canonical, canonical_set
+
+
+def _canonicalize_job_role(raw: str, kw_to_canonical: dict) -> str:
+    """Read-time canonicalization: given a raw job-role string and the
+    pre-built keyword index, return the canonical title if mapped, else the
+    raw input unchanged. Empty/None inputs return ''. Does NOT mutate the DB.
+    """
+    if not raw:
+        return ""
+    nk = _normalize_text_for_matching(raw)
+    return kw_to_canonical.get(nk, raw)
+
+
 def _resolve_normalized_job_role(job_title: str, mappings: list) -> str:
     """Given a raw job_title and keyword mappings, return the canonical job role.
     Matches by exact normalized comparison (keywords are full job titles).
@@ -875,11 +912,45 @@ class JobKeywordMappingUpdate(BaseModel):
 
 @api_router.get("/job-titles/unmatched")
 async def get_unmatched_job_titles(user: str = Depends(get_current_user)):
-    """Return all job titles from job_titles_master that are not yet mapped."""
-    titles = await db.job_titles_master.find(
-        {"is_mapped": {"$ne": True}}, {"_id": 0, "raw_job_title": 1, "normalized_job_title": 1}
-    ).to_list(None)
-    return {"titles": [t.get("raw_job_title", t.get("normalized_job_title", "")) for t in titles if t.get("raw_job_title") or t.get("normalized_job_title")]}
+    """Return job titles not yet mapped to a canonical job role.
+
+    iter99 — Two-layer dedupe:
+      1. Pull EVERY raw title from job_titles_master AND every imported name
+         from bb_job_roles (so manually-created job roles also appear in the
+         unmapped list until they're mapped).
+      2. Collapse by `_normalize_text_for_matching(title)` so case/punctuation
+         variants ('ABC' vs 'abc' vs 'A.B.C.') merge into ONE row.
+      3. Exclude anything already in `job_keyword_mapping.keywords[]` OR
+         used as a canonical `job_role` (regardless of the stale `is_mapped`
+         flag on `job_titles_master`).
+    """
+    kw_to_canonical, _ = await _build_canonical_index()
+    mapped_norm_set = set(kw_to_canonical.keys())
+
+    candidates: dict = {}  # normalized -> first raw seen
+
+    async for t in db.job_titles_master.find({}, {"_id": 0, "raw_job_title": 1, "normalized_job_title": 1}):
+        raw = (t.get("raw_job_title") or "").strip()
+        if not raw:
+            continue
+        norm = t.get("normalized_job_title") or _normalize_text_for_matching(raw)
+        if not norm or norm in mapped_norm_set:
+            continue
+        candidates.setdefault(norm, raw)
+
+    # bb_job_roles also feeds the unmapped picker (per spec: manually-created
+    # job roles should appear until mapped).
+    async for r in db.bb_job_roles.find({}, {"_id": 0, "name": 1}):
+        raw = (r.get("name") or "").strip()
+        if not raw:
+            continue
+        norm = _normalize_text_for_matching(raw)
+        if not norm or norm in mapped_norm_set:
+            continue
+        candidates.setdefault(norm, raw)
+
+    titles = sorted(candidates.values(), key=lambda s: s.lower())
+    return {"titles": titles}
 
 
 @api_router.get("/job-keyword-mappings")
@@ -1440,16 +1511,23 @@ async def get_summary(
 
 @api_router.get("/job-roles")
 async def get_job_roles(user: str = Depends(get_current_user)):
-    """Unique normalized job roles with HR-internal applicant counts (pipeline_data).
-    OPTIMIZED: aggregation on persisted `_normalized_job_role`."""
+    """Unique job roles with HR-internal applicant counts (pipeline_data).
+    iter99 — Roll up by READ-TIME canonical title using job_keyword_mapping,
+    so dashboard charts and filters see one row per canonical job role even
+    if pipeline_data still carries raw imported variants."""
     pipeline = [
         {"$match": {"_normalized_job_role": {"$nin": [None, "", "Unknown"]},
                      "isTest": {"$ne": True}}},
         {"$group": {"_id": "$_normalized_job_role", "count": {"$sum": 1}}},
-        {"$sort": {"count": -1}},
-        {"$project": {"_id": 0, "job_role": "$_id", "count": 1}},
     ]
-    results = await db.pipeline_data.aggregate(pipeline, allowDiskUse=False).to_list(None)
+    raw_results = await db.pipeline_data.aggregate(pipeline, allowDiskUse=False).to_list(None)
+    kw_to_canonical, _ = await _build_canonical_index()
+    rolled: dict = {}
+    for r in raw_results:
+        canon = _canonicalize_job_role(r["_id"], kw_to_canonical)
+        rolled[canon] = rolled.get(canon, 0) + r["count"]
+    results = [{"job_role": k, "count": v} for k, v in rolled.items()]
+    results.sort(key=lambda x: (-x["count"], x["job_role"].lower()))
     return {"job_roles": results}
 
 

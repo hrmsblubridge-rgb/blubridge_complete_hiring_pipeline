@@ -45,6 +45,25 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter99)** — Rejection scheduler window widened + job-title canonicalization at read time.
+  - **Bug 1 RCA** — `bg_workers._worker_import_rejection_mailer` gated with `now.hour != _dispatch_hour`, restricting sends to the literal `19:00-19:59` IST hour. Any applicant rejected at 20:00+ had to wait until tomorrow's 19:00. Fix: `if now_local.hour < _dispatch_hour: skip` — worker now fires every 5 min from `dispatch_hour:00` through `23:59` IST. Idempotency preserved via post-send `rejection_sent=True` flag. Live verified: tester rejected at 20:42 IST → next tick at 21:24 IST dispatched both WA + Email successfully (`[Email] SENT via=smtp`, `[WhatsApp:RESP] status=200`).
+  - **Bug 2 RCA — Three layers of leakage**:
+    1. `/api/job-roles` (analytics) grouped by `_normalized_job_role` (the *normalized raw text*, NOT the canonical mapping target) — so dashboard saw every raw variant as its own bucket.
+    2. `/api/job-titles/unmatched` returned `raw_job_title` per row (not normalized), and relied on a `is_mapped` flag that drifts when `job_keyword_mapping.keywords[]` contains case variants. Result: "ABC" and "abc" both showed up; mapped keywords also leaked through.
+    3. `/api/bb/job-roles` (the dropdown source for HiringForms / JobOpenings / ManageJobRoles / InterviewReports) returned every row in `bb_job_roles` raw — including imported variants like `'Ai Ml Engineer'` next to the canonical `'AI & ML Engineer'`.
+  - **Bug 2 Fix — Read-time canonicalization (no DB rewrite)**:
+    - New `server._build_canonical_index()` returns `(kw_to_canonical, canonical_set)` — one Mongo query per request, dict lookups per row.
+    - New `server._canonicalize_job_role(raw, idx)` helper used by callers.
+    - `/api/job-roles` (analytics) rolls up by canonical title — sums counts (e.g. 'AI & ML Engineer' now consolidates 70,274 applicants across all mapped variants vs the 778 it showed before).
+    - `/api/job-titles/unmatched` rewritten — pulls candidates from BOTH `job_titles_master` AND `bb_job_roles`, collapses by `_normalize_text_for_matching`, excludes anything in `job_keyword_mapping.keywords[]` OR any canonical `job_role`. Case-variant dupes gone, mapped keywords gone.
+    - `/api/bb/job-roles` rewritten — emits (a) every canonical mapping target, then (b) every `bb_job_roles` row whose normalized name is NOT a mapped keyword AND NOT a canonical target. Preserves existing `_id` for edit/delete actions. Forces canonical casing.
+  - **Live verification** —
+    - `/api/job-roles` → 35 canonical rows (was hundreds).
+    - `/api/job-titles/unmatched` → 54 entries, 0 case-variant duplicates, mapped keyword `'AI & ML Engineer - C++ or Java Developer'` correctly excluded.
+    - `/api/bb/job-roles` → 57 dropdown rows; canonical `'AI & ML Engineer'`, `'Accountant'`, `'AI System Engineer'` present; mapped variants `'Ai Ml Engineer'`, `'Accountant Out Reach'` suppressed.
+  - **Zero DB mutation**: historical `pipeline_data.job_role` values stay raw — canonicalization happens only at READ time, so production data is untouched.
+
+
 - **Feb 2026 (iter98)** — Rejection-notification re-trigger bug fix + scheduler observability + Update Scores today-default.
   - **Root cause**: When an applicant who had previously been rejected (and notified) was re-rejected via Update Scores → `PUT /api/bb/applicant-score/{email}` only updated `status` + `updated_at`. The stale `rejection_sent: True` flag from the earlier dispatch persisted, so the 19:00 IST evening dispatcher's filter `rejection_sent: {$ne: True}` permanently excluded the row. Re-registration's flag reset also missed `rejection_sent` (cleared only `rejection_notified` + `import_rejection_notified`).
   - **Fix #1** (`bb_modules.py:update_applicant_score`) — When `data.status.lower() == "rejected"`, perform a `$unset` of `rejection_sent`, `rejection_sent_at`, `rejection_notified`, `rejection_notified_at`, `import_rejection_notified`, `rejection_send_ok` alongside the `$set`. Idempotency preserved by the worker re-setting `rejection_sent=True` after a successful dispatch.

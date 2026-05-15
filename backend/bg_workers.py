@@ -496,13 +496,19 @@ async def _worker_import_rejection_mailer():
     except (ValueError, TypeError) as _e:
         _logger.warning(f"[Reject:Evening] invalid REJECTION_DISPATCH_HOUR ({_e!r}), defaulting to 19")
         _dispatch_hour = 19
-    _logger.info(f"Rejection mailer worker started (evening dispatcher @ {_dispatch_hour:02d}:00 IST)")
+    _logger.info(f"Rejection mailer worker started (evening dispatcher >= {_dispatch_hour:02d}:00 IST)")
     while _running:
         try:
             now_local = _local_now()  # IST
-            # Outside the dispatch window → skip sends entirely.
-            if now_local.hour != _dispatch_hour:
-                _logger.debug(f"[RejectScheduler] outside window (IST hour={now_local.hour}, target={_dispatch_hour}), sleeping 300s")
+            # iter99 — Window semantics: fire any pending rejections from
+            # `dispatch_hour:00` onward through 23:59 IST. We previously gated
+            # strictly on `hour == dispatch_hour` (a 1-hour slot), so a tester
+            # rejected at 20:42 had to wait until tomorrow's 19:00. Idempotency
+            # is preserved via the `rejection_sent=True` flag set after each
+            # successful send — late-evening ticks safely re-scan and only
+            # process newly-eligible rows.
+            if now_local.hour < _dispatch_hour:
+                _logger.debug(f"[RejectScheduler] before window (IST hour={now_local.hour}, target>={_dispatch_hour}), sleeping 300s")
                 await asyncio.sleep(300)
                 continue
 

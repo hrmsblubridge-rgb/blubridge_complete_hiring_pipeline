@@ -503,11 +503,63 @@ class JobRoleBody(BaseModel):
 
 @bb_router.get("/job-roles")
 async def list_job_roles(request: Request):
+    """List job roles for dropdowns / management UI.
+
+    iter99 — Read-time canonicalization:
+      1. Every canonical `job_role` from `job_keyword_mapping` is included
+         (these are the targets recruiters mapped raw keywords to).
+      2. Every `bb_job_roles` row whose normalized name is NOT a mapped
+         keyword and NOT already a canonical target is included (truly
+         independent manual creates).
+      3. Case-insensitive dedupe by normalized name — the canonical row
+         wins so the displayed casing matches the mapping target.
+    The returned shape is unchanged: {roles: [{id, name, source?, ...}]}.
+    """
     await _require_auth(request)
-    roles = await _db.bb_job_roles.find({}).sort("name", 1).to_list(None)
-    for r in roles:
+
+    # Build the canonical-keyword index via server.py helper to keep one
+    # source of truth.
+    from server import _build_canonical_index as _bci, _normalize_text_for_matching as _nrm
+    kw_to_canonical, canonical_set = await _bci()
+
+    # All bb_job_roles rows keyed by normalized name (preserves _id for the
+    # frontend's edit/delete actions).
+    bb_rows: dict = {}
+    async for r in _db.bb_job_roles.find({}).sort("name", 1):
+        nm = (r.get("name") or "").strip()
+        if not nm:
+            continue
+        bb_rows.setdefault(_nrm(nm), r)
+
+    out: list = []
+    seen_norms = set()
+
+    # 1) Canonical mapping targets first.
+    for canonical in {kw_to_canonical[k] for k in kw_to_canonical}:
+        nrm = _nrm(canonical)
+        if nrm in seen_norms:
+            continue
+        seen_norms.add(nrm)
+        # Prefer existing bb_job_roles _id so edit/delete keeps working.
+        if nrm in bb_rows:
+            r = bb_rows[nrm]
+            r["id"] = str(r.pop("_id"))
+            r["name"] = canonical  # force canonical casing
+            out.append(r)
+        else:
+            out.append({"id": f"canonical:{nrm}", "name": canonical, "source": "canonical"})
+
+    # 2) bb_job_roles rows that aren't mapped keywords and not already
+    #    surfaced as canonical → truly independent manual creates.
+    for nrm, r in bb_rows.items():
+        if nrm in seen_norms or nrm in kw_to_canonical:
+            continue
+        seen_norms.add(nrm)
         r["id"] = str(r.pop("_id"))
-    return {"roles": roles}
+        out.append(r)
+
+    out.sort(key=lambda x: (x.get("name") or "").lower())
+    return {"roles": out}
 
 @bb_router.post("/job-roles")
 async def create_job_role(data: JobRoleBody, request: Request):
