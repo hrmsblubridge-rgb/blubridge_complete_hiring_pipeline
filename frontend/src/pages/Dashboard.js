@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, FileText, UserCheck, FolderPlus, GraduationCap, Tag, ArrowLeft, MagnifyingGlass } from '@phosphor-icons/react';
 import BulkUploadModal from '../components/BulkUploadModal';
 import CandidateJourneyModal from '../components/CandidateJourneyModal';
+import ApplicantSearchCards from '../components/ApplicantSearchCards';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -19,15 +20,18 @@ export default function Dashboard() {
     const [uploading, setUploading] = useState({ naukri: false, pipeline: false, scoresheet: false, collegerank: false });
     const [uploadResult, setUploadResult] = useState({ naukri: null, pipeline: null, scoresheet: null, collegerank: null });
     const [bulkType, setBulkType] = useState(null);
-    // Iter53 — Score and Round quick-search state
+    // Iter53 / iter97 — Score and Round quick-search state. Now uses the shared
+    // ApplicantSearchCards component for partial-match + 6-digit phone-min rule
+    // so this Dashboard search behaves identically to /candidate-journey,
+    // /manual-alerts and /manual-otp-verify.
     const [journeyQuery, setJourneyQuery] = useState('');
     const [journeyCandidate, setJourneyCandidate] = useState(null);
 
-    const openJourney = () => {
-        const q = (journeyQuery || '').trim();
-        if (!q) { toast.warning('Enter an email or phone'); return; }
-        const isEmail = q.includes('@');
-        setJourneyCandidate(isEmail ? { email: q.toLowerCase() } : { phone: q.replace(/\D/g, '').slice(-10) });
+    const handleJourneySelect = (card) => {
+        const payload = {};
+        if (card.email) payload.email = String(card.email).toLowerCase();
+        if (card.phone) payload.phone = String(card.phone).replace(/\D/g, '').slice(-10);
+        setJourneyCandidate(payload);
     };
 
     const handleUpload = async (type, file) => {
@@ -163,7 +167,9 @@ export default function Dashboard() {
                     </button>
                 </section>
 
-                {/* Iter53 — Score and Round quick-search → Candidate Journey modal */}
+                {/* Iter53 / iter97 — Score and Round quick-search → Candidate Journey modal.
+                    Now uses ApplicantSearchCards so partial name/email/phone matching,
+                    6-digit phone minimum, and card-click flow match the rest of the app. */}
                 <section className="space-y-4 pt-4" data-testid="score-round-section">
                     <h2 className="text-sm font-medium text-zinc-500 uppercase tracking-widest">Score and Round</h2>
                     <div className="bg-zinc-900 border border-zinc-800 hover:border-cyan-600 transition-all p-5">
@@ -174,23 +180,16 @@ export default function Dashboard() {
                                 <div className="text-sm text-zinc-500 mt-0.5">Look up any candidate's full lifecycle — rounds, scores, status, induction date</div>
                             </div>
                         </div>
-                        <div className="flex gap-2 mt-4">
-                            <input
-                                type="text"
+                        <div className="mt-4">
+                            <ApplicantSearchCards
                                 value={journeyQuery}
-                                onChange={e => setJourneyQuery(e.target.value)}
-                                onKeyDown={e => e.key === 'Enter' && openJourney()}
-                                placeholder="Email or phone…"
-                                data-testid="journey-search-input"
-                                className="flex-1 bg-zinc-950 border border-zinc-800 px-4 py-2.5 text-sm focus:outline-none focus:border-cyan-600 placeholder-zinc-600"
+                                onChange={setJourneyQuery}
+                                onSelect={handleJourneySelect}
+                                onCancel={() => setJourneyQuery('')}
+                                testIdPrefix="journey-search"
+                                placeholder="Type name, email, or phone (6+ digits for phone)…"
+                                autoFocus={false}
                             />
-                            <button
-                                onClick={openJourney}
-                                data-testid="journey-search-btn"
-                                className="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium transition-colors flex items-center gap-2"
-                            >
-                                <MagnifyingGlass size={16} /> View Journey
-                            </button>
                         </div>
                     </div>
                 </section>

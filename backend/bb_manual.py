@@ -81,10 +81,18 @@ async def _search_applicants(q: str, limit: int = 25) -> list:
     Email/name match using `re.escape(q)` so special chars are inert.
     Returns at most `limit` summary dicts: {name, email, phone, job_role,
     registered_status}. Empty list when q is too short or no matches.
+
+    iter97 — Pure numeric inputs require at least 6 digits before we fire
+    a phone substring scan. Shorter digit inputs return [] without touching
+    Mongo. Letter-containing inputs keep the 2-char minimum since they hit
+    indexed text fields (name, email).
     """
     import re
     q = (q or "").strip()
     if len(q) < 2 or _db is None:
+        return []
+    # iter97 — minimum 6 digits for phone-style queries.
+    if q.isdigit() and len(q) < 6:
         return []
     safe = re.escape(q)
     digits = "".join(ch for ch in q if ch.isdigit())

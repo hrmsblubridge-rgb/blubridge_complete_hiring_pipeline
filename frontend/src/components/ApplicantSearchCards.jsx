@@ -43,7 +43,14 @@ export default function ApplicantSearchCards({
     useEffect(() => {
         const q = (value || '').trim();
         if (timer.current) clearTimeout(timer.current);
-        if (q.length < 2) {
+        // iter97 — Numeric-only inputs trigger phone matching; require at least
+        // 6 digits before firing a backend query. This guards against noisy /
+        // expensive phone substring scans (e.g. "12" matching tens of thousands
+        // of rows). Alphanumeric or letter-containing inputs continue to use
+        // the existing 2-char minimum since they hit indexed name/email fields.
+        const isDigitOnly = q.length > 0 && /^\d+$/.test(q);
+        const minLen = isDigitOnly ? 6 : 2;
+        if (q.length < minLen) {
             setItems([]);
             setLoading(false);
             setHasFetched(false);
@@ -75,6 +82,11 @@ export default function ApplicantSearchCards({
         return () => { if (timer.current) clearTimeout(timer.current); };
     }, [value]);
 
+    // iter97 — Inline hint state for the "need 6 digits" rule.
+    const _q = (value || '').trim();
+    const _isDigitOnly = _q.length > 0 && /^\d+$/.test(_q);
+    const _needsMoreDigits = _isDigitOnly && _q.length < 6;
+
     return (
         <div className="space-y-3" data-testid={`${testIdPrefix}-search-wrap`}>
             {/* Search bar */}
@@ -95,8 +107,10 @@ export default function ApplicantSearchCards({
                             <Spinner size={16} className="absolute right-3 top-2.5 text-[#1d3a8a] animate-spin" data-testid={`${testIdPrefix}-loading`} />
                         )}
                     </div>
-                    <p className="text-[11px] text-[#9b9787] mt-1 italic">
-                        Partial match — type any part of name, email, or phone. Min 2 characters.
+                    <p className="text-[11px] text-[#9b9787] mt-1 italic" data-testid={`${testIdPrefix}-helper`}>
+                        {_needsMoreDigits
+                            ? 'Enter at least 6 digits to search phone numbers.'
+                            : 'Partial match — type any part of name, email, or phone (6+ digits for phone). Min 2 characters.'}
                     </p>
                 </div>
                 {onCancel && (
