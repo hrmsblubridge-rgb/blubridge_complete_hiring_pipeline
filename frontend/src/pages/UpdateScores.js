@@ -24,8 +24,19 @@ export default function UpdateScores() {
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(100);
     const [loading, setLoading] = useState(true);
-    const [startDate, setStartDate] = useState('');
-    const [endDate, setEndDate] = useState('');
+    // iter98 — Default the date filter to TODAY (local) so the page lands on
+    // current-day attended applicants only. Recruiters can blank the dates
+    // (or pick a wider range) to see historical records — existing UI is
+    // untouched, only the initial state changes.
+    const _today = (() => {
+        const d = new Date();
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${dd}`;
+    })();
+    const [startDate, setStartDate] = useState(_today);
+    const [endDate, setEndDate] = useState(_today);
     const [showUpdate, setShowUpdate] = useState(null);
     const [updateStatus, setUpdateStatus] = useState('On hold');
     const [updateScores, setUpdateScores] = useState([{ round_name: '', score: '' }]);

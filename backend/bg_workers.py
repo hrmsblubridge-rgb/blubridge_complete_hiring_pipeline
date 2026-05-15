@@ -502,21 +502,26 @@ async def _worker_import_rejection_mailer():
             now_local = _local_now()  # IST
             # Outside the dispatch window → skip sends entirely.
             if now_local.hour != _dispatch_hour:
-                _logger.debug(f"[Reject:Evening] outside window (IST hour={now_local.hour}, target={_dispatch_hour}), sleeping")
+                _logger.debug(f"[RejectScheduler] outside window (IST hour={now_local.hour}, target={_dispatch_hour}), sleeping 300s")
                 await asyncio.sleep(300)
                 continue
 
-            _logger.info(f"[Reject:Evening] window OPEN (IST {now_local.isoformat()}, target_hour={_dispatch_hour}) — processing pending rejections")
+            _logger.info(f"[RejectScheduler] TICK window=OPEN ist={now_local.isoformat()} target_hour={_dispatch_hour} cutoff={MESSAGING_CUTOFF_TS}")
             sent = 0
+            skipped_no_name = 0
+            skipped_send_failed = 0
 
             # ---- Source A: post-interview rejections (bb_applicant_updates) ----
-            cursor_a = _db.bb_applicant_updates.find({
+            filter_a = {
                 "status": "Rejected",
                 "rejection_sent": {"$ne": True},
                 "rejection_notified": {"$ne": True},
                 "import_rejection_notified": {"$ne": True},
                 "updated_at": {"$gte": MESSAGING_CUTOFF_TS},
-            })
+            }
+            count_a = await _db.bb_applicant_updates.count_documents(filter_a)
+            _logger.info(f"[RejectFetch] sourceA=bb_applicant_updates pending_rejections={count_a} filter={filter_a}")
+            cursor_a = _db.bb_applicant_updates.find(filter_a)
             async for doc in cursor_a:
                 email = (doc.get("email") or "").strip()
                 phone = (doc.get("phone") or "").strip()
@@ -524,14 +529,23 @@ async def _worker_import_rejection_mailer():
                 # iter88 — ABORT if any required template field is missing.
                 # Never send a rejection with a placeholder/dummy name.
                 if not name or (not email and not phone):
+                    skipped_no_name += 1
                     _logger.warning(
-                        f"[Reject:Evening:UI] SKIP — missing required field "
-                        f"(name={bool(name)} email={bool(email)} phone={bool(phone)}) "
-                        f"doc_id={doc.get('_id')}"
+                        f"[RejectSkip:A] reason=missing_field name={bool(name)} "
+                        f"email={bool(email)} phone={bool(phone)} doc_id={doc.get('_id')}"
                     )
                     continue
+                _logger.info(
+                    f"[RejectSend:A] attempt email={email!r} phone={phone!r} "
+                    f"name={name!r} is_test={bool(doc.get('isTest'))} "
+                    f"job_role={(doc.get('job_role') or doc.get('job_title') or '')!r}"
+                )
                 try:
                     from messaging import notify_rejected
+                    # iter98 — emit WA + Email attempt markers BEFORE the call so
+                    # we always see the attempt in logs even if SMTP/AiSensy crashes.
+                    _logger.info(f"[RejectSend:WA]    starting email={email!r} phone={phone!r}")
+                    _logger.info(f"[RejectSend:Email] starting email={email!r}")
                     ok = await notify_rejected(
                         name, phone, email,
                         job_role=doc.get("job_role") or doc.get("job_title") or "",
@@ -548,30 +562,41 @@ async def _worker_import_rejection_mailer():
                         }},
                     )
                     sent += 1
-                    _logger.info(f"[Reject:Evening:UI] Sent to {email} ok={ok}")
+                    _logger.info(f"[RejectSend:A] DONE email={email!r} ok={ok}")
                 except Exception as send_err:
-                    _logger.error(f"[Reject:Evening:UI] Send failed for {email}: {send_err}")
+                    skipped_send_failed += 1
+                    _logger.error(f"[RejectSend:A] FAILED email={email!r}: {send_err!r}")
 
             # ---- Source B: form-condition rejections (bb_registrations) ----
-            cursor_b = _db.bb_registrations.find({
+            filter_b = {
                 **_cutoff_filter(),
                 "rejection_pending": True,
                 "rejection_sent": {"$ne": True},
-            })
+            }
+            count_b = await _db.bb_registrations.count_documents(filter_b)
+            _logger.info(f"[RejectFetch] sourceB=bb_registrations pending_rejections={count_b}")
+            cursor_b = _db.bb_registrations.find(filter_b)
             async for doc in cursor_b:
                 email = (doc.get("email") or "").strip()
                 phone = (doc.get("phone") or "").strip()
                 name = (doc.get("full_name") or doc.get("name") or "").strip()
                 # iter88 — ABORT if any required template field is missing.
                 if not name or (not email and not phone):
+                    skipped_no_name += 1
                     _logger.warning(
-                        f"[Reject:Evening:Form] SKIP — missing required field "
-                        f"(name={bool(name)} email={bool(email)} phone={bool(phone)}) "
-                        f"doc_id={doc.get('_id')}"
+                        f"[RejectSkip:B] reason=missing_field name={bool(name)} "
+                        f"email={bool(email)} phone={bool(phone)} doc_id={doc.get('_id')}"
                     )
                     continue
+                _logger.info(
+                    f"[RejectSend:B] attempt email={email!r} phone={phone!r} "
+                    f"name={name!r} reason_code={doc.get('rejection_reason_code')!r} "
+                    f"is_test={bool(doc.get('isTest'))}"
+                )
                 try:
                     from messaging import notify_rejected_with_reason
+                    _logger.info(f"[RejectSend:WA]    starting email={email!r} phone={phone!r} reason=form-condition")
+                    _logger.info(f"[RejectSend:Email] starting email={email!r} reason=form-condition")
                     ok = await notify_rejected_with_reason(
                         name, phone, email,
                         doc.get("rejection_reason_code") or "",
@@ -590,15 +615,18 @@ async def _worker_import_rejection_mailer():
                         }},
                     )
                     sent += 1
-                    _logger.info(f"[Reject:Evening:Form] Sent to {email} ok={ok}")
+                    _logger.info(f"[RejectSend:B] DONE email={email!r} ok={ok}")
                 except Exception as send_err:
-                    _logger.error(f"[Reject:Evening:Form] Send failed for {email}: {send_err}")
+                    skipped_send_failed += 1
+                    _logger.error(f"[RejectSend:B] FAILED email={email!r}: {send_err!r}")
 
-            if sent:
-                _logger.info(f"[Reject:Evening] Batch complete — {sent} rejection notifications sent")
+            _logger.info(
+                f"[RejectScheduler] BATCH_DONE sent={sent} "
+                f"skipped_missing_field={skipped_no_name} send_failed={skipped_send_failed}"
+            )
 
         except Exception as e:
-            _logger.error(f"[Rejection Mailer Worker] Error: {e}")
+            _logger.error(f"[RejectScheduler] FATAL {e!r}")
 
         # Poll every 5 minutes. The hour-gate guarantees at most ~12 send-passes
         # per day inside the 19:00 window; each pass is idempotent.

@@ -1317,6 +1317,13 @@ async def register_college_applicant(data: CollegeRegistrationBody):
                             "result_status": "",
                             "rejection_notified": False,
                             "import_rejection_notified": False,
+                            # iter98 — Re-registration MUST clear rejection_sent
+                            # too. Otherwise the 19:00 evening dispatcher
+                            # filter `rejection_sent: {$ne: True}` skips this
+                            # row forever for the new application cycle.
+                            "rejection_sent": False,
+                            "rejection_sent_at": "",
+                            "rejection_send_ok": False,
                             "scores_reset_at": submitted_at,
                         }},
                     )
@@ -2338,7 +2345,31 @@ async def update_applicant_score(email: str, data: ApplicantScoreUpdate, request
                 continue
             existing_by_round[canon] = {"round_name": s.round_name, "score": s.score}
         update_doc["scores"] = list(existing_by_round.values())
-    await _db.bb_applicant_updates.update_one({"email": email}, {"$set": update_doc}, upsert=True)
+    # iter98 — When the recruiter sets status="Rejected" we MUST clear any
+    # rejection-send tracking flags from a previous rejection cycle. Without
+    # this reset, the 19:00 IST evening rejection dispatcher (`bg_workers.
+    # _worker_import_rejection_mailer` source A) filters out this doc forever
+    # because `rejection_sent: {$ne: True}` still matches yesterday's send.
+    # Idempotency is preserved by the worker itself — once it dispatches, it
+    # flips `rejection_sent=True` again before the next cycle.
+    extra_unset = {}
+    if (data.status or "").strip().lower() == "rejected":
+        extra_unset = {
+            "rejection_sent": "",
+            "rejection_sent_at": "",
+            "rejection_notified": "",
+            "rejection_notified_at": "",
+            "import_rejection_notified": "",
+            "rejection_send_ok": "",
+        }
+        _logger.info(
+            f"[RejectFlagsReset] update_applicant_score email={email} "
+            f"new_status={data.status!r} -> clearing rejection_sent/notified/import flags"
+        )
+    op = {"$set": update_doc}
+    if extra_unset:
+        op["$unset"] = extra_unset
+    await _db.bb_applicant_updates.update_one({"email": email}, op, upsert=True)
     await _db.registered_candidates.update_many({"email": email}, {"$set": {"result_status": data.status}})
     # iter69e (#8) — Sync result_status to pipeline_data so the Manual Alerts
     # page, View Applicants, View Attended Applicants, and analytics all see
@@ -4124,6 +4155,12 @@ async def register_applicant(data: RegistrationBody):
                         "result_status": "",
                         "rejection_notified": False,
                         "import_rejection_notified": False,
+                        # iter98 — clear rejection_sent on re-registration so
+                        # the new application cycle can re-trigger a 19:00
+                        # rejection dispatch if/when the recruiter rejects.
+                        "rejection_sent": False,
+                        "rejection_sent_at": "",
+                        "rejection_send_ok": False,
                         "scores_reset_at": datetime.now(timezone.utc).isoformat(),
                     }},
                 )
