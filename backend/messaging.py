@@ -414,29 +414,45 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str, is
         try:
             _ipv4 = socket.getaddrinfo(SMTP_HOST, _port, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
         except socket.gaierror as _ge:
-            _logger.error(f"[Email] DNS A-record lookup failed for {SMTP_HOST}: {_ge}")
+            _logger.error(f"[SMTP:FAIL] stage=dns host={SMTP_HOST} err={_ge!r}")
             return False
         context.check_hostname = False
 
-        if is_test_mode():
-            _logger.info(
-                f"[SMTP DEBUG] provider=smtp host={SMTP_HOST} ipv4={_ipv4} port={_port} "
-                f"ssl={_port == 465} starttls={_port == 587} from={FROM_EMAIL}"
-            )
+        # iter101 — Granular SMTP stage markers so production failures are
+        # diagnosable from a single grep. Each tag is single-shot per send.
+        _logger.info(f"[SMTP:CONNECT] host={SMTP_HOST} ipv4={_ipv4} port={_port} ssl={_port == 465} timeout=15s to={to_email}")
         if _port == 587:
-            with smtplib.SMTP(_ipv4, _port, timeout=15) as server:
-                server.ehlo(SMTP_HOST)
-                server.starttls(context=context)
-                server.ehlo(SMTP_HOST)
-                server.login(SMTP_USER, SMTP_PASSWORD)
-                server.sendmail(FROM_EMAIL, to_email, msg.as_string())
+            try:
+                with smtplib.SMTP(_ipv4, _port, timeout=15) as server:
+                    server.ehlo(SMTP_HOST)
+                    server.starttls(context=context)
+                    server.ehlo(SMTP_HOST)
+                    server.login(SMTP_USER, SMTP_PASSWORD)
+                    _logger.info(f"[SMTP:SEND] starttls login=ok to={to_email}")
+                    server.sendmail(FROM_EMAIL, to_email, msg.as_string())
+            except (smtplib.SMTPException, TimeoutError, OSError) as _se:
+                # TimeoutError covers `timed out`; OSError covers EHOSTUNREACH
+                # / ECONNREFUSED from Render free-tier outbound blocks.
+                _tag = "TIMEOUT" if isinstance(_se, TimeoutError) or "timed out" in str(_se).lower() else "FAIL"
+                _logger.error(f"[SMTP:{_tag}] stage=starttls host={SMTP_HOST} port={_port} to={to_email} err={_se!r}")
+                return False
         else:
-            with smtplib.SMTP_SSL(_ipv4, _port, context=context, timeout=15) as server:
-                server.login(SMTP_USER, SMTP_PASSWORD)
-                server.sendmail(FROM_EMAIL, to_email, msg.as_string())
+            try:
+                with smtplib.SMTP_SSL(_ipv4, _port, context=context, timeout=15) as server:
+                    server.login(SMTP_USER, SMTP_PASSWORD)
+                    _logger.info(f"[SMTP:SEND] ssl login=ok to={to_email}")
+                    server.sendmail(FROM_EMAIL, to_email, msg.as_string())
+            except (smtplib.SMTPException, TimeoutError, OSError) as _se:
+                _tag = "TIMEOUT" if isinstance(_se, TimeoutError) or "timed out" in str(_se).lower() else "FAIL"
+                _logger.error(f"[SMTP:{_tag}] stage=ssl host={SMTP_HOST} port={_port} to={to_email} err={_se!r}")
+                return False
+        _logger.info(f"[SMTP:SUCCESS] to={to_email} subject={subject}")
         _logger.info(f"[Email] SENT via=smtp to={to_email} subject={subject}")
         return True
     except Exception as e:
+        # Catch-all — anything that escapes the inner try/excepts gets logged
+        # with a generic FAIL tag rather than propagating up to the worker.
+        _logger.error(f"[SMTP:FAIL] stage=unexpected to={to_email} subject={subject} err={e!r}")
         _logger.error(f"[Email] FAILED to={to_email} subject={subject}: {e}")
         return False
 

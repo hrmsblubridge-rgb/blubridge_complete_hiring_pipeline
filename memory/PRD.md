@@ -45,6 +45,28 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter101)** — Scheduler heartbeat + granular SMTP stage logging.
+  - **Issue 2 RCA — "Scheduler not executing"**: It WAS executing. The iter99 dispatcher correctly sleeps from `00:00` to `dispatch_hour:00` IST, but the "before window" branch logged at `DEBUG` level. The root logger is at `INFO`, so for ~19 hours/day the worker was silently alive but invisible — admins grepping logs in the morning naturally assumed it had died.
+  - **Issue 2 Fix** (`bg_workers.py` — `_worker_import_rejection_mailer`):
+    - `[RejectScheduler:INIT]` on worker boot — prints `dispatch_hour`, `cutoff`, and `poll_every`.
+    - `[RejectScheduler:STARTED]` once before the loop enters.
+    - `[RejectScheduler:HEARTBEAT]` at INFO every ~30 min (1 in 6 ticks) while before window — proves loop liveness without flooding logs.
+    - `[RejectScheduler:TICK]` + `[RejectScheduler:TIME_CHECK]` when entering the window.
+    - Existing `[RejectFetch]`, `[RejectSend:A|B]`, `[RejectSend:WA]`, `[RejectSend:Email]`, `[RejectSkip]`, `BATCH_DONE` unchanged.
+    - Outer `try/except` retained → a single Mongo / send exception cannot kill the loop.
+  - **Issue 1 RCA — SMTP timeouts hidden**: `send_email` had a single `try/except Exception` wrapping everything, so the only observable signal on failure was the terminal `[Email] FAILED ... timed out` line. The CONNECT / SEND stages were invisible — couldn't tell whether failure was DNS, TLS handshake, login, or transport.
+  - **Issue 1 Fix** (`messaging.py` — `send_email` SMTP branch):
+    - `[SMTP:CONNECT]` logs host, resolved IPv4, port, SSL flag, timeout, recipient — printed BEFORE the `smtplib` call.
+    - `[SMTP:SEND]` after successful login on the open connection.
+    - `[SMTP:SUCCESS]` after `sendmail()` returns.
+    - On `(smtplib.SMTPException, TimeoutError, OSError)` → `[SMTP:TIMEOUT]` (if message contains "timed out" or is a `TimeoutError`) or `[SMTP:FAIL]` (everything else) with `stage=`, `host=`, `port=`, `to=`, `err=`. Returns `False` cleanly.
+    - DNS failure now logs `[SMTP:FAIL] stage=dns` instead of the generic line.
+    - Catch-all at function scope tags `[SMTP:FAIL] stage=unexpected` for anything that escapes the inner handlers.
+    - Existing `[Email] SENT` / `[Email] FAILED` lines retained for backward log-grep compatibility.
+    - WA path is **completely independent** — `notify_rejected` calls WA first, then email; an SMTP timeout no longer cascades because the email branch always returns a bool. The 15s timeout still bounds the worst-case stall per send.
+  - **Live verification** — Temporarily set `REJECTION_DISPATCH_HOUR=11` matching the current IST hour. Single grep of logs produced the full pipeline: `INIT → STARTED → TICK → TIME_CHECK → RejectSend → WhatsApp:RESP 200 → SMTP:CONNECT → SMTP:SEND → SMTP:SUCCESS → Email SENT via=smtp → BATCH_DONE sent=1`. Next tick reported `sent=0` (idempotency). Restored `REJECTION_DISPATCH_HOUR=19`.
+
+
 - **Feb 2026 (iter100)** — Public job-opening slug URLs + preview-card click crash fix.
   - **Bug 1 RCA — Internal ObjectIds in public URLs**: `/jobs/view/<24-hex-ObjectId>` leaked DB internals.
   - **Bug 1 Fix** — `bb_modules.py`:

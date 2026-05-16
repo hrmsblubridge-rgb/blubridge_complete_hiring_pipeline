@@ -494,25 +494,33 @@ async def _worker_import_rejection_mailer():
         if not (0 <= _dispatch_hour <= 23):
             raise ValueError("must be 0-23")
     except (ValueError, TypeError) as _e:
-        _logger.warning(f"[Reject:Evening] invalid REJECTION_DISPATCH_HOUR ({_e!r}), defaulting to 19")
+        _logger.warning(f"[RejectScheduler:INIT] invalid REJECTION_DISPATCH_HOUR ({_e!r}), defaulting to 19")
         _dispatch_hour = 19
-    _logger.info(f"Rejection mailer worker started (evening dispatcher >= {_dispatch_hour:02d}:00 IST)")
+    _logger.info(f"[RejectScheduler:INIT] dispatch_hour={_dispatch_hour:02d}:00 IST cutoff={MESSAGING_CUTOFF_TS} poll_every=300s")
+    _logger.info("[RejectScheduler:STARTED] worker loop entering")
+    # iter101 — Visible heartbeat. Without this, admins inspecting logs
+    # before 19:00 IST see no scheduler activity and assume the worker died.
+    # We log the "before-window" branch at INFO every ~30 min so the loop
+    # presence is always observable. The 5-min poll cadence is unchanged.
+    _heartbeat_counter = 0
     while _running:
         try:
             now_local = _local_now()  # IST
-            # iter99 — Window semantics: fire any pending rejections from
-            # `dispatch_hour:00` onward through 23:59 IST. We previously gated
-            # strictly on `hour == dispatch_hour` (a 1-hour slot), so a tester
-            # rejected at 20:42 had to wait until tomorrow's 19:00. Idempotency
-            # is preserved via the `rejection_sent=True` flag set after each
-            # successful send — late-evening ticks safely re-scan and only
-            # process newly-eligible rows.
             if now_local.hour < _dispatch_hour:
-                _logger.debug(f"[RejectScheduler] before window (IST hour={now_local.hour}, target>={_dispatch_hour}), sleeping 300s")
+                # Emit HEARTBEAT every ~30 min (1 in 6 ticks) so log volume
+                # stays low while still proving the loop is alive.
+                if _heartbeat_counter % 6 == 0:
+                    _logger.info(
+                        f"[RejectScheduler:HEARTBEAT] alive ist={now_local.isoformat()} "
+                        f"hour={now_local.hour} target>={_dispatch_hour} status=sleeping_until_window"
+                    )
+                _heartbeat_counter += 1
                 await asyncio.sleep(300)
                 continue
+            _heartbeat_counter = 0  # reset once we enter the window
 
-            _logger.info(f"[RejectScheduler] TICK window=OPEN ist={now_local.isoformat()} target_hour={_dispatch_hour} cutoff={MESSAGING_CUTOFF_TS}")
+            _logger.info(f"[RejectScheduler:TICK] window=OPEN ist={now_local.isoformat()} target_hour={_dispatch_hour} cutoff={MESSAGING_CUTOFF_TS}")
+            _logger.info(f"[RejectScheduler:TIME_CHECK] ok hour={now_local.hour}>={_dispatch_hour}")
             sent = 0
             skipped_no_name = 0
             skipped_send_failed = 0
