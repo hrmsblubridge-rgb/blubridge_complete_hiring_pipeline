@@ -1490,18 +1490,59 @@ class JobOpeningUpdate(BaseModel):
     added_advantages: Optional[str] = None
     what_we_offer: Optional[str] = None
 
+# iter100 — Slug helpers for public job-opening URLs. Slugs are lower-case,
+# hyphenated, alnum-safe; collisions get a numeric suffix. We never rewrite
+# historical rows aggressively — slugs are generated on CREATE, on UPDATE
+# when the title changes, and lazily back-filled the first time a row is
+# read via /job-openings.
+def _slugify_title(title: str) -> str:
+    """`AI & ML Engineer (2025)` → `ai-ml-engineer-2025`. Empty input → ''."""
+    s = (title or "").lower().strip()
+    # Replace any non-alnum with hyphen, then collapse runs and trim ends.
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    s = re.sub(r"-+", "-", s).strip("-")
+    return s[:80]  # safety cap
+
+
+async def _unique_job_opening_slug(base: str, *, exclude_id=None) -> str:
+    """Returns `base` if free, otherwise appends `-2`, `-3`, ... until free.
+    `exclude_id` lets the UPDATE path keep its own slug unchanged."""
+    if not base:
+        base = "job"
+    candidate = base
+    n = 1
+    while True:
+        q = {"slug": candidate}
+        if exclude_id is not None:
+            q["_id"] = {"$ne": exclude_id}
+        if not await _db.bb_job_openings.find_one(q, {"_id": 1}):
+            return candidate
+        n += 1
+        candidate = f"{base}-{n}"
+
+
 @bb_router.get("/job-openings")
 async def list_job_openings(request: Request):
     await _require_auth(request)
     openings = await _db.bb_job_openings.find({}).sort("created_at", -1).to_list(None)
+    # iter100 — Lazy slug back-fill. Rows created before the slug feature
+    # have no `slug` field; assign + persist one on first read so future
+    # public URLs are clean. We never mutate any other field here.
     for o in openings:
+        if not o.get("slug"):
+            slug = await _unique_job_opening_slug(_slugify_title(o.get("title", "")), exclude_id=o["_id"])
+            await _db.bb_job_openings.update_one({"_id": o["_id"]}, {"$set": {"slug": slug}})
+            o["slug"] = slug
         o["id"] = str(o.pop("_id"))
     return {"openings": openings}
 
 @bb_router.post("/job-openings")
 async def create_job_opening(data: JobOpeningCreate, request: Request):
     await _require_auth(request)
-    doc = {"title": data.title.strip(), "job_role": (data.job_role or "").strip(),
+    title = data.title.strip()
+    slug = await _unique_job_opening_slug(_slugify_title(title))
+    doc = {"title": title, "slug": slug,
+           "job_role": (data.job_role or "").strip(),
            "vacancies": data.vacancies, "years_of_graduation": data.years_of_graduation or [],
            "education": data.education or [], "salary_range": (data.salary_range or "").strip(),
            "key_responsibilities": (data.key_responsibilities or "").strip(),
@@ -1509,11 +1550,12 @@ async def create_job_opening(data: JobOpeningCreate, request: Request):
            "what_we_offer": (data.what_we_offer or "").strip(),
            "created_at": datetime.now(timezone.utc).isoformat(), "updated_at": datetime.now(timezone.utc).isoformat()}
     result = await _db.bb_job_openings.insert_one(doc)
-    return {"success": True, "id": str(result.inserted_id)}
+    return {"success": True, "id": str(result.inserted_id), "slug": slug}
 
 @bb_router.put("/job-openings/{opening_id}")
 async def update_job_opening(opening_id: str, data: JobOpeningUpdate, request: Request):
     await _require_auth(request)
+    oid = _oid(opening_id)
     updates = {"updated_at": datetime.now(timezone.utc).isoformat()}
     for field in ["title", "job_role", "salary_range", "key_responsibilities", "added_advantages", "what_we_offer"]:
         val = getattr(data, field, None)
@@ -1525,7 +1567,10 @@ async def update_job_opening(opening_id: str, data: JobOpeningUpdate, request: R
         updates["years_of_graduation"] = data.years_of_graduation
     if data.education is not None:
         updates["education"] = data.education
-    result = await _db.bb_job_openings.update_one({"_id": _oid(opening_id)}, {"$set": updates})
+    # iter100 — Re-slug when title changes; keep existing slug otherwise.
+    if "title" in updates:
+        updates["slug"] = await _unique_job_opening_slug(_slugify_title(updates["title"]), exclude_id=oid)
+    result = await _db.bb_job_openings.update_one({"_id": oid}, {"$set": updates})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     return {"success": True}
@@ -1544,13 +1589,20 @@ async def delete_job_opening(opening_id: str, request: Request):
 # Returns only the public-safe display fields — never `_id`, `created_at`, or
 # any other internal metadata. Works for every existing and future opening
 # automatically (no migration needed — keys off the existing ObjectId).
-@pub_router.get("/job-opening/{opening_id}")
-async def get_public_job_opening(opening_id: str):
-    try:
-        oid = _oid(opening_id)
-    except Exception:
-        raise HTTPException(status_code=404, detail="Job opening not found")
-    opening = await _db.bb_job_openings.find_one({"_id": oid})
+@pub_router.get("/job-opening/{opening_id_or_slug}")
+async def get_public_job_opening(opening_id_or_slug: str):
+    """iter100 — Lookup is slug-first, ObjectId fallback so legacy
+    /jobs/view/<24-char-hex> links keep resolving."""
+    opening = None
+    # 1) Slug match (preferred — clean URLs)
+    opening = await _db.bb_job_openings.find_one({"slug": opening_id_or_slug})
+    # 2) Legacy ObjectId fallback
+    if not opening:
+        try:
+            oid = _oid(opening_id_or_slug)
+            opening = await _db.bb_job_openings.find_one({"_id": oid})
+        except Exception:
+            pass
     if not opening:
         raise HTTPException(status_code=404, detail="Job opening not found")
     return {

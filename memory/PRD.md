@@ -45,6 +45,23 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter100)** — Public job-opening slug URLs + preview-card click crash fix.
+  - **Bug 1 RCA — Internal ObjectIds in public URLs**: `/jobs/view/<24-hex-ObjectId>` leaked DB internals.
+  - **Bug 1 Fix** — `bb_modules.py`:
+    - New `_slugify_title()` (lowercase, alnum-hyphen, collapse runs, 80-char cap) + `_unique_job_opening_slug()` (collision suffix `-2`, `-3`, …).
+    - `POST /job-openings` → generates slug at create.
+    - `PUT /job-openings/{id}` → regenerates slug when title changes; otherwise leaves it.
+    - `GET /job-openings` → **lazy back-fill** — rows created before this iter get a slug assigned + persisted the first time they're read. No mass migration script needed.
+    - `GET /api/pub/job-opening/{key}` → tries slug match first, falls back to ObjectId lookup so existing `/jobs/view/<oid>` links still work for everyone who already received them.
+    - `JobOpenings.js` "Link" + "Copy" buttons now generate `${origin}/jobs/view/${o.slug || o.id}` — clean URL once slug is populated, ObjectId until then.
+  - **Bug 2 RCA — Preview-card click 500**: `bb_manual.py:lookup_applicant` did `(rec.get("otp") or "").strip()`. The affected applicant's `otp` was a **float** (`995857.0`) carried over from a CSV import where pandas inferred the OTP column as numeric. `.strip()` on a float raised `AttributeError: 'float' object has no attribute 'strip'` → 500 → "Failed to load applicant" toast. Worked on Candidate Journey because that page uses a separate `/api/bb/candidate-journey` endpoint that does its own string coercion.
+  - **Bug 2 Fix** — `bb_manual.py:lookup_applicant`:
+    - Defensive cast: `str(otp_raw).strip()` after a `None`/`""` guard.
+    - Trailing `.0` strip so float-imported OTPs (`995857.0`) render as `'995857'`.
+    - No DB rewrite — purely read-time coercion. Affected applicant `rajlearn06@gmail.com / 8883847098` now loads correctly on Manual Alerts + Manual OTP Verify.
+  - **Live verification** — Login as admin → `/applicant/lookup` returns 200 + full payload; `/job-openings` returns rows with both `slug` and `id`; public endpoint accepts both URL styles; invalid IDs/slugs return 404, not 500.
+
+
 - **Feb 2026 (iter99)** — Rejection scheduler window widened + job-title canonicalization at read time.
   - **Bug 1 RCA** — `bg_workers._worker_import_rejection_mailer` gated with `now.hour != _dispatch_hour`, restricting sends to the literal `19:00-19:59` IST hour. Any applicant rejected at 20:00+ had to wait until tomorrow's 19:00. Fix: `if now_local.hour < _dispatch_hour: skip` — worker now fires every 5 min from `dispatch_hour:00` through `23:59` IST. Idempotency preserved via post-send `rejection_sent=True` flag. Live verified: tester rejected at 20:42 IST → next tick at 21:24 IST dispatched both WA + Email successfully (`[Email] SENT via=smtp`, `[WhatsApp:RESP] status=200`).
   - **Bug 2 RCA — Three layers of leakage**:

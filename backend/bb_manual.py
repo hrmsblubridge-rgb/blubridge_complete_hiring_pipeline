@@ -246,14 +246,25 @@ async def lookup_applicant(request: Request, email: Optional[str] = None, phone:
     # New resolution order:
     #   1) pipeline_data.otp (if non-empty)
     #   2) most-recent bb_registrations.otp by otp_sent_at desc (any date)
-    otp_value = (rec.get("otp") or "").strip()
+    # iter100 — Defensive coercion. CSV/XLSX imports occasionally store the
+    # OTP column as a numeric (float) — calling `.strip()` directly on it
+    # crashes with `AttributeError: 'float' object has no attribute 'strip'`,
+    # which surfaces as a 500 on /applicant/lookup and breaks the preview-card
+    # click flow on Manual Alerts + Manual OTP Verify. Cast to string first,
+    # then trim, and drop any trailing `.0` that float→str produces.
+    _otp_raw = rec.get("otp")
+    if _otp_raw is None or _otp_raw == "":
+        otp_value = ""
+    else:
+        otp_value = str(_otp_raw).strip()
+        if otp_value.endswith(".0"):
+            otp_value = otp_value[:-2]
     if not otp_value:
         otp_value = await get_otp_for_schedule(
             rec.get("email") or "", rec.get("phone") or "",
             # Empty schedule_date forces the "latest overall" branch.
             "",
-        )
-    # Surface the fields the UI needs (drop legacy/internal-only keys).
+        )    # Surface the fields the UI needs (drop legacy/internal-only keys).
     return {
         "name":            rec.get("name") or "",
         "email":           rec.get("email") or "",

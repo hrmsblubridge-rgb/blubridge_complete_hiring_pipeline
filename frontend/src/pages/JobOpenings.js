@@ -83,18 +83,17 @@ export default function JobOpenings() {
                                     {o.education?.length > 0 && <div className="flex gap-1 mt-1">{o.education.map((e, i) => <span key={i} className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded">{e}</span>)}</div>}
                                 </div>
                                 <div className="flex gap-2 shrink-0">
-                                    <a href={`/jobs/view/${o.id}`} target="_blank" rel="noreferrer"
+                                    <a href={`/jobs/view/${o.slug || o.id}`} target="_blank" rel="noreferrer"
                                         data-testid={`opening-link-${o.id}`}
                                         title="Open Public Job Description"
                                         className="p-2 text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800"><LinkIcon size={16} /></a>
                                     <button
                                         onClick={() => {
-                                            // iter96 — Build absolute URL at runtime from current
-                                            // origin so the link always matches the live domain
-                                            // the recruiter is on (production / preview / custom
-                                            // subdomain). DB stores only the ObjectId; URL is
-                                            // constructed here. Mirrors HiringForms copy-link UX.
-                                            const url = `${window.location.origin}/jobs/view/${o.id}`;
+                                            // iter96/iter100 — Prefer slug for clean shareable URLs;
+                                            // fall back to ObjectId for any row whose slug back-fill
+                                            // is still in flight (the GET /job-openings listing
+                                            // lazy-fills it on first fetch so this is rare).
+                                            const url = `${window.location.origin}/jobs/view/${o.slug || o.id}`;
                                             navigator.clipboard.writeText(url)
                                                 .then(() => toast.success(`Copied: ${url}`))
                                                 .catch(() => toast.error('Clipboard write failed'));
