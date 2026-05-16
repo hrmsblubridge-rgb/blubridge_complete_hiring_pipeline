@@ -28,9 +28,14 @@ SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
 SMTP_USER = os.environ.get("SMTP_USER", "hiring@blubridge.com")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "zfdb buxc ehyq gctr")
 FROM_EMAIL = os.environ.get("FROM_EMAIL", "hiring@blubridge.com")
-# iter89 — Resend HTTPS API replaces SMTP path when RESEND_API_KEY is set.
-# Falls back to SMTP if the key is absent (e.g. local dev).
+# iter105 — Resend HTTPS API is now the SOLE email transport. SMTP imports
+# remain only for legacy code paths that may still reference smtplib; they
+# are no longer reached. Three env vars drive the API call; sensible
+# Render-friendly defaults are baked in so deploys without env overrides
+# keep working out-of-box.
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
+RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "onboarding@resend.dev").strip()
+RESEND_FROM_NAME = os.environ.get("RESEND_FROM_NAME", "Blubridge Recruitment").strip()
 
 OFFICE_LOCATION = "30, Norton Road, Mandavelipakkam, Raja Annamalai Puram, Chennai, Tamil Nadu - 600028."
 
@@ -369,91 +374,79 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str, is
         )
 
     try:
-        # iter89 — Resend HTTPS API (port 443) — preferred path. SMTP fallback
-        # only runs when RESEND_API_KEY is not configured. Keeps the same
-        # signature, gates, and idempotency contract.
-        if RESEND_API_KEY:
-            import asyncio
-            import resend as _resend
-            _resend.api_key = RESEND_API_KEY
-            if is_test_mode():
-                _logger.info(
-                    f"[SMTP DEBUG] provider=resend api=https port=443 "
-                    f"from={FROM_EMAIL} to={to_email}"
-                )
-            params = {
-                "from": FROM_EMAIL,
-                "to": [to_email],
-                "subject": subject,
-                "html": html_body,
-            }
-            # SDK is synchronous → run in thread to keep the event loop free.
-            result = await asyncio.to_thread(_resend.Emails.send, params)
+        # iter105 — Resend HTTPS API is the SOLE email transport. SMTP path
+        # has been removed because Render free-tier outbound SMTP is blocked
+        # and the Gmail SMTP relay was producing intermittent timeouts even
+        # when reachable. Resend's REST API runs on port 443 (always open)
+        # and gives us delivery IDs we can correlate in dashboards.
+        if not RESEND_API_KEY:
+            _logger.error(
+                f"[Email:FAIL] stage=config RESEND_API_KEY missing — set it on Render. "
+                f"to={to_email} subject={subject}"
+            )
+            return False
+
+        # Build the HTTP payload exactly per Resend's API:
+        #   POST https://api.resend.com/emails
+        #   Authorization: Bearer <api_key>
+        #   { from, to, subject, html }
+        from_field = (
+            f"{RESEND_FROM_NAME} <{RESEND_FROM_EMAIL}>"
+            if RESEND_FROM_NAME else RESEND_FROM_EMAIL
+        )
+        payload = {
+            "from": from_field,
+            "to": [to_email],
+            "subject": subject,
+            "html": html_body,
+        }
+
+        if is_test_mode():
             _logger.info(
-                f"[Email] SENT via=resend to={to_email} subject={subject} "
-                f"id={(result or {}).get('id')}"
+                f"[Email DEBUG] provider=resend api=https port=443 "
+                f"from={from_field!r} to={to_email}"
+            )
+
+        _logger.info(
+            f"[Email:REQ] provider=resend from={from_field!r} to={to_email} subject={subject!r}"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.post(
+                    "https://api.resend.com/emails",
+                    headers={
+                        "Authorization": f"Bearer {RESEND_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+        except (httpx.TimeoutException, httpx.NetworkError) as _ne:
+            _logger.error(
+                f"[Email:FAIL] stage=transport provider=resend to={to_email} err={_ne!r}"
+            )
+            return False
+
+        if resp.status_code in (200, 201):
+            try:
+                msg_id = (resp.json() or {}).get("id")
+            except Exception:
+                msg_id = None
+            _logger.info(
+                f"[Email] SENT via=resend to={to_email} subject={subject} id={msg_id}"
             )
             return True
 
-        # ---- Legacy SMTP path (only when RESEND_API_KEY is unset) ----
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = FROM_EMAIL
-        msg["To"] = to_email
-        msg.attach(MIMEText(html_body, "html"))
-
-        context = ssl.create_default_context()
-        _port = int(SMTP_PORT or 465)
-
-        # iter89 — Force IPv4 resolution. The `[Errno 101] Network is unreachable`
-        # symptom on cloud hosts is most often caused by `getaddrinfo` returning an
-        # IPv6 AAAA record first while the host has no v6 outbound routing. Resolving
-        # AF_INET only and connecting by literal IPv4 bypasses that path entirely.
-        # We disable hostname check (still verify cert chain via the default trust
-        # store) because we connect via IP literal — cert CN won't match.
-        try:
-            _ipv4 = socket.getaddrinfo(SMTP_HOST, _port, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
-        except socket.gaierror as _ge:
-            _logger.error(f"[SMTP:FAIL] stage=dns host={SMTP_HOST} err={_ge!r}")
-            return False
-        context.check_hostname = False
-
-        # iter101 — Granular SMTP stage markers so production failures are
-        # diagnosable from a single grep. Each tag is single-shot per send.
-        _logger.info(f"[SMTP:CONNECT] host={SMTP_HOST} ipv4={_ipv4} port={_port} ssl={_port == 465} timeout=15s to={to_email}")
-        if _port == 587:
-            try:
-                with smtplib.SMTP(_ipv4, _port, timeout=15) as server:
-                    server.ehlo(SMTP_HOST)
-                    server.starttls(context=context)
-                    server.ehlo(SMTP_HOST)
-                    server.login(SMTP_USER, SMTP_PASSWORD)
-                    _logger.info(f"[SMTP:SEND] starttls login=ok to={to_email}")
-                    server.sendmail(FROM_EMAIL, to_email, msg.as_string())
-            except (smtplib.SMTPException, TimeoutError, OSError) as _se:
-                # TimeoutError covers `timed out`; OSError covers EHOSTUNREACH
-                # / ECONNREFUSED from Render free-tier outbound blocks.
-                _tag = "TIMEOUT" if isinstance(_se, TimeoutError) or "timed out" in str(_se).lower() else "FAIL"
-                _logger.error(f"[SMTP:{_tag}] stage=starttls host={SMTP_HOST} port={_port} to={to_email} err={_se!r}")
-                return False
-        else:
-            try:
-                with smtplib.SMTP_SSL(_ipv4, _port, context=context, timeout=15) as server:
-                    server.login(SMTP_USER, SMTP_PASSWORD)
-                    _logger.info(f"[SMTP:SEND] ssl login=ok to={to_email}")
-                    server.sendmail(FROM_EMAIL, to_email, msg.as_string())
-            except (smtplib.SMTPException, TimeoutError, OSError) as _se:
-                _tag = "TIMEOUT" if isinstance(_se, TimeoutError) or "timed out" in str(_se).lower() else "FAIL"
-                _logger.error(f"[SMTP:{_tag}] stage=ssl host={SMTP_HOST} port={_port} to={to_email} err={_se!r}")
-                return False
-        _logger.info(f"[SMTP:SUCCESS] to={to_email} subject={subject}")
-        _logger.info(f"[Email] SENT via=smtp to={to_email} subject={subject}")
-        return True
+        _logger.error(
+            f"[Email:FAIL] stage=api provider=resend status={resp.status_code} "
+            f"to={to_email} body={resp.text[:300]!r}"
+        )
+        return False
     except Exception as e:
-        # Catch-all — anything that escapes the inner try/excepts gets logged
-        # with a generic FAIL tag rather than propagating up to the worker.
-        _logger.error(f"[SMTP:FAIL] stage=unexpected to={to_email} subject={subject} err={e!r}")
-        _logger.error(f"[Email] FAILED to={to_email} subject={subject}: {e}")
+        # Catch-all so an unexpected runtime error never propagates up to a
+        # worker / FastAPI handler. Always log and return False.
+        _logger.error(
+            f"[Email:FAIL] stage=unexpected to={to_email} subject={subject} err={e!r}"
+        )
         return False
 
 
