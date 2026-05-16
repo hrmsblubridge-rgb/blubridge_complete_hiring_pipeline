@@ -25,8 +25,14 @@ export function normalizePhone(raw) {
     let digits = s;
     if (s.startsWith('+91') && s.length === 13 && /^\+91[0-9]{10}$/.test(s)) {
         digits = s.slice(3);
-    } else if (s.startsWith('0') && s.length === 11 && /^[0-9]{11}$/.test(s)) {
-        digits = s.slice(1);
+    } else if (s.startsWith('0') && /^0+[0-9]*$/.test(s)) {
+        // iter104 — Always strip every leading zero up-front, then validate
+        // the remainder. Previously the strip was gated to length === 11
+        // (one leading 0 + 10 digits), so a 10-char input like "0123456789"
+        // produced a misleading 'invalid' error before the user could finish
+        // typing. Now any "0…", "00…", etc. is collapsed first and the
+        // remaining digit count drives the verdict.
+        digits = s.replace(/^0+/, '');
     } else if (s.startsWith('91') && s.length === 12 && /^[0-9]{12}$/.test(s)) {
         digits = s.slice(2);
     }

@@ -8,7 +8,7 @@
  *         - schedule_date == today → "Verify" button visible.
  * On Verify success: pipeline_data.otp_verified = true (handled by backend).
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
@@ -114,6 +114,35 @@ export default function ManualOtpVerify() {
     const [edit, setEdit] = useState({});      // {phone,email,job_role,schedule_date,schedule_time}
     const [savingResch, setSavingResch] = useState(false);
 
+    // iter104 — Synchronize reschedule date validation with the public
+    // /schedule-interview flow: disallow Sundays + configured holidays.
+    // Holidays are fetched once per page load from the admin endpoint; we
+    // expand Recurring docs locally (same logic as the server's _expand_
+    // holiday_dates) so MM-DD repeats across years.
+    const [holidayDates, setHolidayDates] = useState([]);
+    useEffect(() => {
+        axios.get(`${API}/api/bb/holidays`, { withCredentials: true })
+            .then(r => {
+                const out = new Set();
+                const thisYear = new Date().getFullYear();
+                for (const h of (r.data?.holidays || [])) {
+                    const d = (h.date || '').trim();
+                    if (!d) continue;
+                    if ((h.holiday_type || 'Recurring') === 'Recurring') {
+                        const mmdd = d.slice(5);
+                        for (let y = thisYear - 1; y <= thisYear + 2; y++) out.add(`${y}-${mmdd}`);
+                    } else {
+                        out.add(d);
+                    }
+                }
+                setHolidayDates([...out]);
+            })
+            .catch(() => setHolidayDates([]));
+    }, []);
+
+    const isSunday = (d) => !!d && new Date(d).getDay() === 0;
+    const isBlockedDate = (d) => isSunday(d) || holidayDates.includes(d);
+
     // YYYY-MM-DD comparison (today < scheduled)
     const _today = new Date().toISOString().slice(0, 10);
     const _schedISO = (applicant?.schedule_date || '').slice(0, 10);
@@ -132,6 +161,12 @@ export default function ManualOtpVerify() {
     const cancelReschedule = () => { setRescheduling(false); setEdit({}); };
 
     const handleRescheduleVerify = async () => {
+        // iter104 — Block Sundays + configured holidays at submit, in case
+        // the user typed an ISO date into the input rather than picking it.
+        if (isBlockedDate(edit.schedule_date)) {
+            toast.error('Selected date is a Sunday or holiday. Please pick a working day.');
+            return;
+        }
         setSavingResch(true);
         try {
             // iter87 — Lock-at-5PM ONLY when selected date is today AND past 5 PM.
@@ -224,7 +259,28 @@ export default function ManualOtpVerify() {
                                 <Row k="College Type" v={applicant.college_type} />
                                 <Row k="Source (HR Team)" v={applicant.hr_team} />
                                 <Row k="Schedule Date" v={rescheduling
-                                    ? <input type="date" value={edit.schedule_date} min={_today} onChange={(e) => setEdit(s => ({...s, schedule_date: e.target.value}))} data-testid="resch-date" className="bg-white border border-[#e5e3d8] rounded px-2 py-1.5 text-sm" />
+                                    ? <div className="flex flex-col gap-0.5">
+                                        <input type="date" value={edit.schedule_date} min={_today}
+                                            onChange={(e) => {
+                                                const v = e.target.value;
+                                                // iter104 — Instant feedback when the picker (or
+                                                // a typed value) lands on a Sunday/holiday. We
+                                                // still let the value land in state so the user
+                                                // sees what they picked, but show a clear inline
+                                                // warning + block save at submit time.
+                                                if (isBlockedDate(v)) {
+                                                    toast.warning('That date is a Sunday or configured holiday — pick a working day.');
+                                                }
+                                                setEdit(s => ({...s, schedule_date: v}));
+                                            }}
+                                            data-testid="resch-date"
+                                            className={`bg-white border rounded px-2 py-1.5 text-sm ${isBlockedDate(edit.schedule_date) ? 'border-rose-500 text-rose-700' : 'border-[#e5e3d8]'}`} />
+                                        {isBlockedDate(edit.schedule_date) && (
+                                            <span className="text-[11px] text-rose-600" data-testid="resch-date-blocked">
+                                                {isSunday(edit.schedule_date) ? 'Sundays are not allowed' : 'This is a holiday'}
+                                            </span>
+                                        )}
+                                      </div>
                                     : (fmtDate(applicant.schedule_date) || '—')} />
                                 <Row k="Schedule Time" v={rescheduling ? (() => {
                                     // iter87 — Use the same TIME_SLOTS dropdown as the public

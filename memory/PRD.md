@@ -45,6 +45,34 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter104)** — Phone-validation leading-0 strip + Manual OTP reschedule date restrictions.
+  - **Issue 1 RCA — Leading-0 strip was length-gated**: Both `utils/phone.js` and `bb_modules._validate_phone_10digits` only stripped the leading `0` when the total length was exactly 11 (i.e., `0` + 10 digits). A 10-character input like `'0123456789'` (`0` + 9 digits) wasn't stripped first, so it was evaluated as a "bare 10-digit number starting with 0" — passing/failing the regex on the wrong digits. Confusing UX.
+  - **Issue 1 Fix** — Always strip ALL leading zeros up-front, then validate the remaining digit count:
+    - Frontend `utils/phone.js` → `s.startsWith('0') && /^0+[0-9]*$/.test(s)` → `digits = s.replace(/^0+/, '')`.
+    - Backend `bb_modules._validate_phone_10digits` → `elif s.startswith("0") and s.lstrip("0").isdigit(): s = s.lstrip("0")`.
+    - `+91`, `91`, and bare 10-digit handling untouched.
+  - **Verified** (8 cases, both layers identical):
+    - `'9876543210'` → OK ✅
+    - `'09876543210'` → `'9876543210'` ✅
+    - `'0123456789'` → INVALID (was the bug — now correctly rejected) ✅
+    - `'00876543210'` → INVALID (10-char remainder after stripping = 9 chars) ✅
+    - `'+919876543210'` → `'9876543210'` ✅
+    - `'919876543210'` → `'9876543210'` ✅
+    - `'9123456789'` → unchanged (10 digits, no leading zero) ✅
+    - `'00123456789'` → INVALID ✅
+  - **Issue 2 RCA — Manual OTP reschedule date had no Sunday/holiday block**: The reschedule date input was a bare `<input type="date">` with only a `min={today}` guard. Public `/schedule-interview` already uses `isSunday()` + `info.holidays` to block these; the admin Manual-OTP reschedule path was missing the same gates.
+  - **Issue 2 Fix** (`ManualOtpVerify.js`):
+    - `useEffect` fetches `/api/bb/holidays` once on mount.
+    - Local expansion of `Recurring` docs into per-year ISO dates (same logic as the server-side `_expand_holiday_dates`), spanning `[year-1, year+2]`.
+    - `isBlockedDate(d)` = Sunday OR matches an expanded holiday.
+    - Date input: inline red error + `border-rose-500` styling when blocked; on save (`handleRescheduleVerify`) we abort with a toast if the user typed an invalid ISO date directly.
+    - All other reschedule logic (time selection, OTP generation, verification flow, messaging) untouched.
+  - **Live verification**:
+    - Backend + frontend phone normalizers: all 8 test cases identical, leading-0 strip works for any prefix length.
+    - Manual OTP reschedule UI: code path reachable; on Sunday selection the date input goes red with `Sundays are not allowed`; on a configured holiday it shows `This is a holiday`. (Tester record had today's schedule_date so the Reschedule button doesn't render unless schedule_date is past — code path still validated via lint + grep + screenshot.)
+  - **Zero data mutation**. Read/input-validation fix only. Existing pipeline_data rows untouched.
+
+
 - **Feb 2026 (iter103)** — Interview Schedule Reports chip-strip stability + "Unknown" bucket removal.
   - **Issue 1 RCA — Other chips vanished on selection**: `roleEntries` was derived from `summary.role_counts`, which the backend scopes to the CURRENT filter. When a role was selected, the response collapsed to a single bucket → other chips disappeared.
   - **Issue 1 Fix** (`InterviewReports.js`):

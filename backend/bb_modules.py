@@ -25,8 +25,13 @@ def _validate_phone_10digits(v):
     s = (v or "").strip().replace(" ", "")
     if s.startswith("+91") and len(s) == 13 and s[3:].isdigit():
         s = s[3:]
-    elif s.startswith("0") and len(s) == 11 and s.isdigit():
-        s = s[1:]
+    elif s.startswith("0") and s.lstrip("0").isdigit():
+        # iter104 — Always strip ALL leading zeros up-front, then validate
+        # the remainder. The earlier `len==11` gate caused "0123456789" (one
+        # zero + 9 digits = 10 chars total) to be evaluated as if it were a
+        # bare 10-digit number, producing a misleading "invalid" rejection.
+        # Stripping leading zeros first makes the final length check decide.
+        s = s.lstrip("0")
     elif s.startswith("91") and len(s) == 12 and s.isdigit():
         s = s[2:]
     # else: leave as-is (len==10 numbers starting with 91 keep all 10 digits)
