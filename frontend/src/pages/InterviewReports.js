@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
@@ -121,7 +121,27 @@ export default function InterviewReports() {
     };
 
     const roleCounts = summary.role_counts || {};
-    const roleEntries = Object.entries(roleCounts).sort((a, b) => b[1] - a[1]);
+    // iter103 — The backend's role_counts is scoped to the current filter
+    // (so it collapses to just the selected role when jobRole is set). To
+    // keep all chips visible, we pin the "All" view's role_counts in a ref
+    // and only refresh it when no jobRole filter is active. Buttons + total
+    // counts use the pinned baseline; the data table still uses the
+    // filtered response.
+    const baselineRoleCounts = useRef({});
+    const baselineTotal = useRef(0);
+    if (jobRole === '' && Object.keys(roleCounts).length) {
+        baselineRoleCounts.current = roleCounts;
+        baselineTotal.current = total;
+    }
+    const baseEntries = Object.entries(baselineRoleCounts.current).sort((a, b) => b[1] - a[1]);
+    // Move the selected role to the front (after "All") so users always
+    // see what they have selected at a glance.
+    const roleEntries = jobRole
+        ? [
+              ...baseEntries.filter(([r]) => r === jobRole),
+              ...baseEntries.filter(([r]) => r !== jobRole),
+          ]
+        : baseEntries;
     const visibleRoles = showAllRoles ? roleEntries : roleEntries.slice(0, 5);
 
     return (
@@ -174,7 +194,7 @@ export default function InterviewReports() {
                             <span className="text-xs text-zinc-500 uppercase tracking-wider mr-2">Roles:</span>
                             <button onClick={() => { setJobRole(''); setPage(1); }}
                                 data-testid="role-chip-all"
-                                className={`px-3 py-1 text-sm rounded-md transition-colors ${jobRole === '' ? 'bg-cyan-700 text-white font-medium' : 'bg-cyan-900/40 text-cyan-400 hover:bg-cyan-900/60'}`}>All ({total})</button>
+                                className={`px-3 py-1 text-sm rounded-md transition-colors ${jobRole === '' ? 'bg-cyan-700 text-white font-medium' : 'bg-cyan-900/40 text-cyan-400 hover:bg-cyan-900/60'}`}>All ({baselineTotal.current || total})</button>
                             {visibleRoles.map(([r, c]) => (
                                 <button key={r} onClick={() => { setJobRole(r); setPage(1); }}
                                     data-testid={`role-chip-${r}`}

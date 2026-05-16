@@ -45,6 +45,22 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter103)** — Interview Schedule Reports chip-strip stability + "Unknown" bucket removal.
+  - **Issue 1 RCA — Other chips vanished on selection**: `roleEntries` was derived from `summary.role_counts`, which the backend scopes to the CURRENT filter. When a role was selected, the response collapsed to a single bucket → other chips disappeared.
+  - **Issue 1 Fix** (`InterviewReports.js`):
+    - Added a `baselineRoleCounts` ref (and `baselineTotal` ref) that gets refreshed ONLY when `jobRole === ''` — i.e., when we're in the "All" view. Chips render from this pinned baseline regardless of which role is filtered, so the full strip is always visible.
+    - Selected role is moved to position 2 via a one-line reorder: `[selected, ...everyone else]`. Clicking `All` clears `jobRole` → reorder falls through to natural count-desc order.
+    - "All" chip count now uses `baselineTotal.current || total` so it always shows the unfiltered total even while a role filter is active.
+    - Existing chip styling, filter logic, count/statistics, and dropdown synchronization untouched.
+  - **Issue 2 RCA — "Unknown" chip never matched**: iter102's role_counts roll-up bucketed `_normalized_job_role === None/""` as `"Unknown"`. Clicking that chip set `jobRole="Unknown"` → filter regex `^Unknown$` matched zero real rows → 0 results, broken UX.
+  - **Issue 2 Fix** (`bb_modules.py` interview-reports endpoint):
+    - The roll-up loop now skips any bucket whose `_id` is falsy OR whose canonical resolves to `""`/`"Unknown"` (case-insensitive). The bucket disappears from `role_counts` entirely → no chip, no broken click. Legacy rows without a job_role still appear in the table (only `role_counts` excludes them).
+  - **Live verification**:
+    - Curl `/api/bb/interview-reports` → `role_counts` keys contain 28 canonical titles; `"Unknown"` and `""` absent.
+    - Playwright on `/interview-reports` → 29 chips before selection (All + 28). After clicking `AI & ML Engineer`: still 29 chips visible, selected chip in position 2 (`All (17141)` → `AI & ML Engineer (8931)` → others in count order). Screenshot confirmed.
+  - **Zero data mutation**: read-time fix only. Existing `pipeline_data` rows with null `_normalized_job_role` stay as-is — they just no longer surface as a filterable chip.
+
+
 - **Feb 2026 (iter102)** — Interview Schedule Reports UI/filter fixes + Bulk-Comm rejection preview now uses Final Reject template.
   - **Issue 1A — Filter buttons too small** (`InterviewReports.js`): bumped from `px-2 py-0.5 text-xs` to `px-3 py-1 text-sm rounded-md` with `transition-colors`. Active/inactive contrast now Cyan-700 vs Zinc-800. Hover state added. Wrapping/responsive layout preserved.
   - **Issue 1B — "Click twice" race**: chip click handlers were calling `setJobRole(r); setPage(1); fetchData(1, ...)` inline. `fetchData` was a `useCallback` capturing the OLD `jobRole` at the time of memoization, so the first click fetched with stale state. Fix: removed inline `fetchData(...)` — the existing `useEffect(() => fetchData(...), [fetchData, ...])` already refetches automatically when `jobRole` changes (because `fetchData`'s identity changes via its deps). Single click now applies the filter.

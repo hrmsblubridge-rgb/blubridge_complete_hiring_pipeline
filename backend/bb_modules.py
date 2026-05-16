@@ -2272,9 +2272,20 @@ async def get_interview_reports(
     role_results = await src.aggregate(role_pipeline, allowDiskUse=False).to_list(None)
     # iter102 — Canonical roll-up of role_counts so filter buttons show one
     # entry per canonical job title.
+    # iter103 — Drop the null / empty / "Unknown" bucket entirely. Surfacing
+    # it as a filter button produces a chip that matches no real rows
+    # (`_normalized_job_role` is None on those records, so filtering by
+    # literal "Unknown" returns 0 hits). With iter99's canonicalization +
+    # the keyword-mapping flow, every real role resolves to a canonical
+    # title — the residual null bucket represents legacy rows without any
+    # job_role at all and should not be filterable.
     rolled_counts: dict = {}
     for r in role_results:
-        canon = _canonicalize_job_role(r["_id"], kw_to_canonical) if r["_id"] else "Unknown"
+        if not r["_id"]:
+            continue
+        canon = _canonicalize_job_role(r["_id"], kw_to_canonical)
+        if not canon or canon.strip().lower() in ("", "unknown"):
+            continue
         rolled_counts[canon] = rolled_counts.get(canon, 0) + r["count"]
     role_counts = dict(sorted(rolled_counts.items(), key=lambda kv: -kv[1])[:100])
 
