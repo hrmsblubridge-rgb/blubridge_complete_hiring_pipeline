@@ -1,17 +1,12 @@
-"""Centralized messaging service — WhatsApp (AiSensy) + Email (SMTP).
+"""Centralized messaging service — WhatsApp (AiSensy) + Email (Resend HTTPS API).
 
 Single source of truth for the outbound gate (TEST_MODE). NEVER call AiSensy
-or SMTP directly from anywhere else — always go through `send_whatsapp` /
+or Resend directly from anywhere else — always go through `send_whatsapp` /
 `send_email` so the test-mode rules are enforced uniformly.
 """
 
 import os
 import logging
-import smtplib
-import socket
-import ssl
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 import httpx
 
 from _fmt import fmt_date, fmt_time
@@ -23,16 +18,11 @@ _logger = logging.getLogger("messaging")
 AISENSY_API_URL = "https://backend.aisensy.com/campaign/t1/api/v2"
 AISENSY_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5NDI0MTYwNzA4MDcwNjE5YzAyZWFhNiIsIm5hbWUiOiJCbHVicmlkZ2V0ZWNobm9sb2dpZXMiLCJhcHBOYW1lIjoiQWlTZW5zeSIsImNsaWVudElkIjoiNjg5NDRlOThiMjQ3NDQwYzBkYzljNzI3IiwiYWN0aXZlUGxhbiI6IkZSRUVfRk9SRVZFUiIsImlhdCI6MTc2NTk0OTc5Mn0.16lJKhbj6JfK_1zzzUgLMwxy5IaqBwu3ljV08xBLRBs"
 
-SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "465"))
-SMTP_USER = os.environ.get("SMTP_USER", "hiring@blubridge.com")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "zfdb buxc ehyq gctr")
-FROM_EMAIL = os.environ.get("FROM_EMAIL", "hiring@blubridge.com")
-# iter105 — Resend HTTPS API is now the SOLE email transport. SMTP imports
-# remain only for legacy code paths that may still reference smtplib; they
-# are no longer reached. Three env vars drive the API call; sensible
-# Render-friendly defaults are baked in so deploys without env overrides
-# keep working out-of-box.
+# iter106 — Resend HTTPS API is the SOLE email transport. SMTP has been
+# fully removed (Render free-tier blocks outbound SMTP, and the Gmail
+# relay produced intermittent timeouts). All three env vars are read
+# fresh from Render; only the from-email/from-name carry safe defaults
+# so deploys without overrides keep working out-of-box.
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
 RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "onboarding@resend.dev").strip()
 RESEND_FROM_NAME = os.environ.get("RESEND_FROM_NAME", "Blubridge Recruitment").strip()
@@ -315,7 +305,7 @@ async def send_whatsapp(campaign_name: str, phone: str, email: str, template_par
         return False
 
 
-# ============ EMAIL (SMTP) ============
+# ============ EMAIL (Resend HTTPS API) ============
 
 # iter73 — Branded email shell aligned VERBATIM with the BluBridge PDF
 # reference (white body, blue #2071b9 accents, BLUBRIDGE wordmark in
@@ -351,7 +341,7 @@ def _email_shell(body_html: str, with_logo_footer: bool = True) -> str:
 
 
 async def send_email(to_email: str, phone: str, subject: str, html_body: str, is_test: bool = False):
-    """Send email via SMTP SSL. Returns True on success.
+    """Send email via Resend HTTPS API. Returns True on success.
     `is_test` is accepted for backward compatibility but is ignored — gating
     is centralised in `can_send_message`."""
     allowed, reason = await can_send_message(to_email, phone)
@@ -366,7 +356,7 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str, is
         _logger.info(f"[SKIP] Email disabled: to={to_email}, subject={subject}")
         return False
 
-    # Tester-only debug — confirms recipient + subject reaching SMTP layer.
+    # Tester-only debug — confirms recipient + subject reaching the API layer.
     if is_test_mode():
         _logger.info(
             f"[MSG DEBUG] channel=email template_email={to_email} "
@@ -374,11 +364,6 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str, is
         )
 
     try:
-        # iter105 — Resend HTTPS API is the SOLE email transport. SMTP path
-        # has been removed because Render free-tier outbound SMTP is blocked
-        # and the Gmail SMTP relay was producing intermittent timeouts even
-        # when reachable. Resend's REST API runs on port 443 (always open)
-        # and gives us delivery IDs we can correlate in dashboards.
         if not RESEND_API_KEY:
             _logger.error(
                 f"[Email:FAIL] stage=config RESEND_API_KEY missing — set it on Render. "
