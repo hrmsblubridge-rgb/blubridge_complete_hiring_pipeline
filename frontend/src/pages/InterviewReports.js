@@ -162,14 +162,25 @@ export default function InterviewReports() {
             <div className="px-8 py-4 border-b border-zinc-800">
                 <div className="flex flex-wrap gap-6 items-start">
                     <div>
+                        {/* iter102 — Filter buttons:
+                              * Medium size (px-3 py-1 text-sm) for readability.
+                              * Single source of truth (jobRole) drives BOTH the
+                                <select> dropdown and these chip buttons — the
+                                fetchData useEffect refetches automatically when
+                                jobRole changes, eliminating the old
+                                "click-twice" race condition.
+                              * "All" chip is now clickable and resets jobRole. */}
                         <div className="flex flex-wrap gap-2 items-center">
                             <span className="text-xs text-zinc-500 uppercase tracking-wider mr-2">Roles:</span>
-                            <span className="px-2 py-0.5 bg-cyan-900/40 text-cyan-400 text-xs rounded">All ({total})</span>
+                            <button onClick={() => { setJobRole(''); setPage(1); }}
+                                data-testid="role-chip-all"
+                                className={`px-3 py-1 text-sm rounded-md transition-colors ${jobRole === '' ? 'bg-cyan-700 text-white font-medium' : 'bg-cyan-900/40 text-cyan-400 hover:bg-cyan-900/60'}`}>All ({total})</button>
                             {visibleRoles.map(([r, c]) => (
-                                <button key={r} onClick={() => { setJobRole(r); setPage(1); fetchData(1, pageSize, sort); }}
-                                    className={`px-2 py-0.5 text-xs rounded transition-colors ${jobRole === r ? 'bg-cyan-700 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}>{r} ({c})</button>
+                                <button key={r} onClick={() => { setJobRole(r); setPage(1); }}
+                                    data-testid={`role-chip-${r}`}
+                                    className={`px-3 py-1 text-sm rounded-md transition-colors ${jobRole === r ? 'bg-cyan-700 text-white font-medium' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-white'}`}>{r} ({c})</button>
                             ))}
-                            {roleEntries.length > 5 && <button onClick={() => setShowAllRoles(p => !p)} className="text-xs text-cyan-500 hover:text-cyan-400">{showAllRoles ? 'SHOW LESS' : 'SHOW ALL'}</button>}
+                            {roleEntries.length > 5 && <button onClick={() => setShowAllRoles(p => !p)} className="text-xs text-cyan-500 hover:text-cyan-400 ml-1">{showAllRoles ? 'SHOW LESS' : 'SHOW ALL'}</button>}
                         </div>
                     </div>
                     <div className="flex gap-4 ml-auto text-sm">

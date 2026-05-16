@@ -1620,12 +1620,20 @@ async def get_public_job_opening(opening_id_or_slug: str):
 
 # ============ INTERVIEW SCHEDULE REPORTS ============
 
-def _build_interview_reports_match(startDate, endDate, jobRole, attendance, collegeType) -> dict:
-    """Shared filter-builder for /interview-reports and /interview-reports/export."""
+def _build_interview_reports_match(startDate, endDate, jobRole, attendance, collegeType, _canonical_index=None, _mappings=None) -> dict:
+    """Shared filter-builder for /interview-reports and /interview-reports/export.
+    iter102 — When `jobRole` is the canonical title, expand it into a regex
+    alternation over every raw keyword that maps to it (preserving each
+    keyword's original casing/punctuation so existing _normalized_job_role
+    values like 'AI And ML Engineer - C++ or Java Developer' still match).
+    Pass `_mappings` to reuse the caller's job_keyword_mapping fetch.
+    """
     match = {
         "schedule_date": {"$nin": [None, ""], "$exists": True},
         "schedule_time": {"$nin": [None, ""], "$exists": True},
     }
+    # `extra_clauses` collects $or-style filters that must be AND-combined.
+    extra_clauses = []
     if startDate or endDate:
         sd = {"$nin": [None, ""], "$exists": True}
         if startDate:
@@ -1634,9 +1642,21 @@ def _build_interview_reports_match(startDate, endDate, jobRole, attendance, coll
             sd["$lte"] = endDate
         match["schedule_date"] = sd
     if jobRole and jobRole.strip().lower() not in ("", "all"):
-        match["_normalized_job_role"] = {
-            "$regex": f"^{re.escape(jobRole.strip())}$", "$options": "i"
-        }
+        # Build the variant set: canonical itself + every keyword that maps
+        # to it (raw casing/punctuation preserved). Mongo regex with case-
+        # insensitive flag handles minor casing diffs in stored values.
+        variant_patterns = {re.escape(jobRole.strip())}
+        target_norm_lower = jobRole.strip().lower()
+        for m in (_mappings or []):
+            if (m.get("job_role") or "").strip().lower() == target_norm_lower:
+                for kw in m.get("keywords", []) or []:
+                    if kw:
+                        variant_patterns.add(re.escape(kw))
+                break
+        extra_clauses.append({"$or": [
+            {"_normalized_job_role": {"$regex": f"^{p}$", "$options": "i"}}
+            for p in variant_patterns
+        ]})
     if collegeType and collegeType.strip().lower() not in ("", "all"):
         ct = collegeType.strip().lower()
         if "non" in ct:
@@ -1648,10 +1668,13 @@ def _build_interview_reports_match(startDate, endDate, jobRole, attendance, coll
         if att == "attended":
             match["otp_verified"] = {"$nin": [None, ""], "$exists": True}
         elif att == "notattended":
-            match["$or"] = [
+            extra_clauses.append({"$or": [
                 {"otp_verified": {"$in": [None, ""]}},
                 {"otp_verified": {"$exists": False}},
-            ]
+            ]})
+    if extra_clauses:
+        # `$and` combines all the $or clauses without colliding at the root.
+        match["$and"] = extra_clauses
     return match
 
 
@@ -2151,7 +2174,14 @@ async def get_interview_reports(
     """
     await _require_auth(request)
 
-    match = _build_interview_reports_match(startDate, endDate, jobRole, attendance, collegeType)
+    # iter102 — One canonical index + raw-mappings fetch per request, reused
+    # by filter builder + row/summary canonicalization so all three layers
+    # (filter, data rows, role_counts) stay aligned with the keyword mappings.
+    from server import _build_canonical_index, _canonicalize_job_role, _get_job_keyword_mappings
+    kw_to_canonical, _ = await _build_canonical_index()
+    raw_mappings = await _get_job_keyword_mappings()
+
+    match = _build_interview_reports_match(startDate, endDate, jobRole, attendance, collegeType, _canonical_index=kw_to_canonical, _mappings=raw_mappings)
 
     # Source: pipeline_data is the live collection (May 2026 architecture migration);
     # fall back to legacy registered_candidates if empty so older environments still work.
@@ -2187,12 +2217,16 @@ async def get_interview_reports(
     for d in docs:
         is_nirf = (d.get("_nirf_category") or "Non NIRF") == "NIRF"
         otp = str(d.get("otp_verified") or "").strip()
+        # iter102 — Display canonical job title per row so the table column
+        # value matches the filter button labels.
+        raw_role = d.get("_normalized_job_role") or d.get("job_role") or d.get("job_title") or ""
+        canonical_role = _canonicalize_job_role(raw_role, kw_to_canonical) if raw_role else "-"
         rows.append({
             "name": d.get("name") or "-",
             "email": d.get("email") or "-",
             "date": d.get("schedule_date") or "-",
             "time": d.get("schedule_time") or "-",
-            "job_role": d.get("_normalized_job_role") or d.get("job_role") or d.get("job_title") or "-",
+            "job_role": canonical_role or "-",
             "college_type": "Premium College" if is_nirf else "Non Premium College",
             "attendance": "Attended" if otp else "Not Attended",
         })
@@ -2236,7 +2270,13 @@ async def get_interview_reports(
         {"$limit": 100},
     ]
     role_results = await src.aggregate(role_pipeline, allowDiskUse=False).to_list(None)
-    role_counts = {r["_id"]: r["count"] for r in role_results}
+    # iter102 — Canonical roll-up of role_counts so filter buttons show one
+    # entry per canonical job title.
+    rolled_counts: dict = {}
+    for r in role_results:
+        canon = _canonicalize_job_role(r["_id"], kw_to_canonical) if r["_id"] else "Unknown"
+        rolled_counts[canon] = rolled_counts.get(canon, 0) + r["count"]
+    role_counts = dict(sorted(rolled_counts.items(), key=lambda kv: -kv[1])[:100])
 
     total_pages = (total + limit - 1) // limit if total else 1
     return {

@@ -844,19 +844,27 @@ async def template_preview(action_type: str = Query("candidate_followup")):
             ),
         },
         "rejection": {
-            "template": "Reject",
-            "params": [],
+            # iter102 — Post-interview Bulk-Comm rejection now uses the
+            # canonical "Final Reject" AiSensy campaign. Body mirrors the
+            # email template emitted by messaging.notify_rejected so the
+            # preview matches what the candidate actually receives.
+            "template": "Final Reject",
+            "params": ["name", "job_role"],
             "body": (
-                "Dear Candidate\n\n"
-                "Thank you for your time and effort in completing our "
-                "registration form.\n\n"
-                "While your background and experience are impressive, we have "
-                "decided to move forward with candidates whose profiles more "
-                "closely align with our current requirements.\n\n"
-                "We encourage you to apply for future opportunities at Blubridge "
-                "Technologies.\n"
-                "Wishing you the best in your future endeavours!\n\n"
-                "Warm regards,\nBlubridge Technologies"
+                "Dear {{name}},\n\n"
+                "Thank you for your interest in the opportunity with Blubridge "
+                "and for investing your time in our hiring process.\n\n"
+                "After careful evaluation, we regret to inform you that we will "
+                "not be moving forward with your application at this time, as "
+                "your scores did not meet our minimum qualifying standard of 80%.\n\n"
+                "Below is a summary of your performance for your reference:\n\n"
+                "Job Role: {{job_role}}\n\n"
+                "We genuinely appreciate your effort and encourage you to stay "
+                "connected with Blubridge for future opportunities that may "
+                "better align with your profile and skills.\n\n"
+                "We wish you all the best in your future career endeavors. "
+                "Stay motivated and keep striving for excellence!\n\n"
+                "Warm regards,\nBlubridge Recruitment Team"
             ),
         },
     }

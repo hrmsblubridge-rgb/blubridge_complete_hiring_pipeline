@@ -45,6 +45,26 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Workers: OTP Generator, Schedule Link Sender, 24h Reminder, OTP Expiry, Missed Interview
 
 ## Changelog
+- **Feb 2026 (iter102)** — Interview Schedule Reports UI/filter fixes + Bulk-Comm rejection preview now uses Final Reject template.
+  - **Issue 1A — Filter buttons too small** (`InterviewReports.js`): bumped from `px-2 py-0.5 text-xs` to `px-3 py-1 text-sm rounded-md` with `transition-colors`. Active/inactive contrast now Cyan-700 vs Zinc-800. Hover state added. Wrapping/responsive layout preserved.
+  - **Issue 1B — "Click twice" race**: chip click handlers were calling `setJobRole(r); setPage(1); fetchData(1, ...)` inline. `fetchData` was a `useCallback` capturing the OLD `jobRole` at the time of memoization, so the first click fetched with stale state. Fix: removed inline `fetchData(...)` — the existing `useEffect(() => fetchData(...), [fetchData, ...])` already refetches automatically when `jobRole` changes (because `fetchData`'s identity changes via its deps). Single click now applies the filter.
+  - **Issue 1C — "All" not clickable**: was a static `<span>`. Promoted to `<button>` with `onClick={() => { setJobRole(''); setPage(1); }}` and matching active/inactive styling. Resets the dropdown automatically because the `<select>` is bound to the same `jobRole` state (single source of truth).
+  - **Issue 1D + 1E — Canonical mapping not reflected** (`bb_modules.py` interview-reports endpoint):
+    - `role_counts` now rolled up by canonical title via `_canonicalize_job_role` (one bucket per canonical, raw variants merged).
+    - Row-level `job_role` column canonicalized so table display matches the chip labels.
+    - Filter logic expands a canonical title (e.g. `"AI & ML Engineer"`) into a regex alternation over EVERY keyword that maps to it (`job_keyword_mapping.keywords[]`) — fetched once per request via the existing `_get_job_keyword_mappings()` helper. `extra_clauses` collected into a `$and` so the `$or` doesn't collide with the attendance `$or`.
+  - **Issue 2 — Bulk-Comm rejection preview** (`bb_resend.py:template_preview`):
+    - Old body content (form-condition "We have decided to move forward with candidates..." template) replaced with the FINAL REJECT body — mirrors the email template emitted by `messaging.notify_rejected` so the preview matches the actual delivery.
+    - `template` field flipped from `"Reject"` to `"Final Reject"` (matches the AiSensy campaign name).
+    - `params` field flipped from `[]` to `["name", "job_role"]` (matches the campaign's required variables).
+    - Actual send path was already correct (`bb_resend.py:610` calls `messaging.notify_rejected` which uses Final Reject since iter94). Only the preview was lagging.
+  - **Live verification**:
+    - `/api/bb/resend/template-preview?action_type=rejection` → `template='Final Reject'`, `params=['name','job_role']`, body starts with the Final Reject opening line.
+    - `/api/bb/interview-reports?jobRole=AI%20%26%20ML%20Engineer` → `total=8922`, every row's `job_role='AI & ML Engineer'` (canonical, not raw variants).
+    - `role_counts` → `{'AI & ML Engineer': 8925, 'AI System Engineer': 1410, ...}` — no duplicate raw variants like `'Ai Ml Engineer'` or `'AI engineer'`.
+    - No data mutation; canonicalization happens read-time only.
+
+
 - **Feb 2026 (iter101)** — Scheduler heartbeat + granular SMTP stage logging.
   - **Issue 2 RCA — "Scheduler not executing"**: It WAS executing. The iter99 dispatcher correctly sleeps from `00:00` to `dispatch_hour:00` IST, but the "before window" branch logged at `DEBUG` level. The root logger is at `INFO`, so for ~19 hours/day the worker was silently alive but invisible — admins grepping logs in the morning naturally assumed it had died.
   - **Issue 2 Fix** (`bg_workers.py` — `_worker_import_rejection_mailer`):
