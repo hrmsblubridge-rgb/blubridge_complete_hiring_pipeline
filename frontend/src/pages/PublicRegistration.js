@@ -115,9 +115,22 @@ export default function PublicRegistration() {
                                 {jo.education?.length > 0 && <div className="col-span-2"><span className="font-medium text-gray-600">Education:</span> <span className="text-gray-900">{jo.education.join(', ')}</span></div>}
                                 {jo.salary_range && <div><span className="font-medium text-gray-600">Salary:</span> <span className="text-gray-900">{jo.salary_range}</span></div>}
                             </div>
-                            {jo.key_responsibilities && <div><h3 className="font-semibold text-gray-800 mb-1">Key Responsibilities:</h3><p className="text-sm text-gray-700 whitespace-pre-line">{jo.key_responsibilities}</p></div>}
-                            {jo.added_advantages && <div><h3 className="font-semibold text-gray-800 mb-1">Added Advantage:</h3><p className="text-sm text-gray-700 whitespace-pre-line">{jo.added_advantages}</p></div>}
-                            {jo.what_we_offer && <div><h3 className="font-semibold text-gray-800 mb-1">What We Offer:</h3><p className="text-sm text-gray-700 whitespace-pre-line">{jo.what_we_offer}</p></div>}
+                            {/* iter108 — Prefer dynamic sections; fall back to legacy fields. */}
+                            {Array.isArray(jo.descriptive_sections) && jo.descriptive_sections.length > 0
+                                ? jo.descriptive_sections.map((s, i) => (
+                                    (s.title || s.description) && (
+                                        <div key={i} data-testid={`jd-section-${i}`}>
+                                            {s.title && <h3 className="font-semibold text-gray-800 mb-1">{s.title}:</h3>}
+                                            {s.description && <p className="text-sm text-gray-700 whitespace-pre-line">{s.description}</p>}
+                                        </div>
+                                    )
+                                ))
+                                : (<>
+                                    {jo.key_responsibilities && <div><h3 className="font-semibold text-gray-800 mb-1">Key Responsibilities:</h3><p className="text-sm text-gray-700 whitespace-pre-line">{jo.key_responsibilities}</p></div>}
+                                    {jo.added_advantages && <div><h3 className="font-semibold text-gray-800 mb-1">Added Advantage:</h3><p className="text-sm text-gray-700 whitespace-pre-line">{jo.added_advantages}</p></div>}
+                                    {jo.what_we_offer && <div><h3 className="font-semibold text-gray-800 mb-1">What We Offer:</h3><p className="text-sm text-gray-700 whitespace-pre-line">{jo.what_we_offer}</p></div>}
+                                </>)
+                            }
                             <button onClick={() => setStep('form')} data-testid="apply-now-btn"
                                 className="w-full py-3 bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-bold rounded-lg text-center mt-4">Apply Now</button>
                         </div>

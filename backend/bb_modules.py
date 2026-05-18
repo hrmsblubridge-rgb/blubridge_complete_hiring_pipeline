@@ -1473,6 +1473,11 @@ async def register_college_applicant(data: CollegeRegistrationBody):
 
 # ============ JOB OPENINGS ============
 
+class _DescriptiveSection(BaseModel):
+    title: str = ""
+    description: str = ""
+
+
 class JobOpeningCreate(BaseModel):
     title: str
     job_role: Optional[str] = ""
@@ -1480,6 +1485,10 @@ class JobOpeningCreate(BaseModel):
     years_of_graduation: Optional[List[str]] = None
     education: Optional[List[str]] = None
     salary_range: Optional[str] = ""
+    # iter108 — Dynamic descriptive sections (new schema). When supplied,
+    # this is the source of truth and is persisted as-is. Legacy fields
+    # below are still accepted for backward compatibility with older clients.
+    descriptive_sections: Optional[List[_DescriptiveSection]] = None
     key_responsibilities: Optional[str] = ""
     added_advantages: Optional[str] = ""
     what_we_offer: Optional[str] = ""
@@ -1491,9 +1500,43 @@ class JobOpeningUpdate(BaseModel):
     years_of_graduation: Optional[List[str]] = None
     education: Optional[List[str]] = None
     salary_range: Optional[str] = None
+    descriptive_sections: Optional[List[_DescriptiveSection]] = None
     key_responsibilities: Optional[str] = None
     added_advantages: Optional[str] = None
     what_we_offer: Optional[str] = None
+
+
+# iter108 — Backward-compatible synthesis: every read path emits
+# `descriptive_sections` regardless of whether the row was created with the
+# new schema or the legacy three-field schema. Legacy rows are never mutated.
+_LEGACY_JOB_SECTIONS = (
+    ("key_responsibilities", "Key Responsibilities"),
+    ("added_advantages",     "Added Advantages"),
+    ("what_we_offer",        "What We Offer"),
+)
+
+
+def _job_opening_sections(opening: dict) -> List[dict]:
+    """Return the canonical `descriptive_sections` list for an opening.
+    If the row already has a non-empty `descriptive_sections`, use it as-is
+    (stripped). Otherwise synthesize from the legacy three-field schema,
+    omitting empty fields so legacy openings that only had, say,
+    `key_responsibilities` populated render as a single section."""
+    existing = opening.get("descriptive_sections") or []
+    if isinstance(existing, list) and any(
+        (s or {}).get("title") or (s or {}).get("description") for s in existing
+    ):
+        return [
+            {"title": (s or {}).get("title", "").strip(),
+             "description": (s or {}).get("description", "").strip()}
+            for s in existing if isinstance(s, dict)
+        ]
+    out: List[dict] = []
+    for field, label in _LEGACY_JOB_SECTIONS:
+        val = (opening.get(field) or "").strip()
+        if val:
+            out.append({"title": label, "description": val})
+    return out
 
 # iter100 — Slug helpers for public job-opening URLs. Slugs are lower-case,
 # hyphenated, alnum-safe; collisions get a numeric suffix. We never rewrite
@@ -1539,6 +1582,9 @@ async def list_job_openings(request: Request):
             await _db.bb_job_openings.update_one({"_id": o["_id"]}, {"$set": {"slug": slug}})
             o["slug"] = slug
         o["id"] = str(o.pop("_id"))
+        # iter108 — Emit synthesized descriptive_sections so the admin UI gets
+        # a uniform shape whether the row is legacy or new-schema.
+        o["descriptive_sections"] = _job_opening_sections(o)
     return {"openings": openings}
 
 @bb_router.post("/job-openings")
@@ -1546,13 +1592,36 @@ async def create_job_opening(data: JobOpeningCreate, request: Request):
     await _require_auth(request)
     title = data.title.strip()
     slug = await _unique_job_opening_slug(_slugify_title(title))
+    # iter108 — Persist descriptive_sections as the source of truth. ALSO
+    # mirror the first 3 sections back onto the legacy fields so any older
+    # external integration that still reads them keeps working until fully
+    # migrated. New writes never lose data either way.
+    sections = (
+        [{"title": (s.title or "").strip(),
+          "description": (s.description or "").strip()}
+         for s in (data.descriptive_sections or [])]
+        if data.descriptive_sections is not None else []
+    )
+    # If client only sent legacy fields, synthesize sections from them.
+    if not any(s["title"] or s["description"] for s in sections):
+        legacy_input = {
+            "key_responsibilities": data.key_responsibilities or "",
+            "added_advantages": data.added_advantages or "",
+            "what_we_offer": data.what_we_offer or "",
+        }
+        sections = _job_opening_sections(legacy_input)
+    # Mirror first three sections to legacy fields for backward compatibility.
+    legacy_mirror = ["", "", ""]
+    for i, s in enumerate(sections[:3]):
+        legacy_mirror[i] = s.get("description", "")
     doc = {"title": title, "slug": slug,
            "job_role": (data.job_role or "").strip(),
            "vacancies": data.vacancies, "years_of_graduation": data.years_of_graduation or [],
            "education": data.education or [], "salary_range": (data.salary_range or "").strip(),
-           "key_responsibilities": (data.key_responsibilities or "").strip(),
-           "added_advantages": (data.added_advantages or "").strip(),
-           "what_we_offer": (data.what_we_offer or "").strip(),
+           "descriptive_sections": sections,
+           "key_responsibilities": legacy_mirror[0],
+           "added_advantages":     legacy_mirror[1],
+           "what_we_offer":        legacy_mirror[2],
            "created_at": datetime.now(timezone.utc).isoformat(), "updated_at": datetime.now(timezone.utc).isoformat()}
     result = await _db.bb_job_openings.insert_one(doc)
     return {"success": True, "id": str(result.inserted_id), "slug": slug}
@@ -1572,6 +1641,16 @@ async def update_job_opening(opening_id: str, data: JobOpeningUpdate, request: R
         updates["years_of_graduation"] = data.years_of_graduation
     if data.education is not None:
         updates["education"] = data.education
+    # iter108 — descriptive_sections is authoritative when supplied. Always
+    # mirror the first 3 onto legacy fields so partial-legacy consumers stay
+    # consistent with the new source of truth.
+    if data.descriptive_sections is not None:
+        sections = [{"title": (s.title or "").strip(),
+                     "description": (s.description or "").strip()}
+                    for s in data.descriptive_sections]
+        updates["descriptive_sections"] = sections
+        for i, key in enumerate(["key_responsibilities", "added_advantages", "what_we_offer"]):
+            updates[key] = sections[i]["description"] if i < len(sections) else ""
     # iter100 — Re-slug when title changes; keep existing slug otherwise.
     if "title" in updates:
         updates["slug"] = await _unique_job_opening_slug(_slugify_title(updates["title"]), exclude_id=oid)
@@ -1617,6 +1696,9 @@ async def get_public_job_opening(opening_id_or_slug: str):
         "years_of_graduation":  opening.get("years_of_graduation", []),
         "education":            opening.get("education", []),
         "salary_range":         opening.get("salary_range", ""),
+        # iter108 — synthesized for legacy rows, native for new-schema rows.
+        "descriptive_sections": _job_opening_sections(opening),
+        # Legacy fields retained so any older external consumer keeps working.
         "key_responsibilities": opening.get("key_responsibilities", ""),
         "added_advantages":     opening.get("added_advantages", ""),
         "what_we_offer":        opening.get("what_we_offer", ""),
@@ -3981,6 +4063,8 @@ async def get_public_form(form_id: str):
                 "years_of_graduation": opening.get("years_of_graduation", []),
                 "education": opening.get("education", []),
                 "salary_range": opening.get("salary_range", ""),
+                # iter108 — uniform sections shape; legacy fields retained.
+                "descriptive_sections": _job_opening_sections(opening),
                 "key_responsibilities": opening.get("key_responsibilities", ""),
                 "added_advantages": opening.get("added_advantages", ""),
                 "what_we_offer": opening.get("what_we_offer", ""),

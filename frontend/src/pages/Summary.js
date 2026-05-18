@@ -25,10 +25,13 @@ export default function Summary() {
     const [data, setData] = useState([]);
     const [totalRegistered, setTotalRegistered] = useState(0);
     const [loading, setLoading] = useState(true);
-    const [startDate, setStartDate] = useState('');
-    const [endDate, setEndDate] = useState('');
+    // iter108 — Default to current day so summary loads only today's records
+    // on initial mount. Manual filter / reset still work normally.
+    const _today = new Date().toISOString().slice(0, 10);
+    const [startDate, setStartDate] = useState(_today);
+    const [endDate, setEndDate] = useState(_today);
     const [search, setSearch] = useState('');
-    const [activeFilters, setActiveFilters] = useState({ startDate: '', endDate: '', search: '' });
+    const [activeFilters, setActiveFilters] = useState({ startDate: _today, endDate: _today, search: '' });
     const [sort, setSort] = useState(null);
 
     const sortedData = useMemo(() => {
@@ -60,8 +63,10 @@ export default function Summary() {
 
     useEffect(() => {
         let mounted = true;
-        if (mounted) fetchData();
+        // iter108 — Initial fetch respects the default today/today filter.
+        if (mounted) fetchData({ startDate: _today, endDate: _today });
         return () => { mounted = false; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [fetchData]);
 
     const handleFilter = () => {

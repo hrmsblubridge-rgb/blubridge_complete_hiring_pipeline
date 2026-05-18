@@ -47,8 +47,11 @@ export default function Applicants() {
     const [jobRoles, setJobRoles] = useState([]);
     const [jobRole, setJobRole] = useState('');
     const [dateType, setDateType] = useState('Registered');
-    const [startDate, setStartDate] = useState('');
-    const [endDate, setEndDate] = useState('');
+    // iter108 — Default current day filter so View Applicants loads only
+    // today's records on initial mount. Reset reverts to "all history".
+    const _today = new Date().toISOString().slice(0, 10);
+    const [startDate, setStartDate] = useState(_today);
+    const [endDate, setEndDate] = useState(_today);
     const [search, setSearch] = useState('');
     const [collegeStatus, setCollegeStatus] = useState('');
     const [goToPage, setGoToPage] = useState('');
@@ -85,7 +88,11 @@ export default function Applicants() {
         }
     }, []);
 
-    useEffect(() => { fetchData({}, 1, 100, null); }, [fetchData]);
+    useEffect(() => {
+        // iter108 — Initial fetch uses default today/today filter.
+        fetchData({ dateType: 'Registered', startDate: _today, endDate: _today }, 1, 100, null);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [fetchData]);
 
     const totalPages = Math.ceil(total / pageSize) || 1;
 

@@ -982,6 +982,9 @@ async def create_job_keyword_mapping(data: JobKeywordMappingCreate, user: str = 
                 {"normalized_job_title": norm},
                 {"$set": {"is_mapped": True}}
             )
+    # iter108 — Trigger background reprocess so existing applicants whose raw
+    # job_title matches one of the new keywords get reclassified out of "Unknown".
+    asyncio.create_task(_trigger_deferred_reprocess(reason=f"mapping_create:{doc['job_role']}"))
     return {"success": True, "id": str(result.inserted_id), "job_role": doc["job_role"], "keywords": doc["keywords"]}
 
 
@@ -1040,6 +1043,9 @@ async def update_job_keyword_mapping(mapping_id: str, data: JobKeywordMappingUpd
                     {"$set": {"is_mapped": True}}
                 )
 
+    # iter108 — Reclassify existing applicants whenever keywords or the
+    # canonical job_role label changes.
+    asyncio.create_task(_trigger_deferred_reprocess(reason=f"mapping_update:{mapping_id}"))
     return {"success": True}
 
 
@@ -1068,6 +1074,10 @@ async def delete_job_keyword_mapping(mapping_id: str, user: str = Depends(get_cu
                     {"$set": {"is_mapped": False}}
                 )
 
+    # iter108 — Deleting a mapping un-maps its keywords; existing applicants
+    # whose raw title matched ONLY this mapping will now correctly fall back
+    # to the raw title (or "Unknown" if raw is empty).
+    asyncio.create_task(_trigger_deferred_reprocess(reason=f"mapping_delete:{mapping_id}"))
     return {"success": True}
 
 
@@ -2457,6 +2467,108 @@ _worker_running = False
 _reprocess_lock = asyncio.Lock()
 _reprocess_pending = False
 
+
+async def _trigger_deferred_reprocess(reason: str = ""):
+    """iter108 — Shared deferred reprocess trigger with single-flight guard.
+
+    Used by:
+      - Bulk-upload queue worker (after queue is drained)
+      - Job-keyword-mapping create/update/delete endpoints (so newly mapped
+        keywords reclassify existing applicants out of "Unknown" without a
+        manual rebuild)
+
+    Single-flight: if a reprocess is already running, sets the pending flag
+    so one follow-up run executes after the current one finishes. Multiple
+    rapid edits coalesce into ONE follow-up run.
+    """
+    global _reprocess_pending
+    if _reprocess_lock.locked():
+        _reprocess_pending = True
+        logger.info(f"[Reprocess:COALESCED] reason={reason!r} — follow-up scheduled")
+        return
+    async with _reprocess_lock:
+        while True:
+            try:
+                logger.info(f"[Reprocess:START] reason={reason!r}")
+                t0 = datetime.now(timezone.utc)
+                await reprocess_matching()
+                await _sync_job_titles_master()
+                elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
+                logger.info(f"[Reprocess:DONE] reason={reason!r} elapsed={elapsed:.1f}s")
+            except Exception as e:
+                logger.exception(f"[Reprocess:FAIL] reason={reason!r}: {e}")
+            if _reprocess_pending:
+                _reprocess_pending = False
+                logger.info("[Reprocess:FOLLOWUP] running coalesced re-run")
+                continue
+            break
+
+
+async def _backfill_unknown_classifications_once():
+    """iter108 — One-shot backfill: reclassify legacy non-test rows currently
+    stuck at `_normalized_job_role` in {None, '', 'Unknown'} using the
+    LATEST `job_keyword_mapping` entries.
+
+    Safety guarantees:
+      - Only touches rows where `isTest != True` AND current value is
+        Unknown/null/missing (never overwrites a successfully mapped row).
+      - Only persists the new value when canonicalization yields a NON-Unknown
+        result — otherwise the row stays unchanged.
+      - Idempotent: a `bb_meta._id='iter108_unknown_backfill'` flag is set
+        after a successful run so subsequent reboots skip the work.
+      - Runs as a fire-and-forget startup task so app boot is not blocked.
+    """
+    try:
+        meta = await db.bb_meta.find_one({"_id": "iter108_unknown_backfill"})
+        if meta and meta.get("done"):
+            return
+        from pymongo import UpdateOne
+        mappings = await _get_job_keyword_mappings()
+        if not mappings:
+            logger.info("[Iter108:UnknownBackfill] SKIP — no mappings configured yet")
+            return
+        total_fixed = 0
+        for coll_name in ("pipeline_data", "naukri_applies"):
+            coll = db[coll_name]
+            ops = []
+            stuck_filter = {
+                "isTest": {"$ne": True},
+                "$or": [
+                    {"_normalized_job_role": {"$in": [None, "", "Unknown"]}},
+                    {"_normalized_job_role": {"$exists": False}},
+                ],
+            }
+            async for doc in coll.find(stuck_filter, {"_id": 1, "job_title": 1, "job_role": 1}):
+                raw = doc.get("job_title") or doc.get("job_role") or ""
+                new_val = _resolve_normalized_job_role(raw, mappings)
+                # Only update if the new value is a real canonical (NOT "Unknown" and NOT the raw fallback).
+                if new_val and new_val != "Unknown" and new_val != raw:
+                    ops.append(UpdateOne(
+                        {"_id": doc["_id"]},
+                        {"$set": {"_normalized_job_role": new_val}}
+                    ))
+                if len(ops) >= 1000:
+                    await coll.bulk_write(ops, ordered=False)
+                    total_fixed += len(ops)
+                    ops = []
+            if ops:
+                await coll.bulk_write(ops, ordered=False)
+                total_fixed += len(ops)
+            logger.info(f"[Iter108:UnknownBackfill] {coll_name} processed — total_fixed_so_far={total_fixed}")
+        await db.bb_meta.update_one(
+            {"_id": "iter108_unknown_backfill"},
+            {"$set": {
+                "done": True,
+                "fixed_count": total_fixed,
+                "ran_at": datetime.now(timezone.utc).isoformat(),
+            }},
+            upsert=True,
+        )
+        logger.info(f"[Iter108:UnknownBackfill] COMPLETED — reclassified {total_fixed} legacy rows")
+    except Exception as e:
+        # Never let backfill crash app startup. Re-run on next boot.
+        logger.exception(f"[Iter108:UnknownBackfill] FAILED: {e}")
+
 # ---- iter67 — Per-host queue isolation ----
 # The Mongo queue is shared across deployments (preview + production), but each
 # host has its OWN /app/uploads filesystem. If a worker from host A claims a job
@@ -2522,30 +2634,7 @@ async def _bg_queue_worker():
                     # (fire-and-forget so the worker immediately returns to the
                     # claim loop and can pick up new uploads while reprocess runs).
                     if drained_pending_match:
-                        async def _deferred_reprocess():
-                            global _reprocess_pending
-                            # Single-flight: if a reprocess is already running,
-                            # just request a re-run after it finishes.
-                            if _reprocess_lock.locked():
-                                _reprocess_pending = True
-                                logger.info("Reprocess already running — coalesced into single follow-up run")
-                                return
-                            async with _reprocess_lock:
-                                while True:
-                                    try:
-                                        logger.info("Queue drained — deferred reprocess_matching() running in background")
-                                        t0 = datetime.now(timezone.utc)
-                                        await reprocess_matching()
-                                        await _sync_job_titles_master()
-                                        elapsed = (datetime.now(timezone.utc) - t0).total_seconds()
-                                        logger.info(f"Deferred reprocess_matching() completed in {elapsed:.1f}s")
-                                    except Exception as e:
-                                        logger.exception(f"Deferred reprocess_matching failed: {e}")
-                                    if _reprocess_pending:
-                                        _reprocess_pending = False
-                                        continue
-                                    break
-                        asyncio.create_task(_deferred_reprocess())
+                        asyncio.create_task(_trigger_deferred_reprocess(reason="queue_drained"))
                         drained_pending_match = False
                     await asyncio.sleep(3)
                     continue
@@ -3290,6 +3379,11 @@ async def startup_event():
         await db.job_titles_master.create_index("is_mapped")
     except Exception as e:
         logger.warning(f"[startup] create_index skipped on job_titles_master.is_mapped: {e}")
+
+    # iter108 — One-shot backfill: reclassify legacy rows stuck at
+    # Unknown/null `_normalized_job_role` using current keyword mappings.
+    # Idempotent via `bb_meta` flag so reboots don't repeat the work.
+    asyncio.create_task(_backfill_unknown_classifications_once())
 
     # Backfill slugs for existing hiring forms + ensure unique index
     try:

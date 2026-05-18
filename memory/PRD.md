@@ -1,3 +1,47 @@
+## iter108 — Production Batch: Default-Today Filters + Unknown Reclassification + Dynamic Job Sections (May 2026)
+
+### Tasks shipped
+
+**1. Default current-day filter — Dashboard pages**
+- `/app/frontend/src/pages/Summary.js`, `Roles.js`, `AttendedRoles.js` now initialize `startDate=endDate=today` on first mount. Reset button reverts to full-history view. Custom date pickers fully preserved.
+
+**2. Unknown Job Title Classification — Root cause & fix**
+- **Root cause:** `_normalized_job_role` is persisted on each `pipeline_data` / `naukri_applies` row at import time via `reprocess_matching()`. When an admin LATER created/updated a keyword mapping, existing applicant rows kept their stale "Unknown" value indefinitely, surfacing as "Unknown - NIRF" / "Unknown - Non NIRF" everywhere downstream.
+- **Fix A — auto-reprocess on mapping change:** `/api/job-keyword-mappings` POST/PUT/DELETE in `server.py` now fire `_trigger_deferred_reprocess()` in the background. A single-flight lock + pending flag coalesces rapid edits into one rebuild. The bulk-upload queue worker uses the same shared helper.
+- **Fix B — one-shot startup backfill:** New `_backfill_unknown_classifications_once()` runs once at startup as a background task. Targets non-test rows whose `_normalized_job_role` ∈ {None, "", "Unknown"}, applies current mappings, persists only when the new value is a real canonical (NOT "Unknown" and NOT the raw fallback). Idempotency: `bb_meta._id='iter108_unknown_backfill'` flag prevents re-runs on reboot. **Live result: 8,516 legacy rows reclassified on production data**.
+
+**3. Job Openings — Dynamic Descriptive Sections (schema change)**
+- New schema field `descriptive_sections: [{title, description}]` added to `bb_job_openings` collection.
+- Backward-compatible synthesis helper `_job_opening_sections(opening)` returns the canonical list: prefers the new field when present; synthesizes from `key_responsibilities` / `added_advantages` / `what_we_offer` (with proper labels) for legacy rows.
+- On write: first 3 sections auto-mirrored back to legacy fields so any older external consumer still reading them keeps working. Empty cards stripped client-side before POST.
+- Endpoints updated: `POST/PUT/GET /api/bb/job-openings`, `GET /api/pub/job-opening/{id_or_slug}`, `GET /api/bb/hiring-forms/{form_id}` (via job_opening sub-object).
+- Frontend `JobOpenings.js` modal rewritten: 3 fixed textareas → dynamic card list with `+ Add Section` and per-card remove (minimum 1 card always present). `PublicJobView.jsx` + `PublicRegistration.js` render `descriptive_sections` when present, fall back to legacy 3-field display for any client receiving pre-iter108 data.
+
+### Files modified
+- Backend: `/app/backend/server.py` (mapping-endpoint hooks, `_trigger_deferred_reprocess()` shared helper, `_backfill_unknown_classifications_once()`, startup task), `/app/backend/bb_modules.py` (Pydantic models, `_job_opening_sections()`, create/update/list/public endpoints).
+- Frontend: `/app/frontend/src/pages/Summary.js`, `Roles.js`, `AttendedRoles.js`, `JobOpenings.js`, `PublicJobView.jsx`, `PublicRegistration.js`.
+
+### Verification
+- `curl POST /api/bb/job-openings` with `descriptive_sections` → persists + auto-mirrors to legacy fields ✓
+- `curl PUT /api/bb/job-openings/{id}` with new sections → replaces + clears stale legacy mirror ✓
+- `curl GET /api/pub/job-opening/{slug}` → emits both `descriptive_sections` AND legacy fields ✓
+- `curl GET /api/bb/job-openings` → existing legacy openings synthesize 3 sections from legacy fields automatically ✓
+- `curl POST /api/job-keyword-mappings` → triggers `[Reprocess:START] reason='mapping_create:...'` ✓
+- `curl DELETE /api/job-keyword-mappings/{id}` → triggers `[Reprocess:COALESCED]` when prior reprocess still running ✓
+- `bb_meta._id='iter108_unknown_backfill'` → `done=True, fixed_count=8516` ✓
+- `/api/summary?startDate=today&endDate=today` → returns today's rows only ✓
+
+### Production safety
+- Tested only with admin credentials + a synthetic test opening that was deleted immediately after.
+- Backfill ONLY updates rows whose current value is Unknown/empty/null; never overwrites a successfully-mapped row.
+- Legacy job_opening rows untouched on disk — `descriptive_sections` synthesized lazily on read.
+- New `descriptive_sections` writes ALSO update legacy fields for transitional consumers.
+- Mapping-change reprocess is fire-and-forget background; never blocks the API response.
+- Single-flight lock prevents concurrent `registered_candidates.drop()` + reinsert races.
+
+---
+
+
 ## iter107 — OTP Mail Reliability Fix + Resend Transport Hardening (May 2026)
 
 **Root cause found:** `bg_workers._worker_otp_generator` was setting `otp_sent=True` BEFORE calling `notify_otp()`. Any transient failure inside `notify_otp` (Resend hiccup, AiSensy timeout, unhandled exception) caused the row to be permanently marked sent on its next filter pass — the OTP email was lost with no retry. Shortlist / schedule flows did NOT have this bug because they correctly persist per-channel flags AFTER the send (mirrored the schedule_link_sender CAS pattern).

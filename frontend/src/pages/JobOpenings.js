@@ -20,9 +20,9 @@ export default function JobOpenings() {
     const [formEdu, setFormEdu] = useState([]);
     const [eduInput, setEduInput] = useState('');
     const [formSalary, setFormSalary] = useState('');
-    const [formResp, setFormResp] = useState('');
-    const [formAdvantages, setFormAdvantages] = useState('');
-    const [formOffer, setFormOffer] = useState('');
+    // iter108 — Dynamic descriptive sections replace the 3 fixed textareas.
+    // Each section: { title, description }. At least one card always exists.
+    const [formSections, setFormSections] = useState([{ title: '', description: '' }]);
     const [jobRoles, setJobRoles] = useState([]);
 
     const fetchAll = useCallback(async () => {
@@ -38,8 +38,29 @@ export default function JobOpenings() {
     }, []);
     useEffect(() => { fetchAll(); }, [fetchAll]);
 
-    const openAdd = () => { setEditId(null); setFormTitle(''); setFormRole(''); setFormVacancies(''); setFormYears([]); setYearInput(''); setFormEdu([]); setEduInput(''); setFormSalary(''); setFormResp(''); setFormAdvantages(''); setFormOffer(''); setShowModal(true); };
-    const openEdit = (o) => { setEditId(o.id); setFormTitle(o.title); setFormRole(o.job_role || ''); setFormVacancies(o.vacancies ? String(o.vacancies) : ''); setFormYears(o.years_of_graduation || []); setYearInput(''); setFormEdu(o.education || []); setEduInput(''); setFormSalary(o.salary_range || ''); setFormResp(o.key_responsibilities || ''); setFormAdvantages(o.added_advantages || ''); setFormOffer(o.what_we_offer || ''); setShowModal(true); };
+    const openAdd = () => { setEditId(null); setFormTitle(''); setFormRole(''); setFormVacancies(''); setFormYears([]); setYearInput(''); setFormEdu([]); setEduInput(''); setFormSalary(''); setFormSections([{ title: '', description: '' }]); setShowModal(true); };
+    const openEdit = (o) => {
+        setEditId(o.id);
+        setFormTitle(o.title);
+        setFormRole(o.job_role || '');
+        setFormVacancies(o.vacancies ? String(o.vacancies) : '');
+        setFormYears(o.years_of_graduation || []);
+        setYearInput('');
+        setFormEdu(o.education || []);
+        setEduInput('');
+        setFormSalary(o.salary_range || '');
+        // iter108 — Backend always emits `descriptive_sections` (synthesized
+        // from legacy fields for old rows). Guarantee at least one editable card.
+        const sections = (Array.isArray(o.descriptive_sections) && o.descriptive_sections.length > 0)
+            ? o.descriptive_sections.map(s => ({ title: s.title || '', description: s.description || '' }))
+            : [{ title: '', description: '' }];
+        setFormSections(sections);
+        setShowModal(true);
+    };
+
+    const addSection = () => setFormSections(p => [...p, { title: '', description: '' }]);
+    const removeSection = (idx) => setFormSections(p => p.length > 1 ? p.filter((_, i) => i !== idx) : p);
+    const updateSection = (idx, field, value) => setFormSections(p => p.map((s, i) => i === idx ? { ...s, [field]: value } : s));
 
     const addYear = () => { const v = yearInput.trim(); if (v && !formYears.includes(v)) setFormYears(p => [...p, v]); setYearInput(''); };
     const addEdu = () => { const v = eduInput.trim(); if (v && !formEdu.includes(v)) setFormEdu(p => [...p, v]); setEduInput(''); };
@@ -47,7 +68,20 @@ export default function JobOpenings() {
     const handleSave = async () => {
         if (!formTitle.trim()) { toast.error('Title required'); return; }
         try {
-            const body = { title: formTitle.trim(), job_role: formRole, vacancies: formVacancies ? Number(formVacancies) : null, years_of_graduation: formYears, education: formEdu, salary_range: formSalary, key_responsibilities: formResp, added_advantages: formAdvantages, what_we_offer: formOffer };
+            // iter108 — Strip empty cards before sending; backend auto-mirrors
+            // first 3 sections to legacy fields for backward compatibility.
+            const cleanedSections = formSections
+                .map(s => ({ title: (s.title || '').trim(), description: (s.description || '').trim() }))
+                .filter(s => s.title || s.description);
+            const body = {
+                title: formTitle.trim(),
+                job_role: formRole,
+                vacancies: formVacancies ? Number(formVacancies) : null,
+                years_of_graduation: formYears,
+                education: formEdu,
+                salary_range: formSalary,
+                descriptive_sections: cleanedSections,
+            };
             if (editId) await axios.put(`${API}/api/bb/job-openings/${editId}`, body, { withCredentials: true });
             else await axios.post(`${API}/api/bb/job-openings`, body, { withCredentials: true });
             toast.success(editId ? 'Updated' : 'Created'); setShowModal(false); fetchAll();
@@ -126,9 +160,36 @@ export default function JobOpenings() {
                             <div className="flex gap-2"><input type="text" value={eduInput} onChange={e => setEduInput(e.target.value)} onKeyDown={e => {if(e.key==='Enter'){e.preventDefault();addEdu();}}} placeholder="e.g. B.Tech" className="flex-1 bg-zinc-800 border border-zinc-700 px-3 py-1.5 text-sm focus:outline-none focus:border-zinc-500" /><button onClick={addEdu} className="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-sm"><Plus size={14} /></button></div>
                             {formEdu.length > 0 && <div className="flex flex-wrap gap-1.5 mt-1">{formEdu.map((e, i) => <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 text-xs bg-zinc-800 border border-zinc-700 rounded-full">{e}<button onClick={() => setFormEdu(p => p.filter((_,idx) => idx!==i))} className="hover:text-red-400"><X size={10} /></button></span>)}</div>}</div>
                         <div className="space-y-1.5"><label className="text-xs text-zinc-500 uppercase tracking-wider">Salary Range</label><input type="text" value={formSalary} onChange={e => setFormSalary(e.target.value)} placeholder="e.g. 5.0-7.0 LPA" className="w-full bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" /></div>
-                        <div className="space-y-1.5"><label className="text-xs text-zinc-500 uppercase tracking-wider">Key Responsibilities</label><textarea value={formResp} onChange={e => setFormResp(e.target.value)} rows={3} className="w-full bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500 resize-none" /></div>
-                        <div className="space-y-1.5"><label className="text-xs text-zinc-500 uppercase tracking-wider">Added Advantages</label><textarea value={formAdvantages} onChange={e => setFormAdvantages(e.target.value)} rows={3} className="w-full bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500 resize-none" /></div>
-                        <div className="space-y-1.5"><label className="text-xs text-zinc-500 uppercase tracking-wider">What We Offer</label><textarea value={formOffer} onChange={e => setFormOffer(e.target.value)} rows={3} className="w-full bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500 resize-none" /></div>
+                        {/* iter108 — Dynamic Descriptive Sections (replaces the 3 fixed textareas). */}
+                        <div className="space-y-3" data-testid="descriptive-sections-block">
+                            <label className="text-xs text-zinc-500 uppercase tracking-wider">Descriptive Sections</label>
+                            {formSections.map((s, i) => (
+                                <div key={i} className="bg-zinc-800/60 border border-zinc-700 p-3 space-y-2" data-testid={`section-card-${i}`}>
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Section {i + 1}</span>
+                                        {formSections.length > 1 && (
+                                            <button onClick={() => removeSection(i)} data-testid={`section-remove-${i}`}
+                                                className="p-1 text-zinc-500 hover:text-red-400" title="Remove section">
+                                                <X size={14} />
+                                            </button>
+                                        )}
+                                    </div>
+                                    <input type="text" value={s.title} onChange={e => updateSection(i, 'title', e.target.value)}
+                                        placeholder="Section title (e.g. Key Responsibilities)"
+                                        data-testid={`section-title-${i}`}
+                                        className="w-full bg-zinc-900 border border-zinc-700 px-3 py-1.5 text-sm focus:outline-none focus:border-zinc-500" />
+                                    <textarea value={s.description} onChange={e => updateSection(i, 'description', e.target.value)}
+                                        rows={3}
+                                        placeholder="Section description..."
+                                        data-testid={`section-description-${i}`}
+                                        className="w-full bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500 resize-none" />
+                                </div>
+                            ))}
+                            <button onClick={addSection} data-testid="section-add-btn"
+                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300">
+                                <Plus size={14} /> Add Section
+                            </button>
+                        </div>
                         <div className="flex justify-end gap-3">
                             <button onClick={() => setShowModal(false)} className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm">Cancel</button>
                             <button onClick={handleSave} data-testid="save-opening-btn" className="px-4 py-2 bg-rose-700 hover:bg-rose-600 text-sm font-medium">{editId ? 'Update' : 'Create'}</button>
