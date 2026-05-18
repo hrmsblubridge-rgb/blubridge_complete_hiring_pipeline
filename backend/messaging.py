@@ -617,10 +617,20 @@ async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str,
     """Send OTP notification via WhatsApp + Email.
     iter73 — Content + design verbatim from BluBridge PDF reference (OTP in
     blue inside a light-grey rectangular box).
-    iter79 — Date/time displayed as `dd-mm-yyyy` + `hh:mm AM/PM`."""
+    iter79 — Date/time displayed as `dd-mm-yyyy` + `hh:mm AM/PM`.
+    iter107 — Returns (wa_ok, em_ok). Independent channel failures so the
+    OTP worker can persist per-channel state and retry only the failed one."""
     date = fmt_date(date)
     time = fmt_time(time)
-    wa_ok = await send_whatsapp("OTP With Job", phone, email, [name, job_role, otp, phone, date, time, OFFICE_LOCATION], is_test=is_test)
+    _logger.info(
+        f"[OTP:NOTIFY_START] email={email} phone={phone} role={job_role!r} "
+        f"date={date} time={time} otp_len={len(str(otp))}"
+    )
+    wa_ok = False
+    try:
+        wa_ok = await send_whatsapp("OTP With Job", phone, email, [name, job_role, otp, phone, date, time, OFFICE_LOCATION], is_test=is_test)
+    except Exception as _we:
+        _logger.exception(f"[OTP:NOTIFY_WA_EXC] email={email} err={_we!r}")
     body = f"""
     <p style="margin:0 0 16px 0;">Hi {name},</p>
     <p style="margin:0 0 16px 0;">Your One-Time Password (OTP) to confirm your interview attendance at Blubridge Technologies is:</p>
@@ -641,7 +651,12 @@ async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str,
     <p style="margin:24px 0 4px 0;">Best regards,</p>
     <p style="margin:0;">Blubridge Recruitment Team</p>
     """
-    em_ok = await send_email(email, phone, "Your Interview OTP - Blubridge Technologies", _email_shell(body), is_test=is_test)
+    em_ok = False
+    try:
+        em_ok = await send_email(email, phone, "Your Interview OTP - Blubridge Technologies", _email_shell(body), is_test=is_test)
+    except Exception as _ee:
+        _logger.exception(f"[OTP:NOTIFY_EMAIL_EXC] email={email} err={_ee!r}")
+    _logger.info(f"[OTP:NOTIFY_DONE] email={email} wa_ok={wa_ok} em_ok={em_ok}")
     return wa_ok, em_ok
 
 

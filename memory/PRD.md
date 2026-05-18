@@ -1,3 +1,32 @@
+## iter107 — OTP Mail Reliability Fix + Resend Transport Hardening (May 2026)
+
+**Root cause found:** `bg_workers._worker_otp_generator` was setting `otp_sent=True` BEFORE calling `notify_otp()`. Any transient failure inside `notify_otp` (Resend hiccup, AiSensy timeout, unhandled exception) caused the row to be permanently marked sent on its next filter pass — the OTP email was lost with no retry. Shortlist / schedule flows did NOT have this bug because they correctly persist per-channel flags AFTER the send (mirrored the schedule_link_sender CAS pattern).
+
+**Fix (surgical, OTP-only):**
+- `bg_workers.py:_worker_otp_generator` rewritten to claim each candidate row atomically via `otp_dispatch_in_progress=True`, call `notify_otp` FIRST, then persist `otp_sent=True` + per-channel flags (`otp_wa_sent`, `otp_email_sent`) only when at least one channel succeeded. Both-channel failure rolls back the claim so the next tick retries. Detailed structured logs added: `[OTP:HEARTBEAT]`, `[OTP:SKIP_WINDOW]`, `[OTP:SKIP_CLAIMED]`, `[OTP:DISPATCH_START]`, `[OTP:DISPATCH_DONE]`, `[OTP:DISPATCH_FAIL]`, `[OTP:NOTIFY_EXC]`.
+- `messaging.py:notify_otp` wrapped WA + Email sends in independent try/except blocks so a WA exception no longer prevents the email and vice-versa. Added `[OTP:NOTIFY_START]`, `[OTP:NOTIFY_DONE]`, `[OTP:NOTIFY_WA_EXC]`, `[OTP:NOTIFY_EMAIL_EXC]` log lines.
+- `messaging.py` SMTP transport fully removed (iter106). Resend HTTPS API is the SOLE email transport for ALL flows (shortlist, schedule, OTP, rejection, missed-reminder, manual alerts, bulk comm) — single centralized `send_email`. Three env vars drive it: `RESEND_API_KEY`, `RESEND_FROM_EMAIL` (default `onboarding@resend.dev`), `RESEND_FROM_NAME` (default `Blubridge Recruitment`).
+- WhatsApp transport unchanged: single centralized `send_whatsapp` is still the sole AiSensy path. Existing `[WhatsApp:REQ]`/`[WhatsApp:RESP]`/`[WhatsApp:EXC]` logs already capture campaign / params / body for debugging template-param-mismatch drops.
+
+**Verification:** `tests/test_iter107_otp_worker_retry.py` — 3 tests pass against the live Mongo DB using ONLY the designated tester credentials (`rishi.nayak@blubridge.com` / `9443109903`):
+1. Happy path → `otp_sent=True`, both channel flags True, claim released.
+2. Both channels fail → `otp_sent` NOT set, claim rolled back, error timestamp recorded, eligible for retry.
+3. Partial success (WA fails, email succeeds) → `otp_sent=True`, per-channel flags correctly differentiated.
+
+Live worker heartbeat log confirms observability: `[OTP:HEARTBEAT] alive ist=16:31:59 today=2026-05-18 pending_today=0`.
+
+**Files modified:** `/app/backend/bg_workers.py`, `/app/backend/messaging.py`, `/app/backend/.env` (SMTP_* vars removed, RESEND_* added).
+**Files added:** `/app/backend/tests/test_iter107_otp_worker_retry.py`.
+
+**Production-safety guarantees:**
+- No legacy applicant data touched. The cutoff guard (`MESSAGING_CUTOFF_TS`) is unchanged.
+- Existing applicants with `otp_sent=True` already set are NOT reset / NOT re-messaged.
+- New `otp_dispatch_in_progress` field is additive (does not conflict with any existing field).
+- Tests insert / delete only synthetic rows tagged `_iter107_test: True` for the tester email.
+
+---
+
+
 # Recruitment Analytics — Product Requirements
 
 ## Original Problem Statement

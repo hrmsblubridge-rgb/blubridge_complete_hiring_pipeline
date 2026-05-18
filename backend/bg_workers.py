@@ -82,6 +82,7 @@ async def _worker_otp_generator():
     promptly while still respecting the >=1 minute pre-interview boundary.
     """
     _logger.info("OTP Generator worker started (IST-aware)")
+    _heartbeat = 0
     while True:
         try:
             now = _local_now()
@@ -96,6 +97,15 @@ async def _worker_otp_generator():
                 "schedule_time": {"$nin": [None, ""], "$exists": True},
             })
             docs = await cursor.to_list(None)
+
+            # iter107 — Visible heartbeat every ~5 min (10 ticks * 30s) proves
+            # the worker is alive even when no candidates are in the window.
+            if _heartbeat % 10 == 0:
+                _logger.info(
+                    f"[OTP:HEARTBEAT] alive ist={now.strftime('%H:%M:%S')} "
+                    f"today={today_str} pending_today={len(docs)}"
+                )
+            _heartbeat += 1
 
             for doc in docs:
                 schedule_time_str = (doc.get("schedule_time") or "").strip()
@@ -116,25 +126,44 @@ async def _worker_otp_generator():
                 # Outside window? — skip. (Short-notice: if interview is within
                 # 3h, window_start is in the past so we send immediately.)
                 if now < window_start or now > window_end:
+                    # Detailed per-candidate trace so admins can see why OTP
+                    # hasn't fired yet (e.g. interview at 18:00, currently 12:00).
+                    _logger.info(
+                        f"[OTP:SKIP_WINDOW] email={doc.get('email')} "
+                        f"interview={interview_dt.strftime('%H:%M')} "
+                        f"window={window_start.strftime('%H:%M')}-{window_end.strftime('%H:%M')} "
+                        f"now={now.strftime('%H:%M')}"
+                    )
                     continue
 
-                # Inside window — generate and send OTP (exactly once via otp_sent flag)
+                # iter107 — Atomic CAS guard. Mirror the schedule_link_sender
+                # pattern: claim the row by flipping `otp_dispatch_in_progress`
+                # FIRST so concurrent ticks / process restarts can't double-fire.
+                # The actual `otp_sent=True` flag is set ONLY after notify_otp
+                # completes successfully, so a transient failure now leaves the
+                # row eligible for retry on the next tick.
                 otp = doc.get("otp") or str(random.randint(100000, 999999))
                 otp_expiry_iso = interview_dt.isoformat()
                 now_iso = now.isoformat()
 
-                await _db.bb_registrations.update_one(
-                    {"_id": doc["_id"]},
+                cas = await _db.bb_registrations.update_one(
+                    {"_id": doc["_id"],
+                     "otp_sent": {"$ne": True},
+                     "otp_dispatch_in_progress": {"$ne": True}},
                     {"$set": {
                         "otp": otp,
-                        "otp_sent": True,
-                        "otp_sent_at": now_iso,
-                        # camelCase aliases for external integrations
+                        "otp_dispatch_in_progress": True,
+                        "otp_dispatch_started_at": now_iso,
                         "otpGeneratedAt": now_iso,
                         "otpExpiry": otp_expiry_iso,
-                    }}
+                    }},
                 )
+                if cas.modified_count == 0:
+                    # Another tick / process already claimed this row.
+                    _logger.info(f"[OTP:SKIP_CLAIMED] email={doc.get('email')} already in progress")
+                    continue
 
+                # Mirror OTP onto the secondary collection (does NOT gate sending).
                 await _db.registered_candidates.update_many(
                     {"$or": [{"email": doc.get("email", "")}, {"phone": doc.get("phone", "")}]},
                     {"$set": {
@@ -145,18 +174,68 @@ async def _worker_otp_generator():
                     }}
                 )
 
-                from messaging import notify_otp
-                await notify_otp(
-                    doc.get("full_name", ""),
-                    doc.get("phone", ""),
-                    doc.get("email", ""),
-                    doc.get("job_role", ""),
-                    otp,
-                    today_str,
-                    schedule_time_str,
-                    is_test=bool(doc.get("isTest")),
+                _logger.info(
+                    f"[OTP:DISPATCH_START] email={doc.get('email')} phone={doc.get('phone')} "
+                    f"otp={otp} interview={interview_dt.strftime('%Y-%m-%d %H:%M')} IST"
                 )
-                _logger.info(f"[OTP] Sent to {doc.get('email')}, otp={otp}, IST_now={now.strftime('%H:%M')}, window={window_start.strftime('%H:%M')}-{window_end.strftime('%H:%M')}, interview={interview_dt.strftime('%H:%M')}")
+
+                wa_ok, em_ok = False, False
+                send_err = None
+                try:
+                    from messaging import notify_otp
+                    result = await notify_otp(
+                        doc.get("full_name", ""),
+                        doc.get("phone", ""),
+                        doc.get("email", ""),
+                        doc.get("job_role", ""),
+                        otp,
+                        today_str,
+                        schedule_time_str,
+                        is_test=bool(doc.get("isTest")),
+                    )
+                    wa_ok, em_ok = result if isinstance(result, tuple) else (bool(result), False)
+                except Exception as ne:
+                    send_err = ne
+                    _logger.exception(f"[OTP:NOTIFY_EXC] email={doc.get('email')} err={ne!r}")
+
+                # iter107 — Persist per-channel results AFTER the send. We mark
+                # `otp_sent=True` only if AT LEAST ONE channel succeeded; if
+                # BOTH failed we clear `otp_dispatch_in_progress` so the next
+                # tick retries. This is the inverse of the old behaviour where
+                # `otp_sent=True` was committed before the send and any failure
+                # permanently lost the OTP email.
+                any_ok = bool(wa_ok or em_ok)
+                if any_ok:
+                    await _db.bb_registrations.update_one(
+                        {"_id": doc["_id"]},
+                        {"$set": {
+                            "otp_sent": True,
+                            "otp_sent_at": now_iso,
+                            "otp_wa_sent": bool(wa_ok),
+                            "otp_wa_sent_at": now_iso if wa_ok else None,
+                            "otp_email_sent": bool(em_ok),
+                            "otp_email_sent_at": now_iso if em_ok else None,
+                            "otp_dispatch_in_progress": False,
+                        }},
+                    )
+                    _logger.info(
+                        f"[OTP:DISPATCH_DONE] email={doc.get('email')} "
+                        f"wa_ok={wa_ok} em_ok={em_ok} otp={otp}"
+                    )
+                else:
+                    # Both channels failed — release the claim so next tick retries.
+                    await _db.bb_registrations.update_one(
+                        {"_id": doc["_id"]},
+                        {"$set": {
+                            "otp_dispatch_in_progress": False,
+                            "otp_dispatch_last_error_at": now_iso,
+                            "otp_dispatch_last_error": (repr(send_err)[:200] if send_err else "both_channels_returned_false"),
+                        }},
+                    )
+                    _logger.error(
+                        f"[OTP:DISPATCH_FAIL] email={doc.get('email')} "
+                        f"wa_ok={wa_ok} em_ok={em_ok} err={send_err!r} — will retry next tick"
+                    )
 
         except Exception as e:
             _logger.exception(f"[OTP Worker] Error: {e}")
