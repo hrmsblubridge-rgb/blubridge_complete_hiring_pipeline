@@ -108,13 +108,32 @@ export default function PublicRegistration() {
                         <div className="p-8 space-y-5">
                             <h1 className="text-2xl font-bold text-gray-900">Our Current Openings:</h1>
                             <h2 className="text-xl font-semibold text-gray-900">{jo.title}</h2>
-                            <div className="grid grid-cols-2 gap-3 text-sm">
-                                {jo.job_role && <div><span className="font-medium text-gray-600">Role:</span> <span className="text-gray-900">{jo.job_role}</span></div>}
-                                {jo.vacancies && <div><span className="font-medium text-gray-600">Vacancies:</span> <span className="text-gray-900">{jo.vacancies}</span></div>}
-                                {jo.years_of_graduation?.length > 0 && <div><span className="font-medium text-gray-600">Year of Passing Out:</span> <span className="text-gray-900">{jo.years_of_graduation.join(', ')}</span></div>}
-                                {jo.education?.length > 0 && <div className="col-span-2"><span className="font-medium text-gray-600">Education:</span> <span className="text-gray-900">{jo.education.join(', ')}</span></div>}
-                                {jo.salary_range && <div><span className="font-medium text-gray-600">Salary:</span> <span className="text-gray-900">{jo.salary_range}</span></div>}
-                            </div>
+                            {/* iter109 — Two-column details table. Rows with empty values are
+                                omitted entirely (no label + value pair rendered). */}
+                            {(() => {
+                                const rows = [
+                                    ['Job Role',           jo.job_role],
+                                    ['Vacancies',          jo.vacancies],
+                                    ['Year of Graduation', jo.years_of_graduation?.length ? jo.years_of_graduation.join(', ') : ''],
+                                    ['Education',          jo.education?.length ? jo.education.join(', ') : ''],
+                                    ['Salary Range',       jo.salary_range],
+                                ].filter(([, v]) => v !== null && v !== undefined && v !== '' && v !== 0);
+                                if (rows.length === 0) return null;
+                                return (
+                                    <div className="overflow-hidden border border-gray-200 rounded-lg" data-testid="jd-details-table">
+                                        <table className="w-full text-sm">
+                                            <tbody>
+                                                {rows.map(([label, value], i) => (
+                                                    <tr key={label} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50/60'} data-testid={`jd-row-${label.toLowerCase().replace(/\s+/g, '-')}`}>
+                                                        <th scope="row" className="text-left font-medium text-gray-600 px-4 py-2.5 border-b border-gray-100 w-1/3 align-top">{label}</th>
+                                                        <td className="text-gray-900 px-4 py-2.5 border-b border-gray-100 break-words">{value}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                );
+                            })()}
                             {/* iter108 — Prefer dynamic sections; fall back to legacy fields. */}
                             {Array.isArray(jo.descriptive_sections) && jo.descriptive_sections.length > 0
                                 ? jo.descriptive_sections.map((s, i) => (
