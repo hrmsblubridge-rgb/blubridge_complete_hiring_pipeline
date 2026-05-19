@@ -2238,10 +2238,21 @@ async def upload_college_rank(
                 if pd.isna(val):
                     doc[db_field] = None
                 elif db_field == "rank":
+                    # iter112 — Accept BOTH integer ranks (1..300) and range
+                    # strings ("101-150", "151-200", "201-300"). The classifier
+                    # in `_rank_to_college_status` handles both shapes. Without
+                    # this, range strings silently became None and ~200 valid
+                    # NIRF colleges fell into "Non-NIRF - No Rank".
+                    s = str(val).strip()
                     try:
-                        doc[db_field] = int(float(val))
+                        doc[db_field] = int(float(s))
                     except (ValueError, TypeError):
-                        doc[db_field] = None
+                        # Preserve range strings; normalize dash variants.
+                        norm = s.replace(" ", "").replace("–", "-").replace("—", "-")
+                        if norm in ("101-150", "151-200", "201-300"):
+                            doc[db_field] = norm
+                        else:
+                            doc[db_field] = None
                 else:
                     doc[db_field] = str(val).strip()
             if not doc.get("college_name"):
