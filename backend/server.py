@@ -2444,8 +2444,12 @@ def _match_college_entry(university_text: str, rank_lookup: dict) -> dict:
     if len(candidates) == 1:
         return {"rank": candidates[0]["rank"], "college_name": candidates[0]["college_name"], "confidence": "MEDIUM"}
 
-    # Step 4: Multiple matches — disambiguate via NIRF
-    nirf_candidates = [e for e in candidates if e["rank"] is not None and e["rank"] <= 100]
+    # Step 4: Multiple matches — disambiguate via NIRF (top-100 only).
+    # iter112 — Rank may now be a range string like "101-150"; only ints
+    # 1..100 count as top-NIRF for disambiguation.
+    def _is_top_nirf_rank(r):
+        return isinstance(r, int) and 1 <= r <= 100
+    nirf_candidates = [e for e in candidates if _is_top_nirf_rank(e["rank"])]
     if len(nirf_candidates) == 1:
         return {"rank": nirf_candidates[0]["rank"], "college_name": nirf_candidates[0]["college_name"], "confidence": "MEDIUM"}
 
@@ -2696,15 +2700,22 @@ async def _backfill_college_status_once():
             ops = []
             stuck_filter = {
                 "isTest": {"$ne": True},
+                # iter112 — Also re-evaluate rows currently labelled
+                # "Non-NIRF - No Rank". The NIRF dataset has been enriched
+                # with 200 newly-ranked colleges (101-300 buckets) so many of
+                # these previously No-Rank rows now resolve into real buckets.
                 "$or": [
-                    {"_college_status": {"$in": [None, "", "Non NIRF"]}},
+                    {"_college_status": {"$in": [None, "", "Non NIRF", "Non-NIRF - No Rank"]}},
                     {"_college_status": {"$exists": False}},
                 ],
             }
-            projection = {"_id": 1, "ug_university": 1, "pg_university": 1, "college": 1}
+            projection = {"_id": 1, "ug_university": 1, "pg_university": 1, "college": 1, "_college_status": 1}
             async for doc in coll.find(stuck_filter, projection):
                 cc = _classify_college(doc, rank_lookup)
                 cs = cc["college_status"]
+                # iter112 — Skip no-op writes (same value already persisted).
+                if cs == doc.get("_college_status"):
+                    continue
                 cat = "NIRF" if cs.startswith("NIRF - #") else cs
                 ops.append(UpdateOne(
                     {"_id": doc["_id"]},
