@@ -661,7 +661,9 @@ async def _persist_derived_fields(collection_name: str):
     async for doc in cursor:
         cc = _classify_college(doc, rank_lookup)
         cs = cc["college_status"]
-        cat = "NIRF" if cs.startswith("NIRF - #") else "Non NIRF"
+        # iter110 — `_nirf_category` keeps the binary premium gate ("NIRF" =
+        # rank 1..100) while exposing the full bucketed label on every row.
+        cat = "NIRF" if cs.startswith("NIRF - #") else cs
         # Pipeline records use `job_role`; naukri uses `job_title`
         raw_role = doc.get("job_title") or doc.get("job_role") or ""
         normalized_role = _resolve_normalized_job_role(raw_role, mappings)
@@ -1638,6 +1640,9 @@ async def get_global_applicants(
     startDate: str = Query(None),
     endDate: str = Query(None),
     search: str = Query(None),
+    name: str = Query(None),
+    email: str = Query(None),
+    phone: str = Query(None),
     collegeStatus: str = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(100, ge=1, le=500),
@@ -1658,13 +1663,16 @@ async def get_global_applicants(
         date_field = "last_update" if dateType == "Registered" else "schedule_date"
         match[date_field] = {"$gte": startDate, "$lte": endDate}
 
-    # College status filter (uses persisted _nirf_category / _college_status)
+    # iter110 — College status filter accepts the 5 canonical values directly
+    # OR the legacy "Non NIRF" alias (matches any non-premium bucket).
     if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
         fval = collegeStatus.strip()
         if fval == "NIRF":
             match["_nirf_category"] = "NIRF"
-        elif fval == "Non NIRF":
-            match["_nirf_category"] = "Non NIRF"
+        elif fval in ("Non NIRF", "Non-NIRF"):
+            match["_nirf_category"] = {"$ne": "NIRF"}
+        elif fval in ("Non-NIRF 101-150", "Non-NIRF 151-200", "Non-NIRF 201-300", "Non-NIRF - No Rank"):
+            match["_nirf_category"] = fval
         else:
             match["_college_status"] = fval
 
@@ -1679,6 +1687,17 @@ async def get_global_applicants(
             {"name": search_re}, {"email": search_re},
             {"phone": search_re}, {"_normalized_job_role": search_re},
         ]
+
+    # iter111 — Per-field Name / Email / Phone filters (regex partial match).
+    _npe_clauses = []
+    if name and name.strip():
+        _npe_clauses.append({"name": {"$regex": re.escape(name.strip()), "$options": "i"}})
+    if email and email.strip():
+        _npe_clauses.append({"email": {"$regex": re.escape(email.strip()), "$options": "i"}})
+    if phone and phone.strip():
+        _npe_clauses.append({"phone": {"$regex": re.escape(phone.strip())}})
+    if _npe_clauses:
+        match["$and"] = (match.get("$and") or []) + _npe_clauses
 
     total = await db.pipeline_data.count_documents(match)
     skip = (page - 1) * limit
@@ -1709,7 +1728,7 @@ async def get_global_applicants(
 
     applicants = []
     for doc in docs:
-        cs = doc.get("_college_status") or "Non NIRF"
+        cs = doc.get("_college_status") or "Non-NIRF - No Rank"
         normalized_role = doc.get("_normalized_job_role") or doc.get("job_role") or doc.get("job_title") or "Unknown"
 
         email_type = str(doc.get("email_type") or "").strip().lower()
@@ -1791,6 +1810,9 @@ async def get_attended_applicants(
     startDate: str = Query(None),
     endDate: str = Query(None),
     search: str = Query(None),
+    name: str = Query(None),
+    email: str = Query(None),
+    phone: str = Query(None),
     round: str = Query(None),
     collegeStatus: str = Query(None),
     page: int = Query(1, ge=1),
@@ -1833,13 +1855,15 @@ async def get_attended_applicants(
     if startDate and endDate:
         match["schedule_date"] = {**_not_null_filter, "$gte": startDate, "$lte": endDate}
 
-    # College status filter via persisted _nirf_category / _college_status
+    # iter110 — College status filter (5 buckets + legacy "Non NIRF" alias).
     if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
         fval = collegeStatus.strip()
         if fval == "NIRF":
             match["_nirf_category"] = "NIRF"
-        elif fval == "Non NIRF":
-            match["_nirf_category"] = "Non NIRF"
+        elif fval in ("Non NIRF", "Non-NIRF"):
+            match["_nirf_category"] = {"$ne": "NIRF"}
+        elif fval in ("Non-NIRF 101-150", "Non-NIRF 151-200", "Non-NIRF 201-300", "Non-NIRF - No Rank"):
+            match["_nirf_category"] = fval
         else:
             match["_college_status"] = fval
 
@@ -1853,6 +1877,17 @@ async def get_attended_applicants(
             {"name": search_re}, {"email": search_re},
             {"phone": search_re}, {"_normalized_job_role": search_re},
         ]
+
+    # iter111 — Per-field Name / Email / Phone filters (regex partial match).
+    _npe_clauses = []
+    if name and name.strip():
+        _npe_clauses.append({"name": {"$regex": re.escape(name.strip()), "$options": "i"}})
+    if email and email.strip():
+        _npe_clauses.append({"email": {"$regex": re.escape(email.strip()), "$options": "i"}})
+    if phone and phone.strip():
+        _npe_clauses.append({"phone": {"$regex": re.escape(phone.strip())}})
+    if _npe_clauses:
+        match["$and"] = (match.get("$and") or []) + _npe_clauses
 
     # Round filter — match against bb_applicant_updates.scores[].round_name
     if round:
@@ -1945,7 +1980,7 @@ async def get_attended_applicants(
 
     applicants = []
     for doc in docs:
-        cs = doc.get("_college_status") or "Non NIRF"
+        cs = doc.get("_college_status") or "Non-NIRF - No Rank"
         normalized_role = doc.get("_normalized_job_role") or doc.get("job_role") or doc.get("job_title") or "Unknown"
 
         doc_email = normalize_email(doc.get("email"))
@@ -2407,41 +2442,97 @@ def _match_college_entry(university_text: str, rank_lookup: dict) -> dict:
     return {"rank": None, "college_name": university_text, "confidence": "LOW"}
 
 
+def _rank_to_college_status(rank) -> str:
+    """iter110 — Map a NIRF dataset rank value (int OR range-string like
+    '101-150') to the canonical college_status label.
+
+    Returns one of:
+      • 'NIRF - #<rank>'        — rank 1..100 (premium)
+      • 'Non-NIRF 101-150'      — rank 101..150 or string '101-150'
+      • 'Non-NIRF 151-200'      — rank 151..200 or string '151-200'
+      • 'Non-NIRF 201-300'      — rank 201..300 or string '201-300'
+      • 'Non-NIRF - No Rank'    — None / empty / unrecognised
+    """
+    if rank is None or rank == "":
+        return "Non-NIRF - No Rank"
+    # Numeric rank
+    try:
+        r = int(rank)
+        if 1 <= r <= 100:
+            return f"NIRF - #{r}"
+        if 101 <= r <= 150:
+            return "Non-NIRF 101-150"
+        if 151 <= r <= 200:
+            return "Non-NIRF 151-200"
+        if 201 <= r <= 300:
+            return "Non-NIRF 201-300"
+        return "Non-NIRF - No Rank"
+    except (ValueError, TypeError):
+        pass
+    # String range — accept en/em dashes and extra whitespace
+    s = str(rank).strip().replace(" ", "").replace("–", "-").replace("—", "-")
+    if s == "101-150":
+        return "Non-NIRF 101-150"
+    if s == "151-200":
+        return "Non-NIRF 151-200"
+    if s == "201-300":
+        return "Non-NIRF 201-300"
+    return "Non-NIRF - No Rank"
+
+
 def _classify_college(doc: dict, rank_lookup: dict) -> dict:
-    """Classify a candidate's college using structured multi-criteria matching.
+    """iter110 — Five-bucket college classification.
+
     Returns: {college_status, college, match_confidence}.
-    Falls back to the pipeline-only `college` field when ug/pg universities are absent."""
+
+    Match priority unchanged from prior logic:
+      1. Both UG and PG resolve to top-NIRF (rank 1..100) → PG wins.
+      2. PG top-NIRF only → PG.
+      3. UG top-NIRF only → UG.
+      4. Neither UG nor PG text supplied AND fallback `college` exists → fallback.
+      5. Otherwise pick whichever side has ANY rank → bucketed.
+      6. No rank anywhere → 'Non-NIRF - No Rank'.
+    """
     ug_text = (doc.get("ug_university") or "").strip()
     pg_text = (doc.get("pg_university") or "").strip()
-    fallback_text = (doc.get("college") or "").strip()  # pipeline-only docs use `college`
+    fallback_text = (doc.get("college") or "").strip()
 
     ug_match = _match_college_entry(ug_text, rank_lookup)
     pg_match = _match_college_entry(pg_text, rank_lookup)
 
-    ug_nirf = ug_match["rank"] is not None and ug_match["rank"] <= 100
-    pg_nirf = pg_match["rank"] is not None and pg_match["rank"] <= 100
+    def _is_top_nirf(m: dict) -> bool:
+        r = m.get("rank")
+        try:
+            return r is not None and 1 <= int(r) <= 100
+        except (ValueError, TypeError):
+            return False
 
-    # UG/PG priority: Both NIRF→PG, else whichever is NIRF
-    if ug_nirf and pg_nirf:
-        return {"college_status": f"NIRF - #{pg_match['rank']}", "college": pg_text or "-",
-                "match_confidence": pg_match["confidence"]}
-    if pg_nirf:
-        return {"college_status": f"NIRF - #{pg_match['rank']}", "college": pg_text or "-",
-                "match_confidence": pg_match["confidence"]}
-    if ug_nirf:
-        return {"college_status": f"NIRF - #{ug_match['rank']}", "college": ug_text or "-",
-                "match_confidence": ug_match["confidence"]}
-    # Neither UG nor PG NIRF: try pipeline-only `college` fallback before giving up
+    ug_top = _is_top_nirf(ug_match)
+    pg_top = _is_top_nirf(pg_match)
+
+    if pg_top:
+        return {"college_status": _rank_to_college_status(pg_match["rank"]),
+                "college": pg_text or "-", "match_confidence": pg_match["confidence"]}
+    if ug_top:
+        return {"college_status": _rank_to_college_status(ug_match["rank"]),
+                "college": ug_text or "-", "match_confidence": ug_match["confidence"]}
+
+    # Neither UG nor PG present — fall back to the pipeline-only `college` field
     if not ug_text and not pg_text and fallback_text:
         fb_match = _match_college_entry(fallback_text, rank_lookup)
-        fb_nirf = fb_match["rank"] is not None and fb_match["rank"] <= 100
-        if fb_nirf:
-            return {"college_status": f"NIRF - #{fb_match['rank']}", "college": fallback_text,
-                    "match_confidence": fb_match["confidence"]}
-        return {"college_status": "Non NIRF", "college": fallback_text,
-                "match_confidence": fb_match.get("confidence")}
-    # Neither NIRF: prefer UG if exists, else PG, else fallback
-    return {"college_status": "Non NIRF", "college": ug_text or pg_text or fallback_text or "-",
+        return {"college_status": _rank_to_college_status(fb_match["rank"]),
+                "college": fallback_text, "match_confidence": fb_match.get("confidence")}
+
+    # Neither top-NIRF: take whichever side has a non-None rank (101-300 buckets)
+    if pg_match.get("rank") is not None:
+        return {"college_status": _rank_to_college_status(pg_match["rank"]),
+                "college": pg_text or "-", "match_confidence": pg_match["confidence"]}
+    if ug_match.get("rank") is not None:
+        return {"college_status": _rank_to_college_status(ug_match["rank"]),
+                "college": ug_text or "-", "match_confidence": ug_match["confidence"]}
+
+    return {"college_status": "Non-NIRF - No Rank",
+            "college": ug_text or pg_text or fallback_text or "-",
             "match_confidence": ug_match.get("confidence") or pg_match.get("confidence")}
 
 UPLOAD_BASE = Path(os.getenv("UPLOAD_BASE", "/tmp/uploads"))
@@ -2568,6 +2659,63 @@ async def _backfill_unknown_classifications_once():
     except Exception as e:
         # Never let backfill crash app startup. Re-run on next boot.
         logger.exception(f"[Iter108:UnknownBackfill] FAILED: {e}")
+
+
+async def _backfill_college_status_once():
+    """iter110 — One-shot backfill: reclassify `_college_status` for legacy
+    non-test rows where the value is missing OR uses the old binary
+    "Non NIRF" label. Top-NIRF rows ("NIRF - #N") are left untouched —
+    their rank-suffixed label is already correct under the new scheme.
+
+    Idempotent via `bb_meta._id='iter110_college_status_backfill'`.
+    Read-only outside the targeted match filter; never touches test rows.
+    """
+    try:
+        meta = await db.bb_meta.find_one({"_id": "iter110_college_status_backfill"})
+        if meta and meta.get("done"):
+            return
+        from pymongo import UpdateOne
+        rank_lookup = await _build_college_rank_lookup()
+        if not rank_lookup or not rank_lookup.get("entries_by_base"):
+            logger.info("[Iter110:CollegeBackfill] SKIP — empty rank lookup")
+            return
+        total_fixed = 0
+        for coll_name in ("pipeline_data", "naukri_applies", "bb_registrations"):
+            coll = db[coll_name]
+            ops = []
+            stuck_filter = {
+                "isTest": {"$ne": True},
+                "$or": [
+                    {"_college_status": {"$in": [None, "", "Non NIRF"]}},
+                    {"_college_status": {"$exists": False}},
+                ],
+            }
+            projection = {"_id": 1, "ug_university": 1, "pg_university": 1, "college": 1}
+            async for doc in coll.find(stuck_filter, projection):
+                cc = _classify_college(doc, rank_lookup)
+                cs = cc["college_status"]
+                cat = "NIRF" if cs.startswith("NIRF - #") else cs
+                ops.append(UpdateOne(
+                    {"_id": doc["_id"]},
+                    {"$set": {"_college_status": cs, "_nirf_category": cat}}
+                ))
+                if len(ops) >= 1000:
+                    await coll.bulk_write(ops, ordered=False)
+                    total_fixed += len(ops)
+                    ops = []
+            if ops:
+                await coll.bulk_write(ops, ordered=False)
+                total_fixed += len(ops)
+            logger.info(f"[Iter110:CollegeBackfill] {coll_name} processed — total_fixed_so_far={total_fixed}")
+        await db.bb_meta.update_one(
+            {"_id": "iter110_college_status_backfill"},
+            {"$set": {"done": True, "fixed_count": total_fixed,
+                      "ran_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True,
+        )
+        logger.info(f"[Iter110:CollegeBackfill] COMPLETED — reclassified {total_fixed} legacy rows")
+    except Exception as e:
+        logger.exception(f"[Iter110:CollegeBackfill] FAILED: {e}")
 
 # ---- iter67 — Per-host queue isolation ----
 # The Mongo queue is shared across deployments (preview + production), but each
@@ -3384,6 +3532,11 @@ async def startup_event():
     # Unknown/null `_normalized_job_role` using current keyword mappings.
     # Idempotent via `bb_meta` flag so reboots don't repeat the work.
     asyncio.create_task(_backfill_unknown_classifications_once())
+
+    # iter110 — One-shot backfill: reclassify rows whose `_college_status`
+    # was set under the old binary scheme ("NIRF - #N" or "Non NIRF") and
+    # any non-test rows still missing the field. Idempotent via bb_meta.
+    asyncio.create_task(_backfill_college_status_once())
 
     # Backfill slugs for existing hiring forms + ensure unique index
     try:

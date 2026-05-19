@@ -104,6 +104,8 @@ export default function CandidateJourneyModal({ candidate, onClose }) {
                                 <Detail icon={EnvelopeSimple} label="Email" value={data.basic.email} />
                                 <Detail icon={Phone} label="Phone" value={data.basic.phone} />
                                 <Detail icon={Buildings} label="College" value={data.basic.college} />
+                                {/* iter110 — Show full college_status bucket (NIRF / Non-NIRF 101-150 / etc.) */}
+                                <Detail icon={Buildings} label="College Status" value={data.basic.college_status || data.basic.college_type} />
                                 <Detail icon={Briefcase} label="Job Role" value={data.basic.job_role} />
                             </div>
                         </section>

@@ -214,7 +214,8 @@ async def _resolve_candidate_extras(email: str, phone: str) -> dict:
                     rank_lookup,
                 )
                 status = cc.get("college_status") or ""
-                ct = status if status.startswith("NIRF - #") else ("Non NIRF" if (ug or pg) else "")
+                # iter110 — Emit the full bucketed status (not the binary alias).
+                ct = status if status else ("Non-NIRF - No Rank" if (ug or pg) else "")
                 if ct:
                     out["college_type"] = ct
             if "source" not in out:
@@ -1234,10 +1235,10 @@ async def register_college_applicant(data: CollegeRegistrationBody):
     # Phone normalize (mirror existing register_applicant logic loosely)
     phone_normalized = "".join(c for c in (data.phone or "") if c.isdigit())[-10:]
 
-    # Classify college (NIRF / Non-NIRF) using existing helper
+    # iter110 — Five-bucket college status classification.
     rank_lookup = await _build_college_rank_lookup_fn()
     cc = _classify_college_fn({"ug_university": college, "pg_university": "", "college": college}, rank_lookup)
-    college_type = cc["college_status"] if cc["college_status"].startswith("NIRF - #") else "Non NIRF"
+    college_type = cc["college_status"] or "Non-NIRF - No Rank"
     submitted_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     pipeline_doc_set = {
@@ -1263,7 +1264,9 @@ async def register_college_applicant(data: CollegeRegistrationBody):
         "source": "college_drive",
         # Persisted derived fields so HR pages immediately reflect this record
         "_college_status": cc["college_status"],
-        "_nirf_category": "NIRF" if college_type.startswith("NIRF - #") else "Non NIRF",
+        # iter110 — `_nirf_category` mirrors `_college_status` (NIRF kept as
+        # the premium-only binary alias; everything else uses the full label).
+        "_nirf_category": "NIRF" if college_type.startswith("NIRF - #") else college_type,
         "_college_resolved": cc.get("college") or college,
         "_match_confidence": cc.get("match_confidence") or None,
         "_normalized_job_role": role,
@@ -1744,12 +1747,17 @@ def _build_interview_reports_match(startDate, endDate, jobRole, attendance, coll
             {"_normalized_job_role": {"$regex": f"^{p}$", "$options": "i"}}
             for p in variant_patterns
         ]})
+    # iter110 — College type filter accepts the 5 canonical buckets plus the
+    # legacy "Premium"/"Non Premium" aliases for backward compat.
     if collegeType and collegeType.strip().lower() not in ("", "all"):
-        ct = collegeType.strip().lower()
-        if "non" in ct:
-            match["_nirf_category"] = "Non NIRF"
-        elif "premium" in ct:
+        ct = collegeType.strip()
+        ct_low = ct.lower()
+        if ct == "NIRF" or "premium" in ct_low and "non" not in ct_low:
             match["_nirf_category"] = "NIRF"
+        elif ct in ("Non-NIRF 101-150", "Non-NIRF 151-200", "Non-NIRF 201-300", "Non-NIRF - No Rank"):
+            match["_nirf_category"] = ct
+        elif "non" in ct_low:
+            match["_nirf_category"] = {"$ne": "NIRF"}
     if attendance and attendance.strip().lower() not in ("", "all"):
         att = attendance.strip().lower().replace(" ", "")
         if att == "attended":
@@ -1882,6 +1890,10 @@ async def missing_applicants(
     to_date: Optional[str] = Query(None),
     date_filter: str = Query("registered"),
     report_type: str = Query("all"),
+    name: Optional[str] = Query(None),
+    email: Optional[str] = Query(None),
+    phone: Optional[str] = Query(None),
+    collegeStatus: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(100, ge=1, le=500),
 ):
@@ -1889,6 +1901,26 @@ async def missing_applicants(
     or scheduled+not-attended. Reads only `pipeline_data`."""
     await _require_auth(request)
     match = _build_missing_applicants_match(from_date, to_date, date_filter, report_type)
+    # iter111 — Per-field Name/Email/Phone + 5-bucket College Status filters.
+    _npe = []
+    if name and name.strip():
+        _npe.append({"name": {"$regex": re.escape(name.strip()), "$options": "i"}})
+    if email and email.strip():
+        _npe.append({"email": {"$regex": re.escape(email.strip()), "$options": "i"}})
+    if phone and phone.strip():
+        _npe.append({"phone": {"$regex": re.escape(phone.strip())}})
+    if _npe:
+        match["$and"] = (match.get("$and") or []) + _npe
+    if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
+        fval = collegeStatus.strip()
+        if fval == "NIRF":
+            match["_nirf_category"] = "NIRF"
+        elif fval in ("Non NIRF", "Non-NIRF"):
+            match["_nirf_category"] = {"$ne": "NIRF"}
+        elif fval in ("Non-NIRF 101-150", "Non-NIRF 151-200", "Non-NIRF 201-300", "Non-NIRF - No Rank"):
+            match["_nirf_category"] = fval
+        else:
+            match["_college_status"] = fval
     total = await _db.pipeline_data.count_documents(match)
     skip = (page - 1) * limit
     cursor = _db.pipeline_data.find(match, {"_id": 0}).skip(skip).limit(limit)
@@ -1901,7 +1933,9 @@ async def missing_applicants(
             "current_location": d.get("location") or d.get("current_location") or "",
             "job_role": d.get("job_role") or d.get("job_title") or "",
             "college": d.get("college") or d.get("_college_resolved") or "",
-            "college_type": d.get("college_type") or d.get("_college_status") or "",
+            # iter110 — Prefer the persisted bucketed status; fall back to the
+            # legacy `college_type` only if the new field is absent.
+            "college_type": d.get("_college_status") or d.get("college_type") or "",
             "degree": d.get("degree") or "",
             "course": d.get("course") or "",
             "registered_date": d.get("last_update") or "",
@@ -1950,7 +1984,7 @@ async def export_missing_applicants(
             d.get("location") or d.get("current_location") or "",
             d.get("job_role") or d.get("job_title") or "",
             d.get("college") or d.get("_college_resolved") or "",
-            d.get("college_type") or d.get("_college_status") or "",
+            d.get("_college_status") or d.get("college_type") or "",
             d.get("degree") or "",
             d.get("course") or "",
             _format_date_ddmmyyyy(reg_raw).replace("/", "-"),
@@ -2027,7 +2061,7 @@ EXPORT_FIELD_CATALOG = [
     ("schedule_date",       "Schedule Date",       "interview",    ["schedule_date"],                              lambda d: _format_date_ddmmyyyy(d.get("schedule_date") or "")),
     ("schedule_time",       "Schedule Time",       "interview",    ["schedule_time"],                              lambda d: _format_time_12h(d.get("schedule_time") or "")),
     ("attendance",          "Attendance",          "interview",    ["otp_verified"],                               lambda d: "Attended" if (d.get("otp_verified") not in (None, "", False)) else "Not Attended"),
-    ("college_type",        "College Type",        "interview",    ["_nirf_category"],                             lambda d: "Premium" if d.get("_nirf_category") == "NIRF" else ("Non-Premium" if d.get("_nirf_category") == "Non NIRF" else "")),
+    ("college_type",        "College Type",        "interview",    ["_college_status", "_nirf_category"],          lambda d: d.get("_college_status") or d.get("_nirf_category") or ""),
     ("result_status",       "Result Status",       "interview",    ["result_status"],                              lambda d: d.get("result_status") or ""),
 ]
 
@@ -2250,6 +2284,9 @@ async def get_interview_reports(
     startDate: str = Query(None), endDate: str = Query(None),
     jobRole: str = Query(None), attendance: str = Query(None),
     collegeType: str = Query(None),
+    name: Optional[str] = Query(None),
+    email: Optional[str] = Query(None),
+    phone: Optional[str] = Query(None),
     page: int = Query(1, ge=1), limit: int = Query(100, ge=1, le=500),
     sort_by: Optional[str] = Query(None),
     sort_dir: Optional[str] = Query(None),
@@ -2269,6 +2306,17 @@ async def get_interview_reports(
     raw_mappings = await _get_job_keyword_mappings()
 
     match = _build_interview_reports_match(startDate, endDate, jobRole, attendance, collegeType, _canonical_index=kw_to_canonical, _mappings=raw_mappings)
+
+    # iter111 — Per-field Name / Email / Phone filters (regex partial match).
+    _npe = []
+    if name and name.strip():
+        _npe.append({"name": {"$regex": re.escape(name.strip()), "$options": "i"}})
+    if email and email.strip():
+        _npe.append({"email": {"$regex": re.escape(email.strip()), "$options": "i"}})
+    if phone and phone.strip():
+        _npe.append({"phone": {"$regex": re.escape(phone.strip())}})
+    if _npe:
+        match["$and"] = (match.get("$and") or []) + _npe
 
     # Source: pipeline_data is the live collection (May 2026 architecture migration);
     # fall back to legacy registered_candidates if empty so older environments still work.
@@ -2295,14 +2343,18 @@ async def get_interview_reports(
             "_id": 0, "name": 1, "email": 1,
             "schedule_date": 1, "schedule_time": 1,
             "job_title": 1, "job_role": 1, "_normalized_job_role": 1,
-            "_nirf_category": 1, "otp_verified": 1,
+            "_nirf_category": 1, "_college_status": 1, "otp_verified": 1,
         }},
     ]
     docs = await src.aggregate(pipeline, allowDiskUse=False).to_list(None)
 
     rows = []
     for d in docs:
-        is_nirf = (d.get("_nirf_category") or "Non NIRF") == "NIRF"
+        # iter110 — Emit the full bucketed college status string instead of
+        # the binary Premium / Non-Premium label.
+        college_status = d.get("_college_status") or d.get("_nirf_category") or "Non-NIRF - No Rank"
+        if college_status == "NIRF":
+            college_status = "NIRF"  # binary alias rows that lack rank suffix
         otp = str(d.get("otp_verified") or "").strip()
         # iter102 — Display canonical job title per row so the table column
         # value matches the filter button labels.
@@ -2314,7 +2366,7 @@ async def get_interview_reports(
             "date": d.get("schedule_date") or "-",
             "time": d.get("schedule_time") or "-",
             "job_role": canonical_role or "-",
-            "college_type": "Premium College" if is_nirf else "Non Premium College",
+            "college_type": college_status,
             "attendance": "Attended" if otp else "Not Attended",
         })
 
@@ -2857,6 +2909,8 @@ async def candidate_journey(
             "email": resolved_email,
             "phone": resolved_phone,
             "college": pd_doc.get("college") or pd_doc.get("_college_resolved") or "",
+            # iter110 — Surface the canonical 5-bucket college status.
+            "college_status": pd_doc.get("_college_status") or pd_doc.get("college_type") or "",
             "job_role": pd_doc.get("job_role") or pd_doc.get("job_title") or "",
         },
         "round_details": round_details,
@@ -4165,7 +4219,9 @@ async def register_applicant(data: RegistrationBody):
         rank_lookup = await _build_college_rank_lookup_fn()
         from bb_modules import _classify_college_fn
         cc = _classify_college_fn({"ug_university": data.college, "pg_university": ""}, rank_lookup)
-        is_nirf = cc["college_status"].startswith("NIRF")
+        # iter110 — Premium == top-NIRF only (rank 1..100). The 5 new buckets
+        # ("Non-NIRF 101-150", etc.) are all treated as non-premium.
+        is_nirf = cc["college_status"].startswith("NIRF - #")
         if college_limit == "NIRF" and not is_nirf:
             rejected_reasons.append("College not NIRF ranked")
         elif college_limit == "Non NIRF" and is_nirf:
@@ -4250,7 +4306,7 @@ async def register_applicant(data: RegistrationBody):
     cc = _classify_college_fn({"ug_university": (data.college or "").strip(),
                                  "pg_university": "", "college": (data.college or "").strip()},
                                 rank_lookup)
-    college_type = cc["college_status"] if cc["college_status"].startswith("NIRF - #") else "Non NIRF"
+    college_type = cc["college_status"] or "Non-NIRF - No Rank"
     submitted_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     pipeline_doc_set = {
@@ -4275,7 +4331,9 @@ async def register_applicant(data: RegistrationBody):
         "source": "registration_form",
         # Persisted derived fields so filter endpoints work immediately
         "_college_status": cc["college_status"],
-        "_nirf_category": "NIRF" if college_type.startswith("NIRF - #") else "Non NIRF",
+        # iter110 — `_nirf_category` mirrors `_college_status` (NIRF kept as
+        # the premium-only binary alias; everything else uses the full label).
+        "_nirf_category": "NIRF" if college_type.startswith("NIRF - #") else college_type,
         "_college_resolved": cc.get("college") or "-",
         "_match_confidence": cc.get("match_confidence") or None,
         "_normalized_job_role": job_role,

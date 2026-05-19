@@ -108,30 +108,27 @@ export default function PublicRegistration() {
                         <div className="p-8 space-y-5">
                             <h1 className="text-2xl font-bold text-gray-900">Our Current Openings:</h1>
                             <h2 className="text-xl font-semibold text-gray-900">{jo.title}</h2>
-                            {/* iter109 — Two-column details table. Rows with empty values are
-                                omitted entirely (no label + value pair rendered). */}
+                            {/* iter110 — Two-column details table styled per reference image. */}
                             {(() => {
                                 const rows = [
-                                    ['Job Role',           jo.job_role],
-                                    ['Vacancies',          jo.vacancies],
-                                    ['Year of Graduation', jo.years_of_graduation?.length ? jo.years_of_graduation.join(', ') : ''],
-                                    ['Education',          jo.education?.length ? jo.education.join(', ') : ''],
-                                    ['Salary Range',       jo.salary_range],
+                                    ['Role',                jo.job_role],
+                                    ['Vacancies',           jo.vacancies],
+                                    ['Year of Passing Out', jo.years_of_graduation?.length ? jo.years_of_graduation.join(', ') : ''],
+                                    ['Education',           jo.education?.length ? jo.education.join(', ') : ''],
+                                    ['Salary',              jo.salary_range],
                                 ].filter(([, v]) => v !== null && v !== undefined && v !== '' && v !== 0);
                                 if (rows.length === 0) return null;
                                 return (
-                                    <div className="overflow-hidden border border-gray-200 rounded-lg" data-testid="jd-details-table">
-                                        <table className="w-full text-sm">
-                                            <tbody>
-                                                {rows.map(([label, value], i) => (
-                                                    <tr key={label} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50/60'} data-testid={`jd-row-${label.toLowerCase().replace(/\s+/g, '-')}`}>
-                                                        <th scope="row" className="text-left font-medium text-gray-600 px-4 py-2.5 border-b border-gray-100 w-1/3 align-top">{label}</th>
-                                                        <td className="text-gray-900 px-4 py-2.5 border-b border-gray-100 break-words">{value}</td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
+                                    <table className="w-full text-sm" data-testid="jd-details-table">
+                                        <tbody>
+                                            {rows.map(([label, value]) => (
+                                                <tr key={label} className="border-b border-gray-200 last:border-b-0" data-testid={`jd-row-${label.toLowerCase().replace(/\s+/g, '-')}`}>
+                                                    <th scope="row" className="text-left font-semibold text-gray-900 py-2.5 pr-6 align-top whitespace-nowrap w-[180px]">{label}:</th>
+                                                    <td className="text-gray-800 py-2.5 break-words">{value}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
                                 );
                             })()}
                             {/* iter108 — Prefer dynamic sections; fall back to legacy fields. */}

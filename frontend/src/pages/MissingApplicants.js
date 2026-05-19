@@ -36,6 +36,11 @@ export default function MissingApplicants() {
     const [toDate, setToDate] = useState(today());
     const [dateFilter, setDateFilter] = useState('registered');
     const [reportType, setReportType] = useState('all');
+    // iter111 — Per-field Name / Email / Phone / College Type filters.
+    const [nameQ, setNameQ] = useState('');
+    const [emailQ, setEmailQ] = useState('');
+    const [phoneQ, setPhoneQ] = useState('');
+    const [collegeStatus, setCollegeStatus] = useState('');
     const [rows, setRows] = useState([]);
     const [total, setTotal] = useState(0);
     const [loading, setLoading] = useState(false);
@@ -45,12 +50,19 @@ export default function MissingApplicants() {
     const [goToPage, setGoToPage] = useState('');
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-    const filterParams = useMemo(() => ({
-        from_date: fromDate,
-        to_date:   toDate,
-        date_filter: dateFilter,
-        report_type: reportType,
-    }), [fromDate, toDate, dateFilter, reportType]);
+    const filterParams = useMemo(() => {
+        const p = {
+            from_date: fromDate,
+            to_date:   toDate,
+            date_filter: dateFilter,
+            report_type: reportType,
+        };
+        if (nameQ) p.name = nameQ;
+        if (emailQ) p.email = emailQ;
+        if (phoneQ) p.phone = phoneQ;
+        if (collegeStatus) p.collegeStatus = collegeStatus;
+        return p;
+    }, [fromDate, toDate, dateFilter, reportType, nameQ, emailQ, phoneQ, collegeStatus]);
 
     const fetchRows = useCallback(async (pg = page, sz = pageSize) => {
         setLoading(true);
@@ -76,6 +88,7 @@ export default function MissingApplicants() {
     const handleReset = () => {
         setFromDate(today()); setToDate(today());
         setDateFilter('registered'); setReportType('all');
+        setNameQ(''); setEmailQ(''); setPhoneQ(''); setCollegeStatus('');
         setPage(1); setPageSize(100); setGoToPage('');
         setTimeout(() => fetchRows(1, 100), 0);
     };
@@ -156,6 +169,46 @@ export default function MissingApplicants() {
                             <select value={reportType} onChange={(e) => setReportType(e.target.value)} data-testid="missing-report-type"
                                 className="w-full bg-[#faf9f1] border border-[#e5e3d8] rounded-lg px-3 py-2 text-sm">
                                 {REPORT_TYPES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                            </select>
+                        </div>
+                        {/* iter111 — Name / Email / Phone / College Type filters with datalist suggestions. */}
+                        <div>
+                            <label className="text-[11px] font-semibold tracking-[0.16em] text-[#9b9787] uppercase block mb-1">Name</label>
+                            <input type="text" list="dl-missing-names" value={nameQ} onChange={(e) => setNameQ(e.target.value)}
+                                placeholder="Filter by name..." onKeyDown={e => e.key === 'Enter' && handleFilter()} data-testid="filter-name"
+                                className="w-full bg-[#faf9f1] border border-[#e5e3d8] rounded-lg px-3 py-2 text-sm" />
+                            <datalist id="dl-missing-names">
+                                {Array.from(new Set((rows || []).map(r => r.name).filter(Boolean))).slice(0, 200).map(v => <option key={v} value={v} />)}
+                            </datalist>
+                        </div>
+                        <div>
+                            <label className="text-[11px] font-semibold tracking-[0.16em] text-[#9b9787] uppercase block mb-1">Email</label>
+                            <input type="text" list="dl-missing-emails" value={emailQ} onChange={(e) => setEmailQ(e.target.value)}
+                                placeholder="Filter by email..." onKeyDown={e => e.key === 'Enter' && handleFilter()} data-testid="filter-email"
+                                className="w-full bg-[#faf9f1] border border-[#e5e3d8] rounded-lg px-3 py-2 text-sm" />
+                            <datalist id="dl-missing-emails">
+                                {Array.from(new Set((rows || []).map(r => r.email).filter(Boolean))).slice(0, 200).map(v => <option key={v} value={v} />)}
+                            </datalist>
+                        </div>
+                        <div>
+                            <label className="text-[11px] font-semibold tracking-[0.16em] text-[#9b9787] uppercase block mb-1">Phone</label>
+                            <input type="text" list="dl-missing-phones" value={phoneQ} onChange={(e) => setPhoneQ(e.target.value)}
+                                placeholder="Filter by phone..." onKeyDown={e => e.key === 'Enter' && handleFilter()} data-testid="filter-phone"
+                                className="w-full bg-[#faf9f1] border border-[#e5e3d8] rounded-lg px-3 py-2 text-sm" />
+                            <datalist id="dl-missing-phones">
+                                {Array.from(new Set((rows || []).map(r => r.phone).filter(Boolean))).slice(0, 200).map(v => <option key={v} value={v} />)}
+                            </datalist>
+                        </div>
+                        <div>
+                            <label className="text-[11px] font-semibold tracking-[0.16em] text-[#9b9787] uppercase block mb-1">College Type</label>
+                            <select value={collegeStatus} onChange={(e) => setCollegeStatus(e.target.value)} data-testid="filter-college-status"
+                                className="w-full bg-[#faf9f1] border border-[#e5e3d8] rounded-lg px-3 py-2 text-sm">
+                                <option value="">All</option>
+                                <option value="NIRF">NIRF</option>
+                                <option value="Non-NIRF 101-150">Non-NIRF 101-150</option>
+                                <option value="Non-NIRF 151-200">Non-NIRF 151-200</option>
+                                <option value="Non-NIRF 201-300">Non-NIRF 201-300</option>
+                                <option value="Non-NIRF - No Rank">Non-NIRF - No Rank</option>
                             </select>
                         </div>
                     </div>

@@ -61,7 +61,7 @@ MODULES = [
             "Filter by date range, job role, attendance, or college type.",
             "Click 'Export' to pick fields to include in the CSV.",
         ],
-        "tips": ["The KPI strip (Attended / Not Attended / Premium / Non-Premium) reflects current filters."],
+        "tips": ["The KPI strip (Attended / Not Attended / NIRF / Non-NIRF) reflects current filters."],
     },
     {
         "id": "update-scores", "name": "Update Applicants Scores", "icon": "PencilLine", "color": "emerald",

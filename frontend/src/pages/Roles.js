@@ -27,7 +27,15 @@ const COLUMNS = [
     { key: 'result_status', label: 'Result Status' },
 ];
 
-const COLLEGE_STATUS_OPTIONS = ['All', 'NIRF', 'Non NIRF'];
+// iter110 — Five-bucket college status filter dropdown.
+const COLLEGE_STATUS_OPTIONS = [
+    'All',
+    'NIRF',
+    'Non-NIRF 101-150',
+    'Non-NIRF 151-200',
+    'Non-NIRF 201-300',
+    'Non-NIRF - No Rank',
+];
 
 const DATE_COLS = ['registered_date', 'schedule_date'];
 
@@ -53,6 +61,11 @@ export default function Applicants() {
     const [startDate, setStartDate] = useState(_today);
     const [endDate, setEndDate] = useState(_today);
     const [search, setSearch] = useState('');
+    // iter111 — Per-field Name / Email / Phone filters with dynamic datalist
+    // suggestions populated from the current result set.
+    const [nameQ, setNameQ] = useState('');
+    const [emailQ, setEmailQ] = useState('');
+    const [phoneQ, setPhoneQ] = useState('');
     const [collegeStatus, setCollegeStatus] = useState('');
     const [goToPage, setGoToPage] = useState('');
     const [sort, setSort] = useState(null);
@@ -77,6 +90,9 @@ export default function Applicants() {
             if (filters.endDate) params.endDate = filters.endDate;
             if (filters.search) params.search = filters.search;
             if (filters.collegeStatus) params.collegeStatus = filters.collegeStatus;
+            if (filters.nameQ) params.name = filters.nameQ;
+            if (filters.emailQ) params.email = filters.emailQ;
+            if (filters.phoneQ) params.phone = filters.phoneQ;
             if (sortState?.by) { params.sort_by = sortState.by; params.sort_dir = sortState.dir; }
             const res = await axios.get(`${API}/api/applicants`, { params, withCredentials: true });
             setData(res.data.data);
@@ -96,32 +112,36 @@ export default function Applicants() {
 
     const totalPages = Math.ceil(total / pageSize) || 1;
 
+    const _allFilters = () => ({ jobRole, dateType, startDate, endDate, search, collegeStatus, nameQ, emailQ, phoneQ });
+
     const applyFilters = (pg = 1) => {
         setPage(pg);
-        fetchData({ jobRole, dateType, startDate, endDate, search, collegeStatus }, pg, pageSize, sort);
+        fetchData(_allFilters(), pg, pageSize, sort);
     };
 
     const handleReset = () => {
-        setJobRole(''); setDateType('Registered'); setStartDate(''); setEndDate(''); setSearch(''); setCollegeStatus(''); setPage(1); setPageSize(100); setSort(null);
+        setJobRole(''); setDateType('Registered'); setStartDate(''); setEndDate(''); setSearch(''); setCollegeStatus('');
+        setNameQ(''); setEmailQ(''); setPhoneQ('');
+        setPage(1); setPageSize(100); setSort(null);
         fetchData({}, 1, 100, null);
     };
 
     const handleSortChange = (next) => {
         setSort(next);
-        fetchData({ jobRole, dateType, startDate, endDate, search, collegeStatus }, 1, pageSize, next);
+        fetchData(_allFilters(), 1, pageSize, next);
         setPage(1);
     };
 
     const navigatePage = (pg) => {
         if (pg < 1 || pg > totalPages) return;
         setPage(pg);
-        fetchData({ jobRole, dateType, startDate, endDate, search, collegeStatus }, pg, pageSize, sort);
+        fetchData(_allFilters(), pg, pageSize, sort);
     };
 
     const handlePageSizeChange = (newSize) => {
         setPageSize(newSize);
         setPage(1);
-        fetchData({ jobRole, dateType, startDate, endDate, search, collegeStatus }, 1, newSize, sort);
+        fetchData(_allFilters(), 1, newSize, sort);
     };
 
     const handleGoToPage = () => {
@@ -177,6 +197,36 @@ export default function Applicants() {
                                 onKeyDown={e => e.key === 'Enter' && applyFilters(1)} data-testid="search-input"
                                 className="block w-52 bg-zinc-900 border border-zinc-700 pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
                         </div>
+                    </div>
+                    <div className="space-y-1.5">
+                        <label className="text-xs text-zinc-500 uppercase tracking-wider">Name</label>
+                        <input type="text" list="dl-names" value={nameQ} onChange={e => setNameQ(e.target.value)}
+                            placeholder="Filter by name..." onKeyDown={e => e.key === 'Enter' && applyFilters(1)}
+                            data-testid="filter-name"
+                            className="block w-40 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
+                        <datalist id="dl-names">
+                            {Array.from(new Set((data || []).map(r => r.name).filter(Boolean))).slice(0, 200).map(v => <option key={v} value={v} />)}
+                        </datalist>
+                    </div>
+                    <div className="space-y-1.5">
+                        <label className="text-xs text-zinc-500 uppercase tracking-wider">Email</label>
+                        <input type="text" list="dl-emails" value={emailQ} onChange={e => setEmailQ(e.target.value)}
+                            placeholder="Filter by email..." onKeyDown={e => e.key === 'Enter' && applyFilters(1)}
+                            data-testid="filter-email"
+                            className="block w-48 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
+                        <datalist id="dl-emails">
+                            {Array.from(new Set((data || []).map(r => r.email).filter(Boolean))).slice(0, 200).map(v => <option key={v} value={v} />)}
+                        </datalist>
+                    </div>
+                    <div className="space-y-1.5">
+                        <label className="text-xs text-zinc-500 uppercase tracking-wider">Phone</label>
+                        <input type="text" list="dl-phones" value={phoneQ} onChange={e => setPhoneQ(e.target.value)}
+                            placeholder="Filter by phone..." onKeyDown={e => e.key === 'Enter' && applyFilters(1)}
+                            data-testid="filter-phone"
+                            className="block w-40 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
+                        <datalist id="dl-phones">
+                            {Array.from(new Set((data || []).map(r => r.phone).filter(Boolean))).slice(0, 200).map(v => <option key={v} value={v} />)}
+                        </datalist>
                     </div>
                     <div className="space-y-1.5">
                         <label className="text-xs text-zinc-500 uppercase tracking-wider">College Status</label>

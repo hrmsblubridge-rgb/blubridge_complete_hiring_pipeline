@@ -43,6 +43,10 @@ export default function InterviewReports() {
     const [jobRole, setJobRole] = useState('');
     const [attendance, setAttendance] = useState('');
     const [collegeType, setCollegeType] = useState('');
+    // iter111 — Per-field Name / Email / Phone filters.
+    const [nameQ, setNameQ] = useState('');
+    const [emailQ, setEmailQ] = useState('');
+    const [phoneQ, setPhoneQ] = useState('');
     const [bbRoles, setBbRoles] = useState([]);
     const [showAllRoles, setShowAllRoles] = useState(false);
     const [sort, setSort] = useState(null);
@@ -60,6 +64,9 @@ export default function InterviewReports() {
             if (jobRole) params.jobRole = jobRole;
             if (attendance) params.attendance = attendance;
             if (collegeType) params.collegeType = collegeType;
+            if (nameQ) params.name = nameQ;
+            if (emailQ) params.email = emailQ;
+            if (phoneQ) params.phone = phoneQ;
             if (sortState?.by) { params.sort_by = sortState.by; params.sort_dir = sortState.dir; }
             const res = await axios.get(`${API}/api/bb/interview-reports`, { params, withCredentials: true });
             setData(res.data.data || []);
@@ -67,12 +74,12 @@ export default function InterviewReports() {
             setSummary(res.data.summary || {});
         } catch { toast.error('Failed to load reports'); }
         finally { setLoading(false); }
-    }, [startDate, endDate, jobRole, attendance, collegeType]);
+    }, [startDate, endDate, jobRole, attendance, collegeType, nameQ, emailQ, phoneQ]);
 
     useEffect(() => { fetchData(1, pageSize, sort); }, [fetchData, pageSize, sort]);
 
     const applyFilters = () => { setPage(1); fetchData(1, pageSize, sort); };
-    const resetFilters = () => { setStartDate(''); setEndDate(''); setJobRole(''); setAttendance(''); setCollegeType(''); setPage(1); setSort(null); };
+    const resetFilters = () => { setStartDate(''); setEndDate(''); setJobRole(''); setAttendance(''); setCollegeType(''); setNameQ(''); setEmailQ(''); setPhoneQ(''); setPage(1); setSort(null); };
     const handleSortChange = (next) => { setSort(next); setPage(1); };
     const totalPages = Math.ceil(total / pageSize) || 1;
     const navPage = (pg) => { if (pg >= 1 && pg <= totalPages) { setPage(pg); fetchData(pg, pageSize, sort); } };
@@ -168,9 +175,38 @@ export default function InterviewReports() {
                         </select>
                     </div>
                     <div className="space-y-1"><label className="text-xs text-zinc-500 uppercase tracking-wider">College</label>
-                        <select value={collegeType} onChange={e => setCollegeType(e.target.value)} data-testid="filter-college" className="block w-44 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500">
-                            <option value="">All Colleges</option><option value="Premium">Premium</option><option value="Non Premium">Non Premium</option>
+                        <select value={collegeType} onChange={e => setCollegeType(e.target.value)} data-testid="filter-college" className="block w-52 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500">
+                            <option value="">All Colleges</option>
+                            <option value="NIRF">NIRF</option>
+                            <option value="Non-NIRF 101-150">Non-NIRF 101-150</option>
+                            <option value="Non-NIRF 151-200">Non-NIRF 151-200</option>
+                            <option value="Non-NIRF 201-300">Non-NIRF 201-300</option>
+                            <option value="Non-NIRF - No Rank">Non-NIRF - No Rank</option>
                         </select>
+                    </div>
+                    <div className="space-y-1"><label className="text-xs text-zinc-500 uppercase tracking-wider">Name</label>
+                        <input type="text" list="dl-rep-names" value={nameQ} onChange={e => setNameQ(e.target.value)}
+                            placeholder="Filter by name..." onKeyDown={e => e.key === 'Enter' && applyFilters()} data-testid="filter-name"
+                            className="block w-40 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
+                        <datalist id="dl-rep-names">
+                            {Array.from(new Set((data || []).map(r => r.name).filter(Boolean))).slice(0, 200).map(v => <option key={v} value={v} />)}
+                        </datalist>
+                    </div>
+                    <div className="space-y-1"><label className="text-xs text-zinc-500 uppercase tracking-wider">Email</label>
+                        <input type="text" list="dl-rep-emails" value={emailQ} onChange={e => setEmailQ(e.target.value)}
+                            placeholder="Filter by email..." onKeyDown={e => e.key === 'Enter' && applyFilters()} data-testid="filter-email"
+                            className="block w-48 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
+                        <datalist id="dl-rep-emails">
+                            {Array.from(new Set((data || []).map(r => r.email).filter(Boolean))).slice(0, 200).map(v => <option key={v} value={v} />)}
+                        </datalist>
+                    </div>
+                    <div className="space-y-1"><label className="text-xs text-zinc-500 uppercase tracking-wider">Phone</label>
+                        <input type="text" list="dl-rep-phones" value={phoneQ} onChange={e => setPhoneQ(e.target.value)}
+                            placeholder="Filter by phone..." onKeyDown={e => e.key === 'Enter' && applyFilters()} data-testid="filter-phone"
+                            className="block w-40 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
+                        <datalist id="dl-rep-phones">
+                            {Array.from(new Set((data || []).map(r => r.phone).filter(Boolean))).slice(0, 200).map(v => <option key={v} value={v} />)}
+                        </datalist>
                     </div>
                     <button onClick={applyFilters} data-testid="apply-btn" className="flex items-center gap-2 px-5 py-2 bg-cyan-700 hover:bg-cyan-600 text-sm font-medium"><FunnelSimple size={16} /> APPLY</button>
                     <button onClick={resetFilters} className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium"><ArrowCounterClockwise size={16} /> Reset</button>
@@ -206,8 +242,8 @@ export default function InterviewReports() {
                     <div className="flex gap-4 ml-auto text-sm">
                         <div className="text-center"><div className="text-emerald-400 text-lg font-semibold">{summary.attended || 0}</div><div className="text-zinc-500 text-xs">Attended</div></div>
                         <div className="text-center"><div className="text-orange-400 text-lg font-semibold">{summary.not_attended || 0}</div><div className="text-zinc-500 text-xs">Not Attended</div></div>
-                        <div className="text-center"><div className="text-cyan-400 text-lg font-semibold">{summary.premium_colleges || 0}</div><div className="text-zinc-500 text-xs">Premium</div></div>
-                        <div className="text-center"><div className="text-zinc-400 text-lg font-semibold">{summary.non_premium_colleges || 0}</div><div className="text-zinc-500 text-xs">Non Premium</div></div>
+                        <div className="text-center"><div className="text-cyan-400 text-lg font-semibold">{summary.premium_colleges || 0}</div><div className="text-zinc-500 text-xs">NIRF</div></div>
+                        <div className="text-center"><div className="text-zinc-400 text-lg font-semibold">{summary.non_premium_colleges || 0}</div><div className="text-zinc-500 text-xs">Non-NIRF</div></div>
                     </div>
                 </div>
             </div>
