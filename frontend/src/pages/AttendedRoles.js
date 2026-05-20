@@ -129,10 +129,16 @@ export default function AttendedApplicants() {
     };
 
     const handleReset = () => {
-        setJobRole(''); setRound(''); setStartDate(''); setEndDate(''); setSearch(''); setCollegeStatus('');
+        // iter113 — Reset preserves today/today date filter; clears everything else.
+        setJobRole(''); setRound(''); setStartDate(_today); setEndDate(_today); setSearch(''); setCollegeStatus('');
         setNameQ(''); setEmailQ(''); setPhoneQ('');
         setPage(1); setPageSize(100); setSort(null);
-        fetchData({}, 1, 100, null);
+        fetchData({ startDate: _today, endDate: _today }, 1, 100, null);
+    };
+
+    const handleAllRecords = () => {
+        setStartDate(''); setEndDate(''); setPage(1);
+        fetchData({ ..._allFilters(), startDate: '', endDate: '' }, 1, pageSize, sort);
     };
 
     const handleSortChange = (next) => {
@@ -251,6 +257,10 @@ export default function AttendedApplicants() {
                     <button onClick={handleReset} data-testid="reset-btn"
                         className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium transition-colors">
                         <ArrowCounterClockwise size={16} /> Reset
+                    </button>
+                    <button onClick={handleAllRecords} data-testid="all-records-btn"
+                        className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium border border-zinc-700 transition-colors">
+                        All Records
                     </button>
                 </div>
             </div>

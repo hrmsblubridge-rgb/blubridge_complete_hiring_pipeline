@@ -672,11 +672,18 @@ async def notify_missed_reminder(name: str, phone: str, email: str, role: str, d
     date = fmt_date(date)
     time = fmt_time(time)
     schedule_link = build_public_url(f"/schedule-interview/{schedule_token}") if schedule_token else build_public_url("/")
-    wa_ok = await send_whatsapp(
-        "Candidate Followups1", phone, email,
-        [name, role, date, time, schedule_link],
-        is_test=is_test,
-    )
+    # iter113 — Independent try/except per channel so a WA exception cannot
+    # stop the email send (mirrors the iter107 OTP fix).
+    _logger.info(f"[MissedReminder:NOTIFY_START] email={email} phone={phone} role={role!r} date={date} time={time}")
+    wa_ok = False
+    try:
+        wa_ok = await send_whatsapp(
+            "Candidate Followups1", phone, email,
+            [name, role, date, time, schedule_link],
+            is_test=is_test,
+        )
+    except Exception as _we:
+        _logger.exception(f"[MissedReminder:NOTIFY_WA_EXC] email={email} err={_we!r}")
     body = f"""
     <p style="margin:0 0 16px 0;">Hi {name},</p>
     <p style="margin:0 0 16px 0;">We noticed you missed your scheduled interview at Blubridge. We understand unexpected situations may occur, so we'd like to offer you one final opportunity to reschedule.</p>
@@ -689,7 +696,12 @@ async def notify_missed_reminder(name: str, phone: str, email: str, role: str, d
     <p style="margin:24px 0 4px 0;">Warm regards,</p>
     <p style="margin:0;">Blubridge Recruitment Team</p>
     """
-    em_ok = await send_email(email, phone, "Missed Interview - Reschedule Opportunity - Blubridge", _email_shell(body, with_logo_footer=False), is_test=is_test)
+    em_ok = False
+    try:
+        em_ok = await send_email(email, phone, "Missed Interview - Reschedule Opportunity - Blubridge", _email_shell(body, with_logo_footer=False), is_test=is_test)
+    except Exception as _ee:
+        _logger.exception(f"[MissedReminder:NOTIFY_EMAIL_EXC] email={email} err={_ee!r}")
+    _logger.info(f"[MissedReminder:NOTIFY_DONE] email={email} wa_ok={wa_ok} em_ok={em_ok}")
     return wa_ok, em_ok
 
 

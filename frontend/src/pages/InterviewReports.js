@@ -79,7 +79,9 @@ export default function InterviewReports() {
     useEffect(() => { fetchData(1, pageSize, sort); }, [fetchData, pageSize, sort]);
 
     const applyFilters = () => { setPage(1); fetchData(1, pageSize, sort); };
-    const resetFilters = () => { setStartDate(''); setEndDate(''); setJobRole(''); setAttendance(''); setCollegeType(''); setNameQ(''); setEmailQ(''); setPhoneQ(''); setPage(1); setSort(null); };
+    // iter113 — Reset preserves today/today date filter; All Records drops dates entirely.
+    const resetFilters = () => { setStartDate(_today_iso); setEndDate(_today_iso); setJobRole(''); setAttendance(''); setCollegeType(''); setNameQ(''); setEmailQ(''); setPhoneQ(''); setPage(1); setSort(null); };
+    const handleAllRecords = () => { setStartDate(''); setEndDate(''); setPage(1); };
     const handleSortChange = (next) => { setSort(next); setPage(1); };
     const totalPages = Math.ceil(total / pageSize) || 1;
     const navPage = (pg) => { if (pg >= 1 && pg <= totalPages) { setPage(pg); fetchData(pg, pageSize, sort); } };
@@ -209,7 +211,8 @@ export default function InterviewReports() {
                         </datalist>
                     </div>
                     <button onClick={applyFilters} data-testid="apply-btn" className="flex items-center gap-2 px-5 py-2 bg-cyan-700 hover:bg-cyan-600 text-sm font-medium"><FunnelSimple size={16} /> APPLY</button>
-                    <button onClick={resetFilters} className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium"><ArrowCounterClockwise size={16} /> Reset</button>
+                    <button onClick={resetFilters} data-testid="reset-btn" className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium"><ArrowCounterClockwise size={16} /> Reset</button>
+                    <button onClick={handleAllRecords} data-testid="all-records-btn" className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium border border-zinc-700">All Records</button>
                     <button onClick={() => setExportModalOpen(true)} disabled={exporting} data-testid="export-btn" className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-60 disabled:cursor-not-allowed text-sm font-medium"><Export size={16} /> {exporting ? 'Exporting…' : 'Export'}</button>
                 </div>
             </div>

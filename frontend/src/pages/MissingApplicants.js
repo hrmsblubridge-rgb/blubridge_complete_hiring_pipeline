@@ -86,11 +86,17 @@ export default function MissingApplicants() {
     };
 
     const handleReset = () => {
+        // iter113 — Reset preserves today/today date filter; All Records drops dates entirely.
         setFromDate(today()); setToDate(today());
         setDateFilter('registered'); setReportType('all');
         setNameQ(''); setEmailQ(''); setPhoneQ(''); setCollegeStatus('');
         setPage(1); setPageSize(100); setGoToPage('');
         setTimeout(() => fetchRows(1, 100), 0);
+    };
+
+    const handleAllRecords = () => {
+        setFromDate(''); setToDate(''); setPage(1); setGoToPage('');
+        setTimeout(() => fetchRows(1, pageSize), 0);
     };
 
     const navigatePage = (pg) => {
@@ -220,6 +226,10 @@ export default function MissingApplicants() {
                         <button onClick={handleReset} data-testid="missing-reset-btn"
                             className="px-5 py-2.5 rounded-lg border border-[#e5e3d8] bg-[#fffdf7] text-[#1a2332] font-semibold text-sm hover:bg-[#efede5] flex items-center gap-2">
                             <ArrowClockwise size={16} /> Reset
+                        </button>
+                        <button onClick={handleAllRecords} data-testid="missing-all-records-btn"
+                            className="px-5 py-2.5 rounded-lg border border-[#e5e3d8] bg-[#fffdf7] text-[#1a2332] font-semibold text-sm hover:bg-[#efede5]">
+                            All Records
                         </button>
                         <div className="ml-auto flex gap-2">
                             <button onClick={() => handleExport('csv')} data-testid="missing-export-csv-btn"

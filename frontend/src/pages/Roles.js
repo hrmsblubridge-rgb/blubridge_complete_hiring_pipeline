@@ -120,10 +120,18 @@ export default function Applicants() {
     };
 
     const handleReset = () => {
-        setJobRole(''); setDateType('Registered'); setStartDate(''); setEndDate(''); setSearch(''); setCollegeStatus('');
+        // iter113 — Reset clears non-date filters AND restores the default
+        // "today only" date range. Use "All Records" button to drop dates.
+        setJobRole(''); setDateType('Registered'); setStartDate(_today); setEndDate(_today); setSearch(''); setCollegeStatus('');
         setNameQ(''); setEmailQ(''); setPhoneQ('');
         setPage(1); setPageSize(100); setSort(null);
-        fetchData({}, 1, 100, null);
+        fetchData({ dateType: 'Registered', startDate: _today, endDate: _today }, 1, 100, null);
+    };
+
+    const handleAllRecords = () => {
+        // iter113 — Drop date constraints entirely; keep other filters intact.
+        setStartDate(''); setEndDate(''); setPage(1);
+        fetchData({ ..._allFilters(), startDate: '', endDate: '' }, 1, pageSize, sort);
     };
 
     const handleSortChange = (next) => {
@@ -242,6 +250,10 @@ export default function Applicants() {
                     <button onClick={handleReset} data-testid="reset-btn"
                         className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium transition-colors">
                         <ArrowCounterClockwise size={16} /> Reset
+                    </button>
+                    <button onClick={handleAllRecords} data-testid="all-records-btn"
+                        className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium border border-zinc-700 transition-colors">
+                        All Records
                     </button>
                 </div>
             </div>

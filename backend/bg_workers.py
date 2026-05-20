@@ -501,8 +501,11 @@ async def _worker_missed_interview():
                 except (ValueError, IndexError):
                     continue
 
-                # Only mark missed if interview time + 2 hours has passed (grace period)
-                if now < interview_dt + timedelta(hours=2):
+                # iter113 — Trigger window per spec: 1 hour after the
+                # scheduled interview time (was 2h before — caused reminders
+                # to fire too late or not at all when the source row was
+                # already past 7-day cutoff).
+                if now < interview_dt + timedelta(hours=1):
                     continue
 
                 # Mark as missed
@@ -519,20 +522,45 @@ async def _worker_missed_interview():
 
                 # Send missed reminder with reschedule link
                 token = doc.get("schedule_token")
+                # iter113 — Lazily generate a `schedule_token` when missing so
+                # the reschedule link still works for legacy rows that never
+                # had one persisted (else the entire missed-reminder was
+                # silently skipped — observed in production).
+                if not token:
+                    try:
+                        import secrets
+                        token = secrets.token_urlsafe(32)
+                        await _db.bb_registrations.update_one(
+                            {"_id": doc["_id"]},
+                            {"$set": {"schedule_token": token, "schedule_token_generated_at": now.isoformat()}},
+                        )
+                    except Exception as _te:
+                        _logger.warning(f"[Missed] token generation failed for {doc.get('email')}: {_te!r}")
+                        token = None
                 name = (doc.get("full_name") or "").strip()
                 phone = (doc.get("phone") or "").strip()
                 email = (doc.get("email") or "").strip()
-                # iter91 FIX 2G — abort if any required template field is missing.
+                # iter113 — abort if any required template field is missing.
                 if token and name and (email or phone):
-                    from messaging import notify_missed_reminder
-                    await notify_missed_reminder(
-                        name, phone, email,
-                        doc.get("job_role", ""),
-                        schedule_date,
-                        schedule_time_str,
-                        token,
-                        is_test=bool(doc.get("isTest")),
+                    _logger.info(
+                        f"[Missed:DISPATCH] email={email} phone={phone} "
+                        f"role={doc.get('job_role','')!r} interview={schedule_date} {schedule_time_str}"
                     )
+                    wa_ok, em_ok = False, False
+                    try:
+                        from messaging import notify_missed_reminder
+                        result = await notify_missed_reminder(
+                            name, phone, email,
+                            doc.get("job_role", ""),
+                            schedule_date,
+                            schedule_time_str,
+                            token,
+                            is_test=bool(doc.get("isTest")),
+                        )
+                        wa_ok, em_ok = result if isinstance(result, tuple) else (bool(result), False)
+                    except Exception as _me:
+                        _logger.exception(f"[Missed:DISPATCH] FAILED email={email}: {_me!r}")
+                    _logger.info(f"[Missed:DISPATCH_DONE] email={email} wa_ok={wa_ok} em_ok={em_ok}")
                 elif token:
                     _logger.warning(
                         f"[Missed] SKIP missed-reminder send — missing required field "
@@ -672,7 +700,27 @@ async def _worker_import_rejection_mailer():
             async for doc in cursor_b:
                 email = (doc.get("email") or "").strip()
                 phone = (doc.get("phone") or "").strip()
-                name = (doc.get("full_name") or doc.get("name") or "").strip()
+                # iter113 — Same canonical lookup as Source A: prefer the
+                # latest `pipeline_data` name/job_role over the local row's
+                # values to eliminate stale-payload bugs.
+                pd_doc = None
+                if email or phone:
+                    pd_query = {"$or": []}
+                    if email:
+                        pd_query["$or"].append({"email": email})
+                    if phone:
+                        pd_query["$or"].append({"phone": phone})
+                    pd_doc = await _db.pipeline_data.find_one(
+                        pd_query,
+                        {"_id": 0, "name": 1, "job_role": 1, "job_title": 1, "_normalized_job_role": 1},
+                        sort=[("registered_at", -1)],
+                    )
+                name = (
+                    (pd_doc or {}).get("name")
+                    or doc.get("full_name")
+                    or doc.get("name")
+                    or ""
+                ).strip()
                 # iter88 — ABORT if any required template field is missing.
                 if not name or (not email and not phone):
                     skipped_no_name += 1
@@ -713,6 +761,12 @@ async def _worker_import_rejection_mailer():
                     skipped_send_failed += 1
                     _logger.error(f"[RejectSend:B] FAILED email={email!r}: {send_err!r}")
 
+            _logger.info(
+                f"[RejectScheduler] BATCH_DONE sent={sent} "
+                f"skipped_missing_field={skipped_no_name} send_failed={skipped_send_failed}"
+            )
+
+        except Exception as e:
             _logger.info(
                 f"[RejectScheduler] BATCH_DONE sent={sent} "
                 f"skipped_missing_field={skipped_no_name} send_failed={skipped_send_failed}"
