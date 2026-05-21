@@ -1,3 +1,62 @@
+## iter114 — Missed Interview Email Dispatch Fix (May 21 2026)
+
+### Reported symptom
+Candidate scheduled today at 03:30 PM IST; past 04:30 PM no follow-up
+mail OR WhatsApp received (Message 563). Previous iter113 attempt (split
+try/except + `>=1h` math) did not resolve in production.
+
+### Root cause
+Centralized `messaging.send_email` failed every call with
+`[Email:FAIL] stage=config RESEND_API_KEY missing` because the env var
+`RESEND_API_KEY` was **empty** in `/app/backend/.env` (and was unset on Render
+in production). WhatsApp dispatch via AiSensy was healthy — only the email
+half of every notify-* flow was silently dropping (OTP, missed-reminder,
+rejection, shortlist).
+
+Background-worker logs **confirmed the worker logic itself was correct**:
+```
+[Missed:HEARTBEAT] alive ist=16:53:46 today=2026-05-21 scanned=1
+[Missed:ELIGIBLE] email=rishi.nayak@blubridge.com interview=2026-05-21 15:30 IST now=16:53 (>=16:30)
+[Missed:DISPATCH] email=rishi.nayak@blubridge.com phone=9443109903
+[Missed:DISPATCH_DONE] email=rishi.nayak@blubridge.com wa_ok=True em_ok=False
+```
+The worker fired on schedule, IST datetime math was correct, candidate
+was eligible, WA went through — only email failed at the transport layer.
+
+### Fix
+Set `RESEND_API_KEY=re_SsQhiKPn_DvXC7kSavcM536kquLZdky1K` in
+`/app/backend/.env` (user confirmed this same key is already set on the
+Render production environment variable panel — so production is healthy
+once the next deploy boots, no code change needed there).
+
+User explicitly declined adding a per-row email-retry layer to
+`_worker_missed_interview` — when an email fails, the existing **Manual
+Applicant Alerts** feature is the recovery channel.
+
+### Verification
+- `messaging.send_email` → returns `True` end-to-end against
+  `rishi.nayak@blubridge.com` using `re_SsQhi…` key.
+- `messaging.notify_missed_reminder` → returns `(wa_ok=True, em_ok=True)`.
+- New regression tests:
+  - `tests/test_iter114_missed_interview_email.py::test_resend_api_key_present`
+  - `tests/test_iter114_missed_interview_email.py::test_send_email_via_resend`
+  - `tests/test_iter114_missed_interview_email.py::test_notify_missed_reminder_dispatches_both_channels`
+- ALL 3 pass. ONLY tester credentials touched.
+
+### Files
+- `/app/backend/.env` — `RESEND_API_KEY` populated.
+- `/app/backend/tests/test_iter114_missed_interview_email.py` — new regression.
+
+### Production-safety guarantees
+- No code change. Pure env-var.
+- No worker reset → existing in-flight `missed_marked=True` rows are NOT
+  retried (matches user's "keep current behavior" choice).
+- Manual Applicant Alerts remains the recovery path for any future
+  Resend transport blip.
+
+---
+
+
 ## iter108 — Production Batch: Default-Today Filters + Unknown Reclassification + Dynamic Job Sections (May 2026)
 
 ### Tasks shipped
