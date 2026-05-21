@@ -1,3 +1,66 @@
+## iter115 — Final Reject Source A Canonical-Name Lookup (May 21 2026)
+
+### Reported symptom
+Production candidate registered as **"May 21 Rishi"** but the delivered
+rejection Email + WhatsApp both said **"Dear Final_Test_Rishi"**. Worker logs
+also showed `[RejectSend:A] attempt name='Final_Test_Rishi'` — so the bug was
+invisible to log auditing.
+
+### Root cause
+`_worker_import_rejection_mailer` Source A (post-interview rejections from
+`bb_applicant_updates`) trusted the local row's `name` / `job_role` fields.
+Those fields are written once at score-update time and are **NEVER refreshed
+on tester re-registration** — the tester block in
+`bb_modules.register_applicant` resets only `scores`, `status`,
+`rejection_*`, `result_status` — not `name` / `job_role`. The stale name
+therefore lived in `bb_applicant_updates` indefinitely, and the rejection
+worker faithfully copied it into the AiSensy params + email body.
+
+Source B already had the canonical-lookup fix since iter113; Source A was
+overlooked.
+
+### Fix (surgical, bg_workers.py Source A only)
+After reading each `bb_applicant_updates` doc, do the same lookup Source B
+already does:
+```python
+pd_doc_a = await _db.pipeline_data.find_one(
+    {"$or": [{"email": email}, {"phone": phone}]},
+    {"_id": 0, "name": 1, "job_role": 1, "job_title": 1, ...},
+    sort=[("registered_at", -1)],
+)
+name = (pd_doc_a or {}).get("name") or local_name
+job_role = (pd_doc_a or {}).get("job_role") or local_job_role
+```
+Emits `[RejectSend:A:CANONICAL] local_name=... → canonical_name=...` so
+future stale-overrides are visible in logs.
+
+### Verification
+- `tests/test_iter115_reject_source_a_canonical.py::test_canonical_lookup_overrides_stale_local_row` PASSES.
+  Inserts stale `bb_applicant_updates.name='Final_Test_Rishi_STALE'` plus fresh
+  `pipeline_data.name='May 21 Rishi'` → worker derives `name='May 21 Rishi'`,
+  `job_role='AI & ML Engineer'`. Synthetic rows tagged `_iter115_canonical_lookup_test`
+  cleaned up.
+- `tests/test_iter115_reject_source_a_canonical.py::test_dispatch_with_canonical_values_succeeds_end_to_end` PASSES.
+  End-to-end `notify_rejected("May 21 Rishi", ..., "AI & ML Engineer")` →
+  AiSensy `submitted_message_id` returned + Resend email id returned.
+
+### Files modified
+- `/app/backend/bg_workers.py` — Source A canonical-name lookup added (lines ~665-720).
+
+### Files added
+- `/app/backend/tests/test_iter115_reject_source_a_canonical.py`
+
+### Production-safety guarantees
+- Read-only lookup on `pipeline_data`. No production data modified.
+- Existing idempotency unchanged (`rejection_sent=True` flag still flipped after dispatch).
+- Stale fallback preserved: if `pipeline_data` lookup returns nothing, we still
+  fall back to the local row's name/role so no rejection is dropped.
+- `[RejectSend:A:CANONICAL]` log line only emits when local ≠ canonical
+  (low log volume).
+
+---
+
+
 ## iter114 — Missed Interview Email Dispatch Fix (May 21 2026)
 
 ### Reported symptom

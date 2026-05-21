@@ -666,7 +666,45 @@ async def _worker_import_rejection_mailer():
             async for doc in cursor_a:
                 email = (doc.get("email") or "").strip()
                 phone = (doc.get("phone") or "").strip()
-                name = (doc.get("name") or "").strip()
+                # iter115 — Canonical-latest lookup for Source A (mirrors the
+                # Source B fix from iter113). `bb_applicant_updates.name` /
+                # `.job_role` are written once at score-update time and are
+                # NEVER refreshed on tester re-registration (only `scores`,
+                # `status`, rejection flags get reset). Result: a tester who
+                # re-registers as "May 21 Rishi" still received rejections
+                # addressed to the stale "Final_Test_Rishi" because Source A
+                # trusted the stale local row. Fix: read the latest
+                # `pipeline_data` row (sort registered_at DESC) and PREFER
+                # its name / job_role over the local row's values.
+                pd_doc_a = None
+                if email or phone:
+                    pd_query = {"$or": []}
+                    if email:
+                        pd_query["$or"].append({"email": email})
+                    if phone:
+                        pd_query["$or"].append({"phone": phone})
+                    pd_doc_a = await _db.pipeline_data.find_one(
+                        pd_query,
+                        {"_id": 0, "name": 1, "job_role": 1, "job_title": 1, "_normalized_job_role": 1, "registered_at": 1},
+                        sort=[("registered_at", -1)],
+                    )
+                stale_name = (doc.get("name") or "").strip()
+                stale_role = (doc.get("job_role") or doc.get("job_title") or "").strip()
+                fresh_name = ((pd_doc_a or {}).get("name") or "").strip()
+                fresh_role = (
+                    (pd_doc_a or {}).get("job_role")
+                    or (pd_doc_a or {}).get("job_title")
+                    or ""
+                ).strip()
+                name = fresh_name or stale_name
+                job_role = fresh_role or stale_role
+                if pd_doc_a and (fresh_name != stale_name or fresh_role != stale_role):
+                    _logger.info(
+                        f"[RejectSend:A:CANONICAL] email={email!r} phone={phone!r} "
+                        f"local_name={stale_name!r} → canonical_name={fresh_name!r} "
+                        f"local_role={stale_role!r} → canonical_role={fresh_role!r} "
+                        f"pd_registered_at={(pd_doc_a or {}).get('registered_at')!r}"
+                    )
                 # iter88 — ABORT if any required template field is missing.
                 # Never send a rejection with a placeholder/dummy name.
                 if not name or (not email and not phone):
@@ -679,7 +717,7 @@ async def _worker_import_rejection_mailer():
                 _logger.info(
                     f"[RejectSend:A] attempt email={email!r} phone={phone!r} "
                     f"name={name!r} is_test={bool(doc.get('isTest'))} "
-                    f"job_role={(doc.get('job_role') or doc.get('job_title') or '')!r}"
+                    f"job_role={job_role!r}"
                 )
                 try:
                     from messaging import notify_rejected
@@ -689,7 +727,7 @@ async def _worker_import_rejection_mailer():
                     _logger.info(f"[RejectSend:Email] starting email={email!r}")
                     ok = await notify_rejected(
                         name, phone, email,
-                        job_role=doc.get("job_role") or doc.get("job_title") or "",
+                        job_role=job_role,
                         is_test=bool(doc.get("isTest")),
                     )
                     await _db.bb_applicant_updates.update_one(
