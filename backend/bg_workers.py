@@ -460,14 +460,17 @@ async def _worker_otp_expiry():
 
 async def _worker_missed_interview():
     """Mark applicants as 'Missed' if interview time passed and OTP not verified. Send reminder."""
-    _logger.info("Missed Interview worker started")
+    _logger.info("Missed Interview worker started (IST-aware)")
+    _heartbeat = 0
     while True:
         try:
-            now = datetime.now(timezone.utc)
+            # iter114 — Use IST-local `now` so the "interview time + 1h"
+            # trigger window matches `schedule_date` + `schedule_time` which
+            # are stored as IST-local. The earlier UTC implementation made
+            # the worker think every interview was ~5.5h in the future and
+            # silently skipped EVERY candidate.
+            now = _local_now()
             today_str = now.strftime("%Y-%m-%d")
-            # iter91 — Stop scanning interviews older than 7 days. Stale tester
-            # re-registration rows from days/weeks ago would otherwise trigger
-            # phantom missed-reminder sends.
             seven_days_ago_str = (now - timedelta(days=7)).strftime("%Y-%m-%d")
 
             # Find scheduled interviews (NEW only) for today/past that weren't attended
@@ -481,6 +484,15 @@ async def _worker_missed_interview():
             })
             docs = await cursor.to_list(None)
 
+            # iter114 — Visible heartbeat every ~5 min (10 ticks * 30s) so
+            # admins can observe the worker even when no candidates are eligible.
+            if _heartbeat % 10 == 0:
+                _logger.info(
+                    f"[Missed:HEARTBEAT] alive ist={now.strftime('%H:%M:%S')} "
+                    f"today={today_str} scanned={len(docs)}"
+                )
+            _heartbeat += 1
+
             for doc in docs:
                 schedule_date = doc.get("schedule_date", "")
                 schedule_time_str = (doc.get("schedule_time") or "").strip()
@@ -493,20 +505,28 @@ async def _worker_missed_interview():
                 except (ValueError, IndexError):
                     continue
 
-                # Build interview datetime
+                # Build interview datetime IN IST (same tz as `now`).
                 try:
-                    from datetime import date as date_type
                     y, m, d = map(int, schedule_date.split("-"))
-                    interview_dt = datetime(y, m, d, hour, minute, 0, tzinfo=timezone.utc)
+                    interview_dt = datetime(y, m, d, hour, minute, 0, tzinfo=now.tzinfo)
                 except (ValueError, IndexError):
                     continue
 
-                # iter113 — Trigger window per spec: 1 hour after the
-                # scheduled interview time (was 2h before — caused reminders
-                # to fire too late or not at all when the source row was
-                # already past 7-day cutoff).
-                if now < interview_dt + timedelta(hours=1):
+                # iter114 — Detailed eligibility trace so admins can see why
+                # any specific candidate hasn't been sent the reminder yet.
+                trigger_dt = interview_dt + timedelta(hours=1)
+                if now < trigger_dt:
+                    _logger.info(
+                        f"[Missed:SKIP_WINDOW] email={doc.get('email')} "
+                        f"interview={interview_dt.strftime('%Y-%m-%d %H:%M IST')} "
+                        f"trigger_at={trigger_dt.strftime('%H:%M')} now={now.strftime('%H:%M')}"
+                    )
                     continue
+                _logger.info(
+                    f"[Missed:ELIGIBLE] email={doc.get('email')} "
+                    f"interview={interview_dt.strftime('%Y-%m-%d %H:%M IST')} "
+                    f"now={now.strftime('%H:%M')} (>={trigger_dt.strftime('%H:%M')})"
+                )
 
                 # Mark as missed
                 await _db.bb_registrations.update_one(
