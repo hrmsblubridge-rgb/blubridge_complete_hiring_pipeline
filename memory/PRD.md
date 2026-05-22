@@ -1,3 +1,87 @@
+## iter116 — View Applicants "Registered" Filter Fix + Bulk-Upload Memory Cleanup (May 22 2026)
+
+### Issue 1 — View Applicants Registered filter dropped same-day candidates
+
+**Reported symptom**
+Candidate registered on 22/05 IST and scheduled interview the same day was
+visible under `dateType=Scheduled` but NOT under `dateType=Registered`.
+
+**Root cause**
+`/api/applicants` line 1663 (server.py) used `last_update` as the field
+backing the "Registered" filter. `last_update` is **overwritten** on every
+downstream action (schedule, OTP-verify, status change). Two compounding
+issues:
+1. **Wrong field semantics:** "Registered" should reflect the immutable
+   registration timestamp, not the latest mutation.
+2. **Missing time-suffix tolerance:** the upper-bound used
+   `{"$lte": endDate}` (no `\uffff` suffix), so `last_update` strings of
+   the form `"2026-05-22T09:27:20+00:00"` failed the `<= "2026-05-22"`
+   lexicographic comparison.
+
+Verified against live tester row:
+`submitted_at='2026-05-22 06:02:15'`, `last_update='2026-05-22T09:27:20+00:00'`.
+OLD filter (`last_update`) → 0 matches for `Registered=2026-05-22` (bug).
+NEW filter (`submitted_at` + `\uffff` suffix) → 1 match (correct).
+
+**Fix (server.py only)**
+- `date_field = "submitted_at" if dateType == "Registered" else "schedule_date"`.
+- Upper bound now `endDate + "\uffff"` so time-portion strings match.
+- Sort mapping `registered_date` → `submitted_at`.
+- Projection now includes `submitted_at`; response surfaces it as
+  `registered_date` so users see what they filtered on.
+- `submitted_at` exists on 131329/131331 production rows (verified) — no
+  backfill needed.
+
+### Issue 2 — Render 512 MB OOM during bulk upload
+
+**Reported symptom**
+Render production logs: `Ran out of memory (used over 512MB)` →
+`Instance failed` → auto-recovery. Triggered by XLSX uploads (e.g.
+`Overall_candidates_21May.xlsx` 2 MB).
+
+**Root cause**
+`_bg_queue_worker` held both the raw file bytes (`content`) AND the parsed
+pandas DataFrame across consecutive jobs, and the DataFrame's per-row Series
+materialization (`df.iterrows()`) left GC-eligible objects lingering. With
+multiple uploads stacked + Mongo connection pool + FastAPI worker overhead,
+peak RSS exceeded the 512 MB Render cap.
+
+**Fix (LOW-risk surgical cleanup, server.py only)**
+- New `_rss_mb()` helper (stdlib `resource` only, no new dependency).
+- After each `_process_*_file` iteration loop completes: explicit
+  `del df + gc.collect()` (3 occurrences: naukri, pipeline, score).
+- In `_bg_queue_worker` after `process_fn` returns: `del content + gc.collect()`
+  + new `[QueueMem] file=… peak_rss_mb=… after_gc_rss_mb=… freed_mb=…`
+  log line so future OOM incidents are traceable to a specific upload.
+
+### Verification
+- `tests/test_iter116_view_applicants_filter_and_memory.py` — 4/4 PASS.
+  - `test_registered_filter_uses_submitted_at_not_last_update` ✓
+  - `test_scheduled_filter_still_works` ✓
+  - `test_registered_filter_does_not_use_last_update` (proves old bug) ✓
+  - `test_rss_helper_returns_positive_value` ✓
+- Backend restarts clean. No regressions.
+- Live data sanity-check confirmed both NEW vs OLD filter behavior on the
+  actual tester `pipeline_data` row.
+
+### Files modified
+- `/app/backend/server.py` — `_rss_mb()` helper, filter switch, projection
+  expansion, response field, post-loop gc/del in 3 processors, queue worker
+  `[QueueMem]` log line.
+
+### Files added
+- `/app/backend/tests/test_iter116_view_applicants_filter_and_memory.py`
+
+### Production-safety guarantees
+- No schema migration. `submitted_at` already populated on 131329/131331 rows.
+- No data rewrites. Only synthetic rows tagged `_iter116_filter_test` touched.
+- gc.collect is a no-op when nothing's collectable; safe on every poll.
+- `[QueueMem]` log emits once per upload (low volume).
+- Worker still drains pending queue → no behaviour change in throughput.
+
+---
+
+
 ## iter115 — Final Reject Source A Canonical-Name Lookup (May 21 2026)
 
 ### Reported symptom

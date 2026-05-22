@@ -33,6 +33,8 @@ import jwt
 import pandas as pd
 import io
 import re
+import gc
+import resource as _resource
 from bson import ObjectId
 
 # MongoDB connection
@@ -179,6 +181,19 @@ def build_sort(sort_by: Optional[str], sort_dir: Optional[str], allowed: dict, d
         return default
     direction = -1 if (sort_dir or "").lower() == "desc" else 1
     return {db_field: direction}
+
+
+def _rss_mb() -> float:
+    """Return current process resident memory in MB. Linux: ru_maxrss is in KB.
+    macOS: ru_maxrss is in bytes. iter116 — added so bulk-upload worker can
+    log RAM before/after each XLSX parse + after GC, making Render OOM
+    incidents (512 MB cap) traceable to a specific upload."""
+    try:
+        kb = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss
+        # On macOS this is bytes; on Linux it's KB. Detect via magnitude.
+        return round(kb / 1024.0, 1) if kb > 10_000_000 else round(kb / 1024.0, 1)
+    except Exception:
+        return -1.0
 
 
 def parse_file(file_content: bytes, filename: str) -> pd.DataFrame:
@@ -1658,10 +1673,17 @@ async def get_global_applicants(
     """
     match = {"isTest": {"$ne": True}}
 
-    # Date filter (pipeline uses last_update for "registered" date, schedule_date for interview)
+    # Date filter — iter116: "Registered" filter MUST use immutable
+    # `submitted_at` (set once at registration time and never overwritten).
+    # The previous `last_update` choice was overwritten by every downstream
+    # action (schedule / OTP-verify / status change), so a candidate who
+    # registered on 22/05 IST and then scheduled later that same day could
+    # be pushed off the "Registered=22/05" filter when the schedule write's
+    # UTC timestamp crossed midnight. `schedule_date` continues to drive
+    # the "Scheduled" filter.
     if startDate and endDate:
-        date_field = "last_update" if dateType == "Registered" else "schedule_date"
-        match[date_field] = {"$gte": startDate, "$lte": endDate}
+        date_field = "submitted_at" if dateType == "Registered" else "schedule_date"
+        match[date_field] = {"$gte": startDate, "$lte": endDate + "\uffff"}
 
     # iter110 — College status filter accepts the 5 canonical values directly
     # OR the legacy "Non NIRF" alias (matches any non-premium bucket).
@@ -1708,7 +1730,7 @@ async def get_global_applicants(
         "_normalized_job_role": 1,
         "degree": 1, "email_type": 1, "otp_verified": 1,
         "schedule_date": 1, "schedule_time": 1, "result_status": 1,
-        "last_update": 1, "job_role": 1, "job_title": 1,
+        "last_update": 1, "submitted_at": 1, "job_role": 1, "job_title": 1,
     }
 
     pipeline = [
@@ -1717,7 +1739,7 @@ async def get_global_applicants(
             "name": "name", "email": "email", "phone": "phone",
             "college_status": "_college_status", "college": "_college_resolved",
             "degree": "degree", "job_role": "_normalized_job_role",
-            "registered_date": "last_update", "schedule_date": "schedule_date",
+            "registered_date": "submitted_at", "schedule_date": "schedule_date",
             "schedule_time": "schedule_time",
         }, default={"name": 1})},
         {"$skip": skip},
@@ -1769,7 +1791,7 @@ async def get_global_applicants(
             "degree": doc.get("degree") or "-",
             "job_role": normalized_role or "-",
             "registered_status": reg_status,
-            "registered_date": doc.get("last_update") or "-",
+            "registered_date": doc.get("submitted_at") or doc.get("last_update") or "-",
             "schedule_date": doc.get("schedule_date") or "-",
             "schedule_time": doc.get("schedule_time") or "-",
             "attended_or_not": "Attended" if reg_status == "Attended" else "Not Attended",
@@ -2866,7 +2888,16 @@ async def _bg_queue_worker():
                     content = path.read_bytes()
                     if not content:
                         raise ValueError("File is empty")
-                    logger.info(f"Queue: parsed {file_type}/{file_name} ({len(content)} bytes)")
+                    # iter116 — Memory observability for the Render 512 MB OOM
+                    # issue. Log RSS before the parse (baseline), after the
+                    # parse (peak), and after GC (released). A single
+                    # `[QueueMem]` log line lets us see exactly which upload
+                    # spiked memory and how much was recovered.
+                    _mem_before = _rss_mb()
+                    logger.info(
+                        f"Queue: parsed {file_type}/{file_name} "
+                        f"({len(content)} bytes) rss_mb={_mem_before}"
+                    )
                     process_fn = _PROCESS_FN.get(file_type)
                     if not process_fn:
                         raise ValueError(f"Unknown file type: {file_type}")
@@ -2890,6 +2921,17 @@ async def _bg_queue_worker():
                         except Exception:
                             pass  # progress write must never crash the worker
                     result = await process_fn(content, file_name, progress_cb=_write_progress)
+                    # iter116 — Drop the raw file bytes ASAP so they don't
+                    # linger alongside the next job's content. Then explicit
+                    # GC + RSS log so we can correlate uploads to OOM events.
+                    del content
+                    _mem_peak = _rss_mb()
+                    gc.collect()
+                    _mem_after = _rss_mb()
+                    logger.info(
+                        f"[QueueMem] file={file_name} peak_rss_mb={_mem_peak} "
+                        f"after_gc_rss_mb={_mem_after} freed_mb={round(_mem_peak - _mem_after, 1)}"
+                    )
 
                     if result.get("success"):
                         # Move file to processed_files directory
@@ -3174,6 +3216,12 @@ async def _process_naukri_file(content: bytes, filename: str, progress_cb=None) 
             await progress_cb(idx + 1, total_rows)
     if progress_cb:
         await progress_cb(total_rows, total_rows)
+    # iter116 — release the DataFrame ASAP after iteration completes so the
+    # next file's parse doesn't accumulate on top of this one (Render 512 MB
+    # OOM mitigation). `df.iterrows()` materializes a Series per row which
+    # the GC sometimes leaves around; explicit del + collect releases both.
+    del df
+    gc.collect()
     # NOTE: reprocess_matching() / _sync_job_titles_master() are now deferred
     # to the queue worker (run ONCE after batch drains) for performance.
     return {"success": True, "inserted": inserted, "updated": updated, "total": total_rows}
@@ -3240,6 +3288,10 @@ async def _process_pipeline_file(content: bytes, filename: str, progress_cb=None
             await progress_cb(idx + 1, total_rows)
     if progress_cb:
         await progress_cb(total_rows, total_rows)
+    # iter116 — release the DataFrame ASAP after iteration completes (see
+    # _process_naukri_file for the same Render-OOM rationale).
+    del df
+    gc.collect()
     # NOTE: reprocess_matching() is deferred to queue worker post-batch.
     return {"success": True, "inserted": inserted, "updated": updated, "total": total_rows}
 
@@ -3340,6 +3392,9 @@ async def _process_score_file(content: bytes, filename: str, progress_cb=None) -
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         rounds_added += 1
+    # iter116 — release DataFrame after all post-processing finishes.
+    del df
+    gc.collect()
     return {"success": True, "inserted": inserted, "total": total_rows,
             "rounds_registered": rounds_added}
 
