@@ -310,18 +310,38 @@ async def send_whatsapp(campaign_name: str, phone: str, email: str, template_par
 # iter73 — Branded email shell aligned VERBATIM with the BluBridge PDF
 # reference (white body, blue #2071b9 accents, BLUBRIDGE wordmark in
 # footer only). No top header bar — the salutation opens the email.
+# iter117 — Footer wordmark replaced with the official BluBridge PNG logo
+# hosted on Emergent's customer-assets CDN (stable HTTPS, no CORS/auth
+# issues). Override via `BLUBRIDGE_LOGO_URL` env var if the asset URL ever
+# changes — code falls back to the hosted default if unset.
 _BRAND_BLUE = "#2071b9"
 _BRAND_BLUE_DARK = "#1a5a96"
+_BLUBRIDGE_LOGO_URL = os.environ.get(
+    "BLUBRIDGE_LOGO_URL",
+    "https://customer-assets.emergentagent.com/job_695f5e57-e07f-4640-8643-86f62b12ce9d/artifacts/mr5kvgxn_image.png",
+)
 
 
 def _email_shell(body_html: str, with_logo_footer: bool = True) -> str:
     """Wrap notification body HTML in a clean white email envelope that
-    mirrors the PDF reference exactly. Inline styles only."""
-    footer_logo = ""
-    if with_logo_footer:
-        footer_logo = f"""
+    mirrors the PDF reference exactly. Inline styles only.
+
+    iter117 — Footer now ALWAYS renders the official BluBridge image logo
+    (the `with_logo_footer` parameter is preserved for API compatibility but
+    no longer suppresses the logo — every recruitment email must carry the
+    standardized brand mark). The `<img>` uses an absolute HTTPS URL with
+    explicit width/height for Outlook + Gmail mobile parity, plus a text
+    `alt` so screen readers and image-blocked previews still surface the
+    brand name.
+    """
+    # `with_logo_footer` kept for backward compatibility — intentionally
+    # unused; every email gets the standardized footer logo (iter117).
+    _ = with_logo_footer
+    footer_logo = f"""
         <tr><td style="padding:36px 32px 32px 32px;text-align:left;">
-          <p style="margin:0;font-family:Georgia,'Times New Roman',serif;font-weight:800;letter-spacing:0.22em;color:{_BRAND_BLUE};font-size:22px;">BLUBRIDGE</p>
+          <img src="{_BLUBRIDGE_LOGO_URL}" alt="Blubridge"
+               width="200" height="auto"
+               style="display:block;width:200px;max-width:60%;height:auto;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;" />
         </td></tr>
         """
     return f"""<!DOCTYPE html>
@@ -579,7 +599,7 @@ async def notify_rejected_with_reason(
     <p>Wishing you the best in your future endeavours!</p>
     <p>Warm regards,<br>Blubridge Technologies</p>
     """
-    em_ok = await send_email(email, phone, tmpl["subject"], html, is_test=is_test)
+    em_ok = await send_email(email, phone, tmpl["subject"], _email_shell(html), is_test=is_test)
     _logger.info(f"[Reject:{reason}] email={email} wa_ok={wa_ok} em_ok={em_ok} text={wa_text!r}")
     return bool(wa_ok or em_ok)
 

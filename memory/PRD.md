@@ -1,3 +1,71 @@
+## iter117 — Email Logo Branding Standardization (May 23 2026)
+
+### Reported request
+Replace inconsistent / missing email-template branding (some had a plain-text
+"BLUBRIDGE" wordmark, missed-reminder had nothing, reason-based rejection
+bypassed the shell entirely) with the official BluBridge PNG logo across
+every recruitment email.
+
+### Audit findings
+1. `_email_shell` (messaging.py) rendered a Georgia / 0.22em-letter-spacing
+   text wordmark — not an image.
+2. `notify_missed_reminder` explicitly opted out via `with_logo_footer=False`
+   per a since-superseded PDF spec — emails had NO brand mark.
+3. `notify_rejected_with_reason` bypassed `_email_shell` entirely, sending
+   bare `<p>` HTML with no envelope and no logo.
+4. All other 5 notify_* paths went through `_email_shell` cleanly.
+5. `bb_manual.py`, `bb_resend.py`, `server.py`, `bb_modules.py` had ZERO
+   direct `send_email` calls — every email funnels through the helpers in
+   `messaging.py`, so the shell is the single source of truth.
+
+### Fix (surgical, messaging.py only)
+- New constant `_BLUBRIDGE_LOGO_URL`, defaults to the Emergent
+  customer-assets CDN URL (stable HTTPS, 3.8 KB PNG, served via CloudFront).
+  Overridable via `BLUBRIDGE_LOGO_URL` env var so future logo swaps are
+  config-only.
+- `_email_shell` now ALWAYS injects the logo as an `<img>` (200px wide,
+  `max-width:60%`, explicit `width`/`height`/`border:0` for Outlook
+  compatibility, `alt="Blubridge"` for image-blocked previews + a11y). The
+  `with_logo_footer` parameter is preserved for API compatibility but no
+  longer suppresses the logo — every recruitment email now carries the
+  standardized brand mark.
+- `notify_rejected_with_reason` now wraps its body through `_email_shell`
+  (single-line change at line 602).
+- All 6 notify_* dispatches verified end-to-end with tester credentials:
+  shortlisted, otp, schedule_confirmation, rejected (final), rejected_reason,
+  missed_reminder — all returned True/True (WA + Email).
+
+### Verification
+- `tests/test_iter117_email_logo_branding.py` — 5/5 PASS:
+  - `test_default_shell_embeds_logo_img` ✓
+  - `test_default_shell_removes_legacy_text_wordmark` ✓
+  - `test_with_logo_footer_false_still_emits_logo` (iter117 behavior change) ✓
+  - `test_logo_url_env_override` (proves env override works) ✓
+  - `test_logo_asset_url_reachable` (HEAD 200 + image/* content-type) ✓
+- Hosted asset HEAD: HTTP/2 200, `content-type: image/png`,
+  `content-length: 3832`, CloudFront cached.
+- Backend restarts clean; all 7 callsites still pass.
+
+### Files modified
+- `/app/backend/messaging.py` — logo constant, `_email_shell` rewrite,
+  `notify_rejected_with_reason` wrap.
+
+### Files added
+- `/app/backend/tests/test_iter117_email_logo_branding.py`
+
+### Production-safety guarantees
+- No schema migration. No data writes.
+- No workflow / trigger / scheduling change — text-only-to-image swap inside
+  the shared shell helper.
+- Resend transport unchanged; AiSensy templates untouched.
+- Email clients that block external images still surface the `alt="Blubridge"`
+  fallback text.
+- If the Emergent CDN URL ever rotates, set `BLUBRIDGE_LOGO_URL` env var on
+  Render — no code redeploy needed.
+
+---
+
+
 ## iter116 — View Applicants "Registered" Filter Fix + Bulk-Upload Memory Cleanup (May 22 2026)
 
 ### Issue 1 — View Applicants Registered filter dropped same-day candidates
