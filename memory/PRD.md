@@ -1,3 +1,83 @@
+## iter118 — View Applicants Summary Statistics Correctness Fixes (May 25 2026)
+
+### Reported symptom
+"View Applicants Summary Statistics" counts were inconsistent across date
+ranges. Same-day live-form rejections never incremented the Rejected count;
+test-credential records never showed up; ISO-timestamp upper bounds failed
+lexicographic comparison for single-day filters.
+
+### Cluster verification
+- `MONGO_URL` points at `cluster1.uthtnct.mongodb.net` / DB `hr_analytics`
+  (the migrated cluster). `pipeline_data` 131331 rows, `naukri_applies`
+  50471 rows, `bb_registrations` 138 rows — all on the current cluster.
+- No hardcoded cluster references found anywhere in the backend; every
+  collection access goes through `db = client[os.environ.get('DB_NAME')]`.
+
+### Root causes (5 distinct bugs in `/api/summary`)
+1. **`isTest != True` filter blocked test rows** even when within the date
+   range. User spec says include them.
+2. **Rejected logic used `email_type =~ /^reject/`** instead of the user's
+   "NOT shortlist" rule. Empty / typo'd values (`''`, `'raject'`, `null`)
+   weren't counted — exactly the live-form same-day reject the user
+   reported as missing.
+3. **Interview Scheduled / Not Scheduled / Attended / Not Attended all
+   required the shortlist precondition** (`is_shortlisted AND …`). User
+   spec evaluates schedule + otp directly with no shortlist gate.
+4. **`has_otp` was `otp_verified != ""`** which would (incorrectly) treat
+   the string `"0"` as Attended. User spec: must be NOT NULL AND NOT in
+   `{0, "0", false, ""}`.
+5. **Date upper bound `<= endDate` (no `\uffff` suffix)** failed for
+   `last_update` which stores ISO timestamps like
+   `'2026-05-25T13:17:04+00:00'` — same root cause as iter116. Caused same-day
+   records to drop off all counts.
+
+### Fix (server.py `/api/summary` only)
+- Dropped the global `isTest` exclusion.
+- Rewrote 5 funnel helpers per user spec verbatim:
+  - `is_shortlisted` (regex `/shortlist/i`)
+  - `is_rejected = NOT is_shortlisted`
+  - `has_schedule = schedule_date NOT NULL AND schedule_time NOT NULL`
+  - `not_has_schedule = NOT has_schedule`
+  - `otp_truthy = otp_verified NOT IN {null, "", 0, "0", false}`
+- Removed shortlist precondition from `scheduled` / `not_scheduled` /
+  `attended` / `not_attended`.
+- Date upper bound now `endDate + "\uffff"` for both `last_update` and
+  `date_of_application` filters.
+- Aggregation indices (`_normalized_job_role`, `_nirf_category`) unchanged
+  — no full-collection scan introduced.
+
+### Verification
+- `tests/test_iter118_summary_statistics.py` — 5/5 PASS:
+  - `test_live_form_reject_counted_under_rejected` (the exact reported bug) ✓
+  - `test_istest_record_not_excluded` ✓
+  - `test_date_upper_bound_includes_full_day` ✓
+  - `test_mongo_cluster_is_current_production_cluster` ✓
+  - `test_naukri_unregistered_flag_is_populated` ✓
+- Live tester row (rishi.nayak@blubridge.com, email_type='shortlist',
+  schedule + otp_verified=True, last_update=2026-05-25T13:17:04+00:00)
+  classifies correctly under the new aggregation on filter `2026-05-25`:
+  `total=1, shortlisted=1, scheduled=1, attended=1, rejected=0, not_attended=0`.
+  Pre-iter118 the row would have been DROPPED by the upper-bound lexicographic
+  bug and counted as 0.
+
+### Files modified
+- `/app/backend/server.py` — `/api/summary` aggregation rewritten lines 1438-1495.
+
+### Files added
+- `/app/backend/tests/test_iter118_summary_statistics.py`
+
+### Production-safety guarantees
+- Read-only aggregation. No data writes.
+- All filters use indexed fields (`last_update`, `date_of_application`,
+  `_normalized_job_role`, `_nirf_category`). No `$lookup` or
+  full-collection scan introduced.
+- Synthetic test rows tagged `_iter118_summary_stats_test` deleted in
+  finally clause; tester credentials production rows untouched.
+- No frontend change required — the response schema is identical.
+
+---
+
+
 ## iter117 — Email Logo Branding Standardization (May 23 2026)
 
 ### Reported request

@@ -1424,48 +1424,76 @@ async def get_summary(
 ):
     """Job role-wise funnel statistics split by NIRF / Non-NIRF.
 
-    NEW CLASSIFICATION (May 2026):
-      - Per-row `total_registered`  = pipeline_data rows in (role, NIRF cat)
-      - Per-row `total_naukri`      = naukri_applies rows in (role, NIRF cat)
-      - Per-row `total_unregistered`= naukri rows where `_is_registered != True`
-      - Funnel (shortlisted, rejected, scheduled, attended) computed from
-        pipeline_data (HR internal dataset) since it carries email_type,
-        schedule_date, schedule_time, otp_verified directly.
+    iter118 — Aggregation rebuilt to match the user-supplied business rules
+    exactly. Key corrections vs prior version:
+      * `isTest` filter REMOVED — test rows ARE counted when their dates fall
+        inside the selected range (per user spec).
+      * Date upper-bound now includes `\\uffff` suffix so ISO timestamps with
+        the time portion (e.g. `2026-05-22T09:27:20+00:00`) still match a
+        single-day filter like `endDate=2026-05-22`.
+      * `Rejected` = email_type NOT shortlist (the user's exact rule). Empty /
+        typo'd email_types (e.g. 'raject') now count as Rejected, matching
+        the production data shapes we audited.
+      * `Interview Scheduled / Not Scheduled / Attended / Not Attended` no
+        longer require the shortlist precondition — they evaluate
+        `schedule_date` / `schedule_time` / `otp_verified` directly.
+      * `Attended` requires `otp_verified` to be NOT NULL AND NOT in
+        {0, "0", false, "", null}; production stores only {None, 1.0, True, ""}
+        so this is equivalent to "truthy non-empty value".
 
-    OPTIMIZED: All grouping done at DB level via aggregation on persisted
-    `_normalized_job_role` + `_nirf_category` fields.
+    OPTIMIZED: All grouping at DB level via persisted `_normalized_job_role`
+    + `_nirf_category` indexes; no full-collection scans.
     """
-    match = {"isTest": {"$ne": True}}
-    if startDate or endDate:
-        date_filter = {}
-        if startDate:
-            date_filter["$gte"] = startDate
-        if endDate:
-            date_filter["$lte"] = endDate
-        # pipeline_data uses `last_update`; naukri_applies uses `date_of_application`
-        # We apply each at its respective aggregation.
+    base_match: dict = {}
     if search:
-        match["_normalized_job_role"] = {"$regex": re.escape(search), "$options": "i"}
+        base_match["_normalized_job_role"] = {"$regex": re.escape(search), "$options": "i"}
 
-    pipe_match = dict(match)
-    naukri_match = dict(match)
+    pipe_match = dict(base_match)
+    naukri_match = dict(base_match)
     if startDate or endDate:
-        date_filter = {}
+        # iter118 — separate date filters because pipeline_data carries
+        # ISO timestamps with time portion (`2026-05-22T09:27:20+00:00`)
+        # in `last_update` while naukri_applies stores a plain date string
+        # in `date_of_application`. Both upper bounds use `\\uffff` so the
+        # entire day is included regardless of any trailing time.
         if startDate:
-            date_filter["$gte"] = startDate
+            pipe_match["last_update"] = {"$gte": startDate}
+            naukri_match["date_of_application"] = {"$gte": startDate}
         if endDate:
-            date_filter["$lte"] = endDate
-        pipe_match["last_update"] = date_filter
-        naukri_match["date_of_application"] = date_filter
+            pipe_match.setdefault("last_update", {})["$lte"] = endDate + "\uffff"
+            naukri_match.setdefault("date_of_application", {})["$lte"] = endDate + "\uffff"
 
-    # Helper expressions for funnel stages
-    is_shortlisted = {"$regexMatch": {"input": {"$ifNull": ["$email_type", ""]}, "regex": "shortlist", "options": "i"}}
-    is_rejected = {"$regexMatch": {"input": {"$ifNull": ["$email_type", ""]}, "regex": "^reject", "options": "i"}}
-    has_schedule = {"$and": [
-        {"$ne": [{"$ifNull": ["$schedule_date", ""]}, ""]},
-        {"$ne": [{"$ifNull": ["$schedule_time", ""]}, ""]},
-    ]}
-    has_otp = {"$ne": [{"$ifNull": ["$otp_verified", ""]}, ""]}
+    # ---- Helper expressions for funnel stages (iter118 — user-spec exact) ----
+    # email_type matches /shortlist/i  (covers shortlist, Shortlist, shortlisted,
+    # Shortlisted, and trailing-whitespace variants like 'shortlist ').
+    is_shortlisted = {
+        "$regexMatch": {
+            "input": {"$ifNull": ["$email_type", ""]},
+            "regex": "shortlist",
+            "options": "i",
+        }
+    }
+    # NOT shortlist  → user's literal rule for "Rejected"
+    is_rejected = {"$not": is_shortlisted}
+    has_schedule = {
+        "$and": [
+            {"$ne": [{"$ifNull": ["$schedule_date", ""]}, ""]},
+            {"$ne": [{"$ifNull": ["$schedule_time", ""]}, ""]},
+        ]
+    }
+    not_has_schedule = {"$not": has_schedule}
+    # otp_verified considered "attended" when value exists AND is not falsy.
+    # Production distinct values: {None, 1.0, True, ""}. We exclude
+    # null/empty/0/false; everything else is treated as truthy.
+    otp_truthy = {
+        "$and": [
+            {"$ne": [{"$ifNull": ["$otp_verified", None]}, None]},
+            {"$ne": [{"$ifNull": ["$otp_verified", ""]}, ""]},
+            {"$ne": [{"$ifNull": ["$otp_verified", 0]}, 0]},
+            {"$ne": [{"$ifNull": ["$otp_verified", "0"]}, "0"]},
+            {"$ne": [{"$ifNull": ["$otp_verified", False]}, False]},
+        ]
+    }
 
     # PIPELINE-FIRST: aggregate funnel + counts from pipeline_data
     pipe_pipeline = [
@@ -1478,10 +1506,10 @@ async def get_summary(
             "total_registered": {"$sum": 1},
             "shortlisted": {"$sum": {"$cond": [is_shortlisted, 1, 0]}},
             "rejected": {"$sum": {"$cond": [is_rejected, 1, 0]}},
-            "scheduled": {"$sum": {"$cond": [{"$and": [is_shortlisted, has_schedule]}, 1, 0]}},
-            "not_scheduled": {"$sum": {"$cond": [{"$and": [is_shortlisted, {"$not": has_schedule}]}, 1, 0]}},
-            "attended": {"$sum": {"$cond": [{"$and": [is_shortlisted, has_schedule, has_otp]}, 1, 0]}},
-            "not_attended": {"$sum": {"$cond": [{"$and": [is_shortlisted, has_schedule, {"$not": has_otp}]}, 1, 0]}},
+            "scheduled": {"$sum": {"$cond": [has_schedule, 1, 0]}},
+            "not_scheduled": {"$sum": {"$cond": [not_has_schedule, 1, 0]}},
+            "attended": {"$sum": {"$cond": [{"$and": [has_schedule, otp_truthy]}, 1, 0]}},
+            "not_attended": {"$sum": {"$cond": [{"$and": [has_schedule, {"$not": otp_truthy}]}, 1, 0]}},
         }},
     ]
     pipe_results = await db.pipeline_data.aggregate(pipe_pipeline, allowDiskUse=False).to_list(None)
