@@ -409,11 +409,20 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str, is
             "subject": subject,
             "html": html_body,
         }
-        # iter119 — Reply-To header so candidate replies route to the
-        # recruitment inbox, not the transactional sender. Resend accepts
-        # `reply_to` as a string OR list; we pass a list for forward-compat.
+        # iter120 — Reply-To dual-belt approach. Previous iter119 passed
+        # `reply_to=["hiring@blubridge.com"]` (list form per Resend docs)
+        # but candidates' Gmail/Outlook Reply still pointed at the From
+        # address (information.team@blubrg.com). Two fixes layered:
+        #   1. `reply_to` as a PLAIN STRING (Resend accepts both, string
+        #      form is the canonical pre-array contract).
+        #   2. Custom `headers["Reply-To"]` so the raw RFC-5322 Reply-To
+        #      header is injected into the MIME envelope directly. Even
+        #      if Resend's JSON-to-header mapping ever drops `reply_to`,
+        #      the custom header guarantees mail clients honour it.
+        # Setting both is safe — Resend deduplicates headers.
         if MAIL_REPLY_TO:
-            payload["reply_to"] = [MAIL_REPLY_TO]
+            payload["reply_to"] = MAIL_REPLY_TO
+            payload["headers"] = {"Reply-To": MAIL_REPLY_TO}
 
         if is_test_mode():
             _logger.info(

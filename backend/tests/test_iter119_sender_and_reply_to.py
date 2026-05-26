@@ -97,7 +97,9 @@ def test_send_email_payload_includes_correct_from_and_reply_to(monkeypatch):
     assert p["to"] == ["rishi.nayak@blubridge.com"]
     assert p["subject"] == "iter119 unit"
     assert "<p>iter119 unit body</p>" in p["html"]
-    assert p.get("reply_to") == ["hiring@blubridge.com"], p
+    # iter120 — dual-belt: `reply_to` as plain string AND raw MIME header.
+    assert p.get("reply_to") == "hiring@blubridge.com", p
+    assert p.get("headers", {}).get("Reply-To") == "hiring@blubridge.com", p
     # No sandbox sender in the actual outbound payload.
     assert "onboarding@resend.dev" not in str(p)
 

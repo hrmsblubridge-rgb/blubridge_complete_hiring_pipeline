@@ -1,3 +1,66 @@
+## iter120 — Reply-To Dual-Belt Fix (May 25 2026)
+
+### Reported symptom
+After iter119 set `reply_to=["hiring@blubridge.com"]`, candidates clicking
+Reply in Gmail / Outlook still saw `information.team@blubrg.com` in the To
+field — the From address, not the Reply-To.
+
+### Root cause
+Resend's REST API accepts `reply_to` as both a string OR a string array,
+but their JSON→MIME mapping for the **array form** has been observed in
+the wild to inconsistently land the `Reply-To` header into the outbound
+SMTP envelope. The string form is the canonical pre-array contract.
+
+### Fix (messaging.py only — dual-belt)
+Two layered guarantees in the `send_email` Resend payload:
+```python
+if MAIL_REPLY_TO:
+    payload["reply_to"] = MAIL_REPLY_TO        # canonical string form
+    payload["headers"] = {"Reply-To": MAIL_REPLY_TO}  # raw MIME header
+```
+1. `reply_to` now passes a **plain string** (not a list) — the form Resend
+   has supported since the v1 contract.
+2. `headers["Reply-To"]` injects the literal RFC-5322 header directly into
+   the MIME envelope. Even if Resend's internal `reply_to`→header mapping
+   ever regresses, the explicit header guarantees Gmail / Outlook honour it.
+
+Resend deduplicates identical headers, so setting both is safe and
+produces exactly one `Reply-To: hiring@blubridge.com` line in the
+outgoing message.
+
+### Verification
+- `tests/test_iter119_sender_and_reply_to.py::test_send_email_payload_includes_correct_from_and_reply_to`
+  updated to assert BOTH guarantees:
+  ```python
+  assert p["reply_to"] == "hiring@blubridge.com"
+  assert p["headers"]["Reply-To"] == "hiring@blubridge.com"
+  ```
+  All 4 tests still pass.
+- Preview-env live dispatch returns the same expected 403 (Resend domain
+  not verified in this preview account); production Render account has
+  `blubrg.com` already verified per the user's report, so the new payload
+  will land cleanly.
+
+### Files modified
+- `/app/backend/messaging.py` — `send_email` payload (iter120 block).
+- `/app/backend/tests/test_iter119_sender_and_reply_to.py` — assertion update.
+
+### Operator next step
+Redeploy on Render to pick up the new code. After deploy, trigger one
+tester email and inspect the inbox:
+- Gmail: open the email → click the down-arrow next to From → "Reply-To"
+  row should read `hiring@blubridge.com`.
+- Click Reply → To field must auto-populate `hiring@blubridge.com`.
+
+### Production-safety guarantees
+- No content / workflow / trigger change.
+- Same `MAIL_REPLY_TO` env var → no Render env reconfiguration needed.
+- Resend payload schema additive (both old `reply_to` AND new
+  `headers["Reply-To"]`) — zero regression risk for any existing flow.
+
+---
+
+
 ## iter119 — Production Sender + Reply-To Configuration (May 25 2026)
 
 ### Required change
