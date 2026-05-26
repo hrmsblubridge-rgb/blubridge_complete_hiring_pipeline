@@ -593,13 +593,36 @@ async def _worker_missed_interview():
                 name = (doc.get("full_name") or "").strip()
                 phone = (doc.get("phone") or "").strip()
                 email = (doc.get("email") or "").strip()
+                # iter122 — Per-channel idempotency scoped to `schedule_token`.
+                # When a candidate reschedules, the schedule submission clears
+                # `missed_marked` (and may clear `missed_reminder_sent`) so the
+                # worker re-fires both channels on the SAME schedule_token if
+                # the new interview is also past. AiSensy dedupes WhatsApp
+                # within a window but Resend does NOT, so users observed 2
+                # follow-up emails (real production complaint).
+                #
+                # Fix: store per-channel flags + the token they were dispatched
+                # for. On the next tick, skip the channel if the stored
+                # token still matches AND the channel is True. If the token
+                # changed (genuine new schedule), treat as fresh dispatch.
+                stored_token = doc.get("missed_reminder_token") or ""
+                token_matches = bool(token) and stored_token == token
+                wa_already = token_matches and bool(doc.get("missed_reminder_wa_sent"))
+                em_already = token_matches and bool(doc.get("missed_reminder_email_sent"))
+                if wa_already and em_already:
+                    _logger.info(
+                        f"[Missed:SKIP_ALREADY_SENT] email={email} token={token[:10] if token else None}… "
+                        f"both channels already delivered for this schedule"
+                    )
+                    continue
                 # iter113 — abort if any required template field is missing.
                 if token and name and (email or phone):
                     _logger.info(
                         f"[Missed:DISPATCH] email={email} phone={phone} "
-                        f"role={doc.get('job_role','')!r} interview={schedule_date} {schedule_time_str}"
+                        f"role={doc.get('job_role','')!r} interview={schedule_date} {schedule_time_str} "
+                        f"channels_to_send={['wa']*(not wa_already) + ['email']*(not em_already)}"
                     )
-                    wa_ok, em_ok = False, False
+                    wa_ok, em_ok = wa_already, em_already
                     try:
                         from messaging import notify_missed_reminder
                         result = await notify_missed_reminder(
@@ -609,11 +632,27 @@ async def _worker_missed_interview():
                             schedule_time_str,
                             token,
                             is_test=bool(doc.get("isTest")),
+                            send_wa=not wa_already,
+                            send_email_channel=not em_already,
                         )
-                        wa_ok, em_ok = result if isinstance(result, tuple) else (bool(result), False)
+                        res_wa, res_em = result if isinstance(result, tuple) else (bool(result), False)
+                        # Merge: keep already-True flags, OR in new results.
+                        wa_ok = wa_already or res_wa
+                        em_ok = em_already or res_em
                     except Exception as _me:
                         _logger.exception(f"[Missed:DISPATCH] FAILED email={email}: {_me!r}")
                     _logger.info(f"[Missed:DISPATCH_DONE] email={email} wa_ok={wa_ok} em_ok={em_ok}")
+                    # iter122 — Persist per-channel state scoped to schedule_token.
+                    if wa_ok or em_ok:
+                        await _db.bb_registrations.update_one(
+                            {"_id": doc["_id"]},
+                            {"$set": {
+                                "missed_reminder_wa_sent": bool(wa_ok),
+                                "missed_reminder_email_sent": bool(em_ok),
+                                "missed_reminder_token": token,
+                                "missed_reminder_sent_at": now.isoformat(),
+                            }},
+                        )
                 elif token:
                     _logger.warning(
                         f"[Missed] SKIP missed-reminder send — missing required field "

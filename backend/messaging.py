@@ -710,7 +710,7 @@ async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str,
     return wa_ok, em_ok
 
 
-async def notify_missed_reminder(name: str, phone: str, email: str, role: str, date: str, time: str, schedule_token: str, is_test: bool = False):
+async def notify_missed_reminder(name: str, phone: str, email: str, role: str, date: str, time: str, schedule_token: str, is_test: bool = False, send_wa: bool = True, send_email_channel: bool = True):
     """Send missed-interview / candidate follow-up via WhatsApp + Email.
     Returns (wa_ok, em_ok). iter73 — Email content verbatim from BluBridge
     PDF reference (no BLUBRIDGE footer logo per PDF; Reschedule button in
@@ -718,22 +718,31 @@ async def notify_missed_reminder(name: str, phone: str, email: str, role: str, d
     iter79 — Date/time displayed as `dd-mm-yyyy` + `hh:mm AM/PM`.
 
     AiSensy "Candidate Followups1" template now expects exactly 5 params:
-    [name, role, date, time, schedule_link]. Aligned with PHP reference."""
+    [name, role, date, time, schedule_link]. Aligned with PHP reference.
+    iter122 — `send_wa` / `send_email_channel` flags so the worker can attempt
+    ONLY the channel that hasn't already succeeded for this schedule_token
+    (mirrors the iter121 OTP fix). Default True/True preserves all existing
+    callers. The email-channel flag is named `send_email_channel` (not
+    `send_email`) to avoid shadowing the imported `send_email` function."""
     date = fmt_date(date)
     time = fmt_time(time)
     schedule_link = build_public_url(f"/schedule-interview/{schedule_token}") if schedule_token else build_public_url("/")
     # iter113 — Independent try/except per channel so a WA exception cannot
     # stop the email send (mirrors the iter107 OTP fix).
-    _logger.info(f"[MissedReminder:NOTIFY_START] email={email} phone={phone} role={role!r} date={date} time={time}")
+    _logger.info(
+        f"[MissedReminder:NOTIFY_START] email={email} phone={phone} role={role!r} "
+        f"date={date} time={time} send_wa={send_wa} send_email_channel={send_email_channel}"
+    )
     wa_ok = False
-    try:
-        wa_ok = await send_whatsapp(
-            "Candidate Followups1", phone, email,
-            [name, role, date, time, schedule_link],
-            is_test=is_test,
-        )
-    except Exception as _we:
-        _logger.exception(f"[MissedReminder:NOTIFY_WA_EXC] email={email} err={_we!r}")
+    if send_wa:
+        try:
+            wa_ok = await send_whatsapp(
+                "Candidate Followups1", phone, email,
+                [name, role, date, time, schedule_link],
+                is_test=is_test,
+            )
+        except Exception as _we:
+            _logger.exception(f"[MissedReminder:NOTIFY_WA_EXC] email={email} err={_we!r}")
     body = f"""
     <p style="margin:0 0 16px 0;">Hi {name},</p>
     <p style="margin:0 0 16px 0;">We noticed you missed your scheduled interview at Blubridge. We understand unexpected situations may occur, so we'd like to offer you one final opportunity to reschedule.</p>
@@ -747,11 +756,15 @@ async def notify_missed_reminder(name: str, phone: str, email: str, role: str, d
     <p style="margin:0;">Blubridge Recruitment Team</p>
     """
     em_ok = False
-    try:
-        em_ok = await send_email(email, phone, "Missed Interview - Reschedule Opportunity - Blubridge", _email_shell(body, with_logo_footer=False), is_test=is_test)
-    except Exception as _ee:
-        _logger.exception(f"[MissedReminder:NOTIFY_EMAIL_EXC] email={email} err={_ee!r}")
-    _logger.info(f"[MissedReminder:NOTIFY_DONE] email={email} wa_ok={wa_ok} em_ok={em_ok}")
+    if send_email_channel:
+        try:
+            em_ok = await send_email(email, phone, "Missed Interview - Reschedule Opportunity - Blubridge", _email_shell(body, with_logo_footer=False), is_test=is_test)
+        except Exception as _ee:
+            _logger.exception(f"[MissedReminder:NOTIFY_EMAIL_EXC] email={email} err={_ee!r}")
+    _logger.info(
+        f"[MissedReminder:NOTIFY_DONE] email={email} wa_ok={wa_ok} em_ok={em_ok} "
+        f"attempted_wa={send_wa} attempted_email={send_email_channel}"
+    )
     return wa_ok, em_ok
 
 

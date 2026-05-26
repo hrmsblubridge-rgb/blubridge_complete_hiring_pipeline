@@ -2697,8 +2697,15 @@ async def _backfill_unknown_classifications_once():
             async for doc in coll.find(stuck_filter, {"_id": 1, "job_title": 1, "job_role": 1}):
                 raw = doc.get("job_title") or doc.get("job_role") or ""
                 new_val = _resolve_normalized_job_role(raw, mappings)
-                # Only update if the new value is a real canonical (NOT "Unknown" and NOT the raw fallback).
-                if new_val and new_val != "Unknown" and new_val != raw:
+                # iter122 — Repair NEW UNKNOWN BUG: the original condition
+                # `new_val != raw` skipped rows whose resolution returned the
+                # RAW title verbatim (e.g. "Ai Ml Engineer" with no exact
+                # mapping). Those rows remained stuck at `_normalized_job_role
+                # = 'Unknown'` even though the raw title was perfectly usable.
+                # New condition: update whenever resolution produced ANY
+                # non-empty, non-"Unknown" value AND the existing stored
+                # value is still in the stuck set {None, "", "Unknown"}.
+                if new_val and new_val != "Unknown":
                     ops.append(UpdateOne(
                         {"_id": doc["_id"]},
                         {"$set": {"_normalized_job_role": new_val}}

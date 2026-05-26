@@ -1,3 +1,119 @@
+## iter122 — Missed-Reminder Per-Channel Idempotency + Unknown Role Repair (May 26 2026)
+
+### Issue 1 — Candidate Follow-up Email Sent TWICE
+
+**Reported symptom**: WA follow-up arrived once; the follow-up email
+arrived TWICE. Production log timeline (verbatim from user):
+```
+18:00:40  Missed worker → dispatch → [WhatsApp:REQ] + [Email:REQ] (success)
+          [Missed] Marked rishi.nayak@blubridge.com as Missed
+18:01     GET /schedule-interview/a20fa23c1e02f53375f747ac  ← candidate clicks link
+==> Deploying...                                              ← Render redeploy
+18:05:42  fresh worker process
+18:06:08  Missed worker → SAME row again → [WhatsApp:REQ] + [Email:REQ] (success)
+```
+
+**Root cause**: After the first dispatch the worker set `status="Missed"` +
+`missed_marked=True`. But the candidate clicked the reschedule link, which
+flows through `submit_schedule` and **explicitly clears**
+`missed_reminder_sent` and (via re-registration consolidation) wipes
+`missed_marked`. The interview time was already past, so the cursor matched
+the row again and re-dispatched. **AiSensy deduped WhatsApp** within the 24h
+template-send window so the candidate got 1 WA; **Resend did NOT dedupe**
+so 2 emails landed.
+
+**Fix (per-channel idempotency scoped to `schedule_token`)**
+1. After each dispatch, worker persists:
+   - `missed_reminder_wa_sent` (bool)
+   - `missed_reminder_email_sent` (bool)
+   - `missed_reminder_token` (the schedule_token at time of dispatch)
+   - `missed_reminder_sent_at` (timestamp)
+2. Pre-dispatch, worker reads these and compares to current
+   `schedule_token`:
+   - If token matches AND a channel was already True → that channel is
+     SKIPPED (no re-spam to candidate).
+   - If both channels were already True → row is skipped entirely.
+   - If token DIFFERS (candidate reschedules with a new token → new
+     `schedule_token` generated) → flags are effectively reset because
+     comparison fails → fresh full dispatch. Preserves the legitimate
+     "new schedule → new reminder" workflow.
+3. `notify_missed_reminder` extended with `send_wa` /
+   `send_email_channel` flags (defaults `True/True` for backward compat).
+   Renamed from a potential `send_email` parameter to avoid shadowing the
+   imported `send_email()` function (lesson from iter121).
+4. **AiSensy gets the same protection.** Because worker now passes
+   `send_wa=not wa_already`, WhatsApp is never re-requested either —
+   removes any future risk if AiSensy ever changes its dedupe behavior.
+
+### Issue 2 — New Roles Misclassified as "Unknown"
+
+**Reported symptom**: Uploaded datasets (e.g., role `Ai Ml Engineer`) were
+showing `_normalized_job_role='Unknown'`. Audit confirmed **8516
+naukri_applies rows and 7818 pipeline_data rows** were stuck.
+
+**Root cause**: `Iter108:UnknownBackfill` condition was:
+```python
+if new_val and new_val != "Unknown" and new_val != raw:
+```
+For roles whose `_resolve_normalized_job_role` returned the raw title
+verbatim (no exact keyword mapping match — e.g., `"Ai Ml Engineer"` →
+`"Ai Ml Engineer"`), the `new_val != raw` clause was False → row skipped →
+permanently stuck at `_normalized_job_role='Unknown'`.
+
+**Fix**: dropped the `!= raw` clause:
+```python
+if new_val and new_val != "Unknown":
+```
+Resetting the `bb_meta.iter108_unknown_backfill.done` flag triggered a
+re-run on startup which **reclassified 8516 + 7818 = 16,334 stuck rows**.
+After the heal, the only remaining `_normalized_job_role='Unknown'`
+rows (411 in naukri_applies) are legitimately Unknown (empty `job_title`).
+
+`_sync_job_titles_master` already auto-creates `bb_job_roles` entries for
+every distinct title seen — verified end-to-end: 2 new roles
+(`Senior Administration Officer`, `Social Media Marketer`) just got
+added on the post-fix sync. The Job Roles page dropdown will now surface
+them automatically.
+
+### Verification
+- `tests/test_iter122_missed_reminder_and_unknown_backfill.py` — 7/7 PASS:
+  - `test_notify_missed_reminder_signature_exposes_per_channel_flags` ✓
+  - `test_notify_missed_reminder_skips_wa_when_flag_false` (mocked) ✓
+  - `test_notify_missed_reminder_skips_email_when_flag_false` (mocked) ✓
+  - `test_worker_persists_per_channel_flags_scoped_to_schedule_token` (src grep) ✓
+  - `test_resolve_returns_raw_when_no_mapping` ✓
+  - `test_iter108_backfill_condition_no_longer_requires_different_raw` ✓
+  - `test_no_production_rows_remain_stuck_at_unknown_with_job_title` (live DB) ✓
+- **Live-data validation Scenario A** (same schedule_token, both
+  channels already sent) → worker SKIPS. No duplicate fire possible.
+- **Live-data validation Scenario B** (candidate reschedules → new token)
+  → worker FRESH-DISPATCHES. Legitimate workflow preserved.
+- 16,334 production rows healed by iter108 backfill re-run.
+
+### Files modified
+- `/app/backend/messaging.py` — `notify_missed_reminder` signature + body.
+- `/app/backend/bg_workers.py` — `_worker_missed_interview` pre-dispatch
+  per-channel check + post-dispatch per-channel persistence scoped to
+  `schedule_token`.
+- `/app/backend/server.py` — iter108 backfill condition.
+
+### Files added
+- `/app/backend/tests/test_iter122_missed_reminder_and_unknown_backfill.py`
+
+### Production-safety guarantees
+- No content / template / workflow / trigger changes.
+- Per-channel introspection — a channel previously delivered will NEVER
+  be re-attempted on the SAME schedule_token.
+- Backward-compatible: `notify_missed_reminder` callers omitting the new
+  flags get the original both-channel behavior.
+- Reschedule semantics preserved: new token → flags treated as fresh →
+  legitimate new reminder fires.
+- iter108 backfill is idempotent (uses `bb_meta.done` flag) — re-runs are
+  safe and skip already-fixed rows naturally.
+
+---
+
+
 ## iter121 — OTP Per-Channel Retry Fix (May 26 2026)
 
 ### Reported symptom
