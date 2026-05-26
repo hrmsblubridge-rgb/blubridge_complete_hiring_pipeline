@@ -1,3 +1,91 @@
+## iter121 — OTP Per-Channel Retry Fix (May 26 2026)
+
+### Reported symptom
+Candidates received WhatsApp OTP successfully but the OTP **email never
+arrived**. Production data confirmed: 3 `bb_registrations` rows stuck with
+`otp_sent=True, otp_wa_sent=True, otp_email_sent=False` — and ALL future
+ticks excluded them.
+
+### Root cause (confirmed by code + live data audit)
+1. **Cursor filter wrong.** The OTP worker fetched rows via
+   `"otp_sent": {"$ne": True}`. iter107 introduced per-channel persistence
+   (`otp_wa_sent` / `otp_email_sent`) but the cursor filter was NEVER updated
+   to honor them.
+2. **Umbrella flag set on partial success.** When WA succeeded but email
+   failed (e.g. transient Resend 5xx, or earlier sandbox 403), the worker
+   committed `otp_sent=True` after the partial dispatch — locking the row
+   out of every subsequent tick.
+3. **No conditional channel attempt.** Even if the cursor had re-fetched
+   the row, `notify_otp` always attempted BOTH channels — so the
+   already-delivered WhatsApp would have been re-sent, spamming the
+   candidate.
+
+### Fix (bg_workers.py + messaging.py)
+1. **New cursor filter** keys off per-channel flags:
+   ```python
+   "$or": [
+       {"otp_wa_sent": {"$ne": True}},
+       {"otp_email_sent": {"$ne": True}},
+   ]
+   ```
+   Row stays eligible until BOTH channels confirmed delivered.
+2. **Pre-dispatch channel introspection.** Worker reads `otp_wa_sent` /
+   `otp_email_sent` on the doc, builds `channels_to_send=[...]`, skips the
+   row entirely if both already True.
+3. **`notify_otp` extended** with `send_wa` and `send_email_channel`
+   boolean kwargs (defaults `True/True` for backward compat). Worker now
+   calls `notify_otp(..., send_wa=not wa_already_sent,
+   send_email_channel=not em_already_sent)` so the previously-delivered
+   channel is NEVER re-attempted → zero risk of duplicate WhatsApp / email
+   to the candidate.
+4. **Umbrella `otp_sent=True` set ONLY when both channels succeed** —
+   single-channel ticks update only the specific channel flag.
+5. **Param-shadow trap avoided.** Initial naming `send_email` shadowed the
+   imported `send_email()` function (caught by hot-reload `TypeError:
+   'bool' object is not callable`); renamed to `send_email_channel`.
+
+### Verification
+- `tests/test_iter121_otp_per_channel_retry.py` — 5/5 PASS:
+  - `test_notify_otp_signature_exposes_per_channel_flags` ✓
+  - `test_notify_otp_skips_wa_when_flag_false` (mocked send_whatsapp) ✓
+  - `test_notify_otp_skips_email_when_flag_false` (mocked send_email) ✓
+  - `test_notify_otp_sends_both_by_default` (backward compat) ✓
+  - `test_worker_cursor_filter_uses_per_channel_flags` (source-grep guard) ✓
+- **Live data validation**: tester row (rishi.nayak@blubridge.com) was
+  exactly in the stuck state (`otp_wa_sent=True, otp_email_sent=False,
+  otp_sent=True`). Post-deploy, the worker correctly picked it up on the
+  next tick, logged `channels_to_send=['email']`, called
+  `notify_otp(send_wa=False, send_email_channel=True)`, and routed via the
+  new sender (`information.team@blubrg.com`, reply_to `hiring@blubridge.com`).
+  The only failure in preview is the unverified `blubrg.com` Resend domain
+  (preview-account-specific); on production Render (already verified) the
+  email will land.
+- WhatsApp was NOT re-dispatched on the retry tick (confirmed via logs:
+  no `[WhatsApp:REQ]` for the stuck row's retry).
+
+### Files modified
+- `/app/backend/bg_workers.py` — `_worker_otp_generator` cursor filter +
+  CAS guard + per-channel dispatch decision + persistence logic.
+- `/app/backend/messaging.py` — `notify_otp` signature extended.
+
+### Files added
+- `/app/backend/tests/test_iter121_otp_per_channel_retry.py`
+
+### Production-safety guarantees
+- **No duplicate sends.** A channel that previously succeeded is
+  introspected from the DB row, marked as `wa_already_sent=True`, and the
+  worker passes `send_wa=False` to `notify_otp` — the WhatsApp transport
+  function is NEVER invoked for a retry.
+- **Default args preserve all existing callers.** `notify_otp` invoked
+  without the new flags behaves identically to iter107.
+- **Backward compatible with legacy rows.** Rows committed pre-iter121
+  with `otp_sent=True, otp_email_sent=False` (3 in production) will be
+  re-fetched on the first tick after deploy and the missing email will be
+  dispatched. WA is not re-sent because `otp_wa_sent=True` is honored.
+
+---
+
+
 ## iter120 — Reply-To Dual-Belt Fix (May 25 2026)
 
 ### Reported symptom

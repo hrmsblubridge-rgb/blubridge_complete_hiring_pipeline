@@ -652,24 +652,31 @@ async def notify_schedule_confirmation(name: str, phone: str, email: str, date: 
     return wa_ok, em_ok
 
 
-async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str, date: str, time: str, is_test: bool = False):
+async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str, date: str, time: str, is_test: bool = False, send_wa: bool = True, send_email_channel: bool = True):
     """Send OTP notification via WhatsApp + Email.
     iter73 — Content + design verbatim from BluBridge PDF reference (OTP in
     blue inside a light-grey rectangular box).
     iter79 — Date/time displayed as `dd-mm-yyyy` + `hh:mm AM/PM`.
     iter107 — Returns (wa_ok, em_ok). Independent channel failures so the
-    OTP worker can persist per-channel state and retry only the failed one."""
+    OTP worker can persist per-channel state and retry only the failed one.
+    iter121 — `send_wa` / `send_email_channel` flags so the worker can
+    attempt ONLY the channel that hasn't sent yet on retry ticks. Default
+    True/True preserves existing callers' behavior. Note the email-channel
+    flag is NOT named `send_email` to avoid shadowing the imported
+    `send_email` function below."""
     date = fmt_date(date)
     time = fmt_time(time)
     _logger.info(
         f"[OTP:NOTIFY_START] email={email} phone={phone} role={job_role!r} "
-        f"date={date} time={time} otp_len={len(str(otp))}"
+        f"date={date} time={time} otp_len={len(str(otp))} "
+        f"send_wa={send_wa} send_email_channel={send_email_channel}"
     )
     wa_ok = False
-    try:
-        wa_ok = await send_whatsapp("OTP With Job", phone, email, [name, job_role, otp, phone, date, time, OFFICE_LOCATION], is_test=is_test)
-    except Exception as _we:
-        _logger.exception(f"[OTP:NOTIFY_WA_EXC] email={email} err={_we!r}")
+    if send_wa:
+        try:
+            wa_ok = await send_whatsapp("OTP With Job", phone, email, [name, job_role, otp, phone, date, time, OFFICE_LOCATION], is_test=is_test)
+        except Exception as _we:
+            _logger.exception(f"[OTP:NOTIFY_WA_EXC] email={email} err={_we!r}")
     body = f"""
     <p style="margin:0 0 16px 0;">Hi {name},</p>
     <p style="margin:0 0 16px 0;">Your One-Time Password (OTP) to confirm your interview attendance at Blubridge Technologies is:</p>
@@ -691,11 +698,15 @@ async def notify_otp(name: str, phone: str, email: str, job_role: str, otp: str,
     <p style="margin:0;">Blubridge Recruitment Team</p>
     """
     em_ok = False
-    try:
-        em_ok = await send_email(email, phone, "Your Interview OTP - Blubridge Technologies", _email_shell(body), is_test=is_test)
-    except Exception as _ee:
-        _logger.exception(f"[OTP:NOTIFY_EMAIL_EXC] email={email} err={_ee!r}")
-    _logger.info(f"[OTP:NOTIFY_DONE] email={email} wa_ok={wa_ok} em_ok={em_ok}")
+    if send_email_channel:
+        try:
+            em_ok = await send_email(email, phone, "Your Interview OTP - Blubridge Technologies", _email_shell(body), is_test=is_test)
+        except Exception as _ee:
+            _logger.exception(f"[OTP:NOTIFY_EMAIL_EXC] email={email} err={_ee!r}")
+    _logger.info(
+        f"[OTP:NOTIFY_DONE] email={email} wa_ok={wa_ok} em_ok={em_ok} "
+        f"attempted_wa={send_wa} attempted_email={send_email_channel}"
+    )
     return wa_ok, em_ok
 
 

@@ -88,12 +88,22 @@ async def _worker_otp_generator():
             now = _local_now()
             today_str = now.strftime("%Y-%m-%d")
 
-            # Query ONLY today's interviews where OTP not yet sent (NEW records only)
+            # iter121 — Per-channel retry. The cursor now picks up rows where
+            # ANY channel hasn't sent yet (`otp_wa_sent` OR `otp_email_sent`),
+            # not just where the legacy `otp_sent` umbrella flag is unset.
+            # This fixes the production symptom where WhatsApp went out but
+            # Email failed once and was never retried because the worker
+            # mistakenly set `otp_sent=True` after the first partial success
+            # (see iter107 comment thread above — the cursor filter never
+            # matched the documented per-channel retry intent).
             cursor = _db.bb_registrations.find({
                 **_cutoff_filter(),
                 "schedule_date": today_str,
                 "is_shortlisted": True,
-                "otp_sent": {"$ne": True},
+                "$or": [
+                    {"otp_wa_sent": {"$ne": True}},
+                    {"otp_email_sent": {"$ne": True}},
+                ],
                 "schedule_time": {"$nin": [None, ""], "$exists": True},
             })
             docs = await cursor.to_list(None)
@@ -145,10 +155,21 @@ async def _worker_otp_generator():
                 otp = doc.get("otp") or str(random.randint(100000, 999999))
                 otp_expiry_iso = interview_dt.isoformat()
                 now_iso = now.isoformat()
+                # iter121 — Per-channel retry. Examine each channel's current
+                # flag and only attempt the ones still unsent. Skip the row
+                # entirely if BOTH are already done.
+                wa_already_sent = bool(doc.get("otp_wa_sent"))
+                em_already_sent = bool(doc.get("otp_email_sent"))
+                if wa_already_sent and em_already_sent:
+                    continue
+                channels_to_send = []
+                if not wa_already_sent:
+                    channels_to_send.append("wa")
+                if not em_already_sent:
+                    channels_to_send.append("email")
 
                 cas = await _db.bb_registrations.update_one(
                     {"_id": doc["_id"],
-                     "otp_sent": {"$ne": True},
                      "otp_dispatch_in_progress": {"$ne": True}},
                     {"$set": {
                         "otp": otp,
@@ -176,10 +197,11 @@ async def _worker_otp_generator():
 
                 _logger.info(
                     f"[OTP:DISPATCH_START] email={doc.get('email')} phone={doc.get('phone')} "
-                    f"otp={otp} interview={interview_dt.strftime('%Y-%m-%d %H:%M')} IST"
+                    f"otp={otp} interview={interview_dt.strftime('%Y-%m-%d %H:%M')} IST "
+                    f"channels_to_send={channels_to_send}"
                 )
 
-                wa_ok, em_ok = False, False
+                wa_ok, em_ok = wa_already_sent, em_already_sent
                 send_err = None
                 try:
                     from messaging import notify_otp
@@ -192,31 +214,42 @@ async def _worker_otp_generator():
                         today_str,
                         schedule_time_str,
                         is_test=bool(doc.get("isTest")),
+                        # iter121 — Only attempt the channels still unsent.
+                        # A previously-successful channel must NOT be re-dispatched
+                        # (avoids duplicate WhatsApp/email to the candidate).
+                        send_wa=not wa_already_sent,
+                        send_email_channel=not em_already_sent,
                     )
-                    wa_ok, em_ok = result if isinstance(result, tuple) else (bool(result), False)
+                    res_wa, res_em = result if isinstance(result, tuple) else (bool(result), False)
+                    # Merge: keep already-true flags, OR in new results.
+                    wa_ok = wa_already_sent or res_wa
+                    em_ok = em_already_sent or res_em
                 except Exception as ne:
                     send_err = ne
                     _logger.exception(f"[OTP:NOTIFY_EXC] email={doc.get('email')} err={ne!r}")
 
-                # iter107 — Persist per-channel results AFTER the send. We mark
-                # `otp_sent=True` only if AT LEAST ONE channel succeeded; if
-                # BOTH failed we clear `otp_dispatch_in_progress` so the next
-                # tick retries. This is the inverse of the old behaviour where
-                # `otp_sent=True` was committed before the send and any failure
-                # permanently lost the OTP email.
+                # iter121 — Persist per-channel flags + ALSO the umbrella
+                # `otp_sent` flag (set True ONLY when BOTH channels are done).
+                # If only one channel succeeded this tick, leave `otp_sent`
+                # alone so the cursor's `$or` filter picks the row up next
+                # tick for the still-failed channel.
                 any_ok = bool(wa_ok or em_ok)
+                both_ok = bool(wa_ok and em_ok)
                 if any_ok:
+                    set_fields = {
+                        "otp_wa_sent": bool(wa_ok),
+                        "otp_email_sent": bool(em_ok),
+                        "otp_dispatch_in_progress": False,
+                    }
+                    if wa_ok:
+                        set_fields["otp_wa_sent_at"] = now_iso
+                    if em_ok:
+                        set_fields["otp_email_sent_at"] = now_iso
+                    if both_ok:
+                        set_fields["otp_sent"] = True
+                        set_fields["otp_sent_at"] = now_iso
                     await _db.bb_registrations.update_one(
-                        {"_id": doc["_id"]},
-                        {"$set": {
-                            "otp_sent": True,
-                            "otp_sent_at": now_iso,
-                            "otp_wa_sent": bool(wa_ok),
-                            "otp_wa_sent_at": now_iso if wa_ok else None,
-                            "otp_email_sent": bool(em_ok),
-                            "otp_email_sent_at": now_iso if em_ok else None,
-                            "otp_dispatch_in_progress": False,
-                        }},
+                        {"_id": doc["_id"]}, {"$set": set_fields},
                     )
                     _logger.info(
                         f"[OTP:DISPATCH_DONE] email={doc.get('email')} "
