@@ -24,8 +24,12 @@ AISENSY_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY5NDI0MTYwNzA4
 # fresh from Render; only the from-email/from-name carry safe defaults
 # so deploys without overrides keep working out-of-box.
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "").strip()
-RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "onboarding@resend.dev").strip()
-RESEND_FROM_NAME = os.environ.get("RESEND_FROM_NAME", "Blubridge Recruitment").strip()
+RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "information.team@blubrg.com").strip()
+RESEND_FROM_NAME = os.environ.get("RESEND_FROM_NAME", "BluBridge Hiring").strip()
+# iter119 — Reply-To routing. Applicant clicks Reply in their mail client →
+# the reply automatically targets the recruitment inbox below, NOT the sender
+# transactional address. Override via `MAIL_REPLY_TO` env on Render.
+MAIL_REPLY_TO = os.environ.get("MAIL_REPLY_TO", "hiring@blubridge.com").strip()
 
 OFFICE_LOCATION = "30, Norton Road, Mandavelipakkam, Raja Annamalai Puram, Chennai, Tamil Nadu - 600028."
 
@@ -405,15 +409,21 @@ async def send_email(to_email: str, phone: str, subject: str, html_body: str, is
             "subject": subject,
             "html": html_body,
         }
+        # iter119 — Reply-To header so candidate replies route to the
+        # recruitment inbox, not the transactional sender. Resend accepts
+        # `reply_to` as a string OR list; we pass a list for forward-compat.
+        if MAIL_REPLY_TO:
+            payload["reply_to"] = [MAIL_REPLY_TO]
 
         if is_test_mode():
             _logger.info(
                 f"[Email DEBUG] provider=resend api=https port=443 "
-                f"from={from_field!r} to={to_email}"
+                f"from={from_field!r} reply_to={MAIL_REPLY_TO!r} to={to_email}"
             )
 
         _logger.info(
-            f"[Email:REQ] provider=resend from={from_field!r} to={to_email} subject={subject!r}"
+            f"[Email:REQ] provider=resend from={from_field!r} "
+            f"reply_to={MAIL_REPLY_TO!r} to={to_email} subject={subject!r}"
         )
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:

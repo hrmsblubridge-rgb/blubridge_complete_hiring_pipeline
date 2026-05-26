@@ -1,3 +1,67 @@
+## iter119 — Production Sender + Reply-To Configuration (May 25 2026)
+
+### Required change
+- From: `BluBridge Hiring <information.team@blubrg.com>`
+- Reply-To: `hiring@blubridge.com`
+
+### Fix (messaging.py + .env only)
+1. New env var `MAIL_REPLY_TO` (default `hiring@blubridge.com`) added at
+   module top. Code in `send_email` injects `payload["reply_to"] = [MAIL_REPLY_TO]`
+   into every Resend POST.
+2. `RESEND_FROM_NAME` default changed `"Blubridge Recruitment"` → `"BluBridge Hiring"`.
+3. `RESEND_FROM_EMAIL` default changed `"onboarding@resend.dev"` → `"information.team@blubrg.com"`.
+4. `.env` updated with the production values (Render env vars should mirror).
+5. `[Email DEBUG]` + `[Email:REQ]` log lines now include `reply_to=` so
+   future audits show the routing decision per send.
+
+### Centralization audit
+- Single `send_email` in `messaging.py` is the sole transport — verified via
+  `grep send_email`. All 7 notify_* helpers + `notify_rejected_with_reason`
+  funnel through it. Zero direct Resend calls anywhere else in the backend.
+- Zero `onboarding@resend.dev` references remain (grep confirmed clean).
+
+### Verification
+- `tests/test_iter119_sender_and_reply_to.py` — 4/4 PASS:
+  - `test_env_defaults_match_user_spec` ✓
+  - `test_no_resend_sandbox_sender_remains` (codebase scan) ✓
+  - `test_send_email_payload_includes_correct_from_and_reply_to` (mocked Resend) ✓
+  - `test_env_overrides_work` (proves env override path) ✓
+- Live dispatch attempt to tester credentials returned HTTP 403:
+  `{"message":"The blubrg.com domain is not verified. Please add and verify
+  your domain on https://resend.com/domains"}` — this confirms the
+  payload is correctly formed and reaching Resend. The domain
+  verification is an operator step on the Resend dashboard (no code change
+  needed once verified).
+
+### Files modified
+- `/app/backend/messaging.py` — MAIL_REPLY_TO const + `reply_to` in payload + log lines.
+- `/app/backend/.env` — `RESEND_FROM_EMAIL`, `RESEND_FROM_NAME`, `MAIL_REPLY_TO`.
+
+### Files added
+- `/app/backend/tests/test_iter119_sender_and_reply_to.py`
+
+### Operator action required (one-time, on Resend dashboard)
+1. Go to https://resend.com/domains.
+2. Add `blubrg.com` and complete the SPF + DKIM + MX records as Resend
+   prescribes for your DNS host.
+3. Wait for "Verified" status (~5 min after DNS propagates).
+4. Set the same three env vars on Render → Environment:
+   - `RESEND_FROM_EMAIL=information.team@blubrg.com`
+   - `RESEND_FROM_NAME=BluBridge Hiring`
+   - `MAIL_REPLY_TO=hiring@blubridge.com`
+5. Trigger a tester email and confirm:
+   - "From" in the inbox header reads `BluBridge Hiring <information.team@blubrg.com>`
+   - Clicking Reply targets `hiring@blubridge.com`
+
+### Production-safety guarantees
+- No content / template / workflow / trigger changes.
+- All values env-driven → future swaps require zero code change.
+- Default-value fallbacks in code prevent boot failure if a Render env var
+  is ever accidentally unset.
+
+---
+
+
 ## iter118 — View Applicants Summary Statistics Correctness Fixes (May 25 2026)
 
 ### Reported symptom
