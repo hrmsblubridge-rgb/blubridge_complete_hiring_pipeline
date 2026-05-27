@@ -1,3 +1,62 @@
+## iter125 — Dynamic Job-Role Insertion Pipeline (Feb 15, 2026)
+
+### Issue — New job roles still classified as "Unknown"; not appearing in `bb_job_roles`, `job_titles_master`, Job Roles page, or Unmapped Job Keywords section
+
+**Root cause**:
+`reprocess_matching()` (the post-upload sweep that recomputes derived
+fields) called `_persist_derived_fields()` for ONLY two collections:
+`registered_candidates` and `naukri_applies`. It NEVER ran the pass for
+`pipeline_data`, so freshly-uploaded HR pipeline rows had no
+`_normalized_job_role` field set. Downstream surfaces that filter by
+`{"_normalized_job_role": {"$nin": [None, "", "Unknown"]}}` (notably
+`/api/job-roles`, `/api/job-roles/applicants`, View Applicants,
+Analytics, etc.) silently excluded these rows. The one-shot
+`_backfill_unknown_classifications_once` was gated by
+`bb_meta.iter108_unknown_backfill.done=True` so it never re-ran on
+subsequent uploads. Net effect: new roles dropped to "Unknown" UNLESS a
+human ran a manual `/api/admin/reset-backfill/...` curl.
+
+**Fix** (`server.py`):
+1. `reprocess_matching()` now also calls
+   `_persist_derived_fields("pipeline_data")` so EVERY upload — single
+   (`/api/upload/naukri`, `/api/upload/pipeline`) and bulk
+   (`_bg_queue_worker` → `_trigger_deferred_reprocess`) — refreshes
+   `_normalized_job_role` on pipeline rows.
+2. `_resolve_normalized_job_role` (unchanged) returns the RAW role when
+   no mapping exists, so unmapped new roles surface with their literal
+   title rather than collapsing to "Unknown".
+3. `_sync_job_titles_master()` rewritten with structured logging:
+   `[JobRoleSync] DETECTED new_role=<raw> source=<naukri|pipeline>`
+   `[JobRoleSync] INSERT job_titles_master normalized=<norm>`
+   `[JobRoleSync] INSERT bb_job_roles name=<raw>`
+   `[JobRoleSync] SUMMARY scanned=<N> jtm_inserts=<X> bb_inserts=<Y>`
+   Provides production-debugging visibility and swallows duplicate-key
+   races without crashing the sync.
+
+**Verification end-to-end** (`tests/test_iter125_new_job_role_pipeline.py`):
+- ✅ Brand-new role uploaded via `/api/upload/pipeline` (CSV with
+  `job_role=Iter125-E2E-Brand-New-Role-XYZ`).
+- ✅ `_sync_job_titles_master` inserts row into `bb_job_roles` AND
+  `job_titles_master` with `is_mapped: False`.
+- ✅ `_persist_derived_fields("pipeline_data")` sets
+  `_normalized_job_role = "Iter125-E2E-Brand-New-Role-XYZ"` (raw value,
+  NOT "Unknown").
+- ✅ `/api/job-titles/unmatched` returns the new role.
+- ✅ `/api/bb/job-roles` (Manage Job Roles page) lists the new entry.
+- ✅ `/api/job-roles` aggregation shows `count=1` for the new role.
+- ✅ pytest suite (4/4 passing): inserts, unmatched-surface, persist
+  semantics, and source-code regression guard for `reprocess_matching`.
+
+**Behaviour going forward**: ALL future uploads — naukri, HR pipeline,
+bulk batch — automatically create new roles in both master tables AND
+classify applicants under the raw role label (never literal "Unknown")
+without any manual admin intervention. Historical pipeline_data already
+has `_normalized_job_role` populated for 131,317 / 131,331 non-test
+rows (only 14 truly null `job_role` rows remain — legitimate Unknowns).
+
+---
+
+
 ## iter123 — Reschedule-OTP + Admin Backfill + Upload 502 + Exports (May 27 2026)
 
 ### Issue 1 — OTP not sent after reschedule

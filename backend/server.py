@@ -812,6 +812,14 @@ async def reprocess_matching():
 
     await _persist_derived_fields("registered_candidates")
     await _persist_derived_fields("naukri_applies")
+    # iter125 — Persist `_normalized_job_role` on pipeline_data too. Without
+    # this pass, freshly-uploaded HR pipeline rows had no normalized field
+    # set and were excluded from `/api/job-roles` (which filters on
+    # `_normalized_job_role NOT IN [None,"","Unknown"]`). New job roles
+    # entering through pipeline uploads therefore stayed invisible on the
+    # Job Roles page even though `_sync_job_titles_master` correctly
+    # mirrored them into `bb_job_roles` and `job_titles_master`.
+    await _persist_derived_fields("pipeline_data")
 
 # ============ JOB ROLE NORMALIZATION ============
 
@@ -827,45 +835,69 @@ async def _sync_job_titles_master():
     and upsert into job_titles_master + bb_job_roles (case-insensitive
     deduplication). Spec #10A — keeps the mapping picker AND the Job Roles
     page in sync after every dataset upload.
+
+    iter125 — Hardened with structured logging for production debugging:
+      [JobRoleSync] DETECTED new_role="<raw>" source=<naukri|pipeline>
+      [JobRoleSync] INSERT job_titles_master normalized="<norm>"
+      [JobRoleSync] INSERT bb_job_roles name="<raw>"
+      [JobRoleSync] SUMMARY scanned=<N> jtm_inserts=<X> bb_inserts=<Y>
     """
     sources = []
     # Naukri uploads → job_title
-    sources.extend(
-        await db.naukri_applies.aggregate(
-            [{"$match": {"job_title": {"$nin": [None, ""]}}},
-             {"$group": {"_id": "$job_title"}}]
-        ).to_list(None)
-    )
+    naukri_titles = await db.naukri_applies.aggregate(
+        [{"$match": {"job_title": {"$nin": [None, ""]}}},
+         {"$group": {"_id": "$job_title"}}]
+    ).to_list(None)
+    for r in naukri_titles:
+        sources.append((r["_id"], "naukri"))
     # HR Pipeline uploads → job_role (pipeline_data uses `job_role`, with
     # legacy `job_title` as fallback)
-    sources.extend(
-        await db.pipeline_data.aggregate(
-            [{"$match": {"job_role": {"$nin": [None, ""]}}},
-             {"$group": {"_id": "$job_role"}}]
-        ).to_list(None)
-    )
-    sources.extend(
-        await db.pipeline_data.aggregate(
-            [{"$match": {"job_role": {"$in": [None, ""]}, "job_title": {"$nin": [None, ""]}}},
-             {"$group": {"_id": "$job_title"}}]
-        ).to_list(None)
-    )
+    pipeline_roles = await db.pipeline_data.aggregate(
+        [{"$match": {"job_role": {"$nin": [None, ""]}}},
+         {"$group": {"_id": "$job_role"}}]
+    ).to_list(None)
+    for r in pipeline_roles:
+        sources.append((r["_id"], "pipeline"))
+    pipeline_legacy = await db.pipeline_data.aggregate(
+        [{"$match": {"job_role": {"$in": [None, ""]}, "job_title": {"$nin": [None, ""]}}},
+         {"$group": {"_id": "$job_title"}}]
+    ).to_list(None)
+    for r in pipeline_legacy:
+        sources.append((r["_id"], "pipeline_legacy"))
+
     seen = set()
-    for r in sources:
-        raw = str(r["_id"] or "").strip()
+    scanned = 0
+    jtm_inserts = 0
+    bb_inserts = 0
+    for raw_value, source_tag in sources:
+        scanned += 1
+        raw = str(raw_value or "").strip()
         if not raw:
             continue
         normalized = _normalize_text_for_matching(raw)
         if not normalized or normalized in seen:
             continue
         seen.add(normalized)
+
         existing = await db.job_titles_master.find_one({"normalized_job_title": normalized})
         if not existing:
-            await db.job_titles_master.insert_one({
-                "raw_job_title": raw,
-                "normalized_job_title": normalized,
-                "is_mapped": False,
-            })
+            try:
+                await db.job_titles_master.insert_one({
+                    "raw_job_title": raw,
+                    "normalized_job_title": normalized,
+                    "is_mapped": False,
+                })
+                jtm_inserts += 1
+                logger.info(
+                    f"[JobRoleSync] DETECTED new_role={raw!r} source={source_tag} | "
+                    f"INSERT job_titles_master normalized={normalized!r}"
+                )
+            except Exception as _e:
+                # Likely a race on the unique index; safe to swallow.
+                logger.warning(
+                    f"[JobRoleSync] job_titles_master insert skipped for {raw!r}: {_e}"
+                )
+
         # iter69f (#10A) — auto-upsert into bb_job_roles so the Job Roles page
         # always lists every distinct title from imports + manual creates.
         # Case-insensitive match against existing rows.
@@ -873,11 +905,25 @@ async def _sync_job_titles_master():
             {"name": {"$regex": f"^{re.escape(raw)}$", "$options": "i"}}
         )
         if not bb_existing:
-            await db.bb_job_roles.insert_one({
-                "name": raw,
-                "source": "imported",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            })
+            try:
+                await db.bb_job_roles.insert_one({
+                    "name": raw,
+                    "source": "imported",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+                bb_inserts += 1
+                logger.info(
+                    f"[JobRoleSync] INSERT bb_job_roles name={raw!r} source={source_tag}"
+                )
+            except Exception as _e:
+                logger.warning(
+                    f"[JobRoleSync] bb_job_roles insert skipped for {raw!r}: {_e}"
+                )
+
+    logger.info(
+        f"[JobRoleSync] SUMMARY scanned={scanned} unique={len(seen)} "
+        f"jtm_inserts={jtm_inserts} bb_inserts={bb_inserts}"
+    )
 
 
 async def _get_job_keyword_mappings() -> list:
