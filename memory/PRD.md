@@ -1,3 +1,112 @@
+## iter123 — Reschedule-OTP + Admin Backfill + Upload 502 + Exports (May 27 2026)
+
+### Issue 1 — OTP not sent after reschedule
+**Root cause**: `bb_modules.submit_schedule()` reschedule branch cleared the
+legacy `otp_sent` flag but NOT the iter121 per-channel flags
+(`otp_wa_sent`, `otp_email_sent`). With iter121's cursor predicate
+`$or: [otp_wa_sent != True, otp_email_sent != True]`, both flags
+remained True from the previous schedule → row excluded → no OTP
+generated for the new schedule.
+
+**Fix**: extended the `unset_fields` block to also clear:
+- iter121 OTP per-channel state: `otp_wa_sent`, `otp_email_sent`,
+  `otp_wa_sent_at`, `otp_email_sent_at`, `otp_dispatch_in_progress`,
+  `otp_dispatch_started_at`.
+- iter122 missed-reminder per-channel state:
+  `missed_reminder_wa_sent`, `missed_reminder_email_sent`,
+  `missed_reminder_token`, `missed_reminder_sent_at`, `missed_marked`,
+  `missed_at`.
+
+### Issue 2 — Admin reset-backfill endpoint
+**Fix**: new `POST /api/admin/reset-backfill/{name}` (auth required).
+Resets `bb_meta._id={name}.done=False` and re-launches the backfill as a
+background task. Two backfills registered: `iter108_unknown_backfill`
+(repairs Unknown → real role classification) and
+`iter110_college_status_backfill` (5-bucket NIRF reclassification).
+
+### Issue 3 — Individual upload 502s
+**Root cause**: `/api/upload/naukri` and `/api/upload/pipeline` ran
+`reprocess_matching()` + `_sync_job_titles_master()` synchronously inside
+the HTTP handler. On production-sized datasets these traversed every row
+and exceeded Render's 30s HTTP timeout → 502.
+
+**Fix**: wrapped both post-upload calls in `asyncio.create_task(...)`.
+Endpoints now return the upload result immediately (no timeout risk);
+reprocess + sync run in the background. Response includes
+`background_processing: True` so the frontend can show a "processing
+in background" hint if desired. Matches the bulk-upload route's pattern.
+
+### Issue 4 — Export endpoints + frontend buttons
+**Backend** (server.py):
+- `GET /api/applicants/export?format=xlsx|csv` — honours every existing
+  filter (`jobRole`, `dateType`, `startDate`, `endDate`, `search`,
+  `name`, `email`, `phone`, `collegeStatus`). Returns the 17 user-spec
+  columns in the exact order requested:
+  Name, Email, Phone, Age, Gender, College Status, College, Degree,
+  Course, Year of Graduation, Job Role, Registered Status,
+  Registered Date, Schedule Date, Schedule Time, Attended or Not,
+  Result Status.
+- `GET /api/attended/export?format=xlsx|csv` — honours filters AND
+  appends **dynamic round columns** from `bb_rounds` (alphabetical,
+  active only) after Result Status. Single bulk `bb_applicant_updates`
+  lookup populates scores per applicant.
+- Uses `openpyxl` write-only mode (Resource-efficient streaming for
+  large datasets). CSV uses Python stdlib `csv`. Both wrapped in
+  FastAPI `StreamingResponse` with `Content-Disposition: attachment;
+  filename="…"`.
+
+**Frontend**:
+- `Roles.js` (View Applicants) and `AttendedRoles.js` (View Attended
+  Applicants) each get a blue "Export" button next to "All Records"
+  with a `DownloadSimple` icon, opening a small dropdown (XLSX / CSV).
+- `doExport(format)` reads current filter state, builds query string,
+  fetches blob, triggers browser download with a date-stamped filename
+  (`View_Applicants_2026-05-27.xlsx`, etc.). Toast on success / failure.
+
+### Verification
+- `tests/test_iter123_otp_reschedule_uploads_exports.py` — **10/10 PASS**:
+  - reschedule clears iter121 + iter122 per-channel flags ✓
+  - admin reset-backfill endpoint registered ✓
+  - upload/naukri defers reprocess to background ✓
+  - upload/pipeline defers reprocess to background ✓
+  - both export endpoints registered ✓
+  - 17-column order matches user spec verbatim ✓
+  - attended export includes dynamic_rounds + bb_rounds query ✓
+  - frontend Roles.js + AttendedRoles.js have Export buttons + data-testids ✓
+  - **Live HTTP smoke test**: XLSX export downloaded + valid Excel workbook (zipfile + workbook.xml + sheet1.xml present) ✓
+- Live admin reset-backfill HTTP: 200 OK, status="relaunched".
+- Screenshot confirms the Export button renders correctly in production
+  preview.
+
+### Files modified
+- `/app/backend/bb_modules.py` — `submit_schedule()` reschedule `unset_fields`.
+- `/app/backend/server.py` — `/upload/naukri` + `/upload/pipeline`
+  background defer; new `/admin/reset-backfill/{name}`;
+  new `/applicants/export`; new `/attended/export`.
+- `/app/frontend/src/pages/Roles.js` — Export button + dropdown +
+  `doExport()`.
+- `/app/frontend/src/pages/AttendedRoles.js` — same pattern.
+
+### Files added
+- `/app/backend/tests/test_iter123_otp_reschedule_uploads_exports.py`
+
+### Production-safety guarantees
+- Read-only on `bb_meta` query for backfill status. Background tasks
+  are idempotent (each backfill itself uses `bb_meta.done` to prevent
+  double execution unless explicitly reset).
+- Upload endpoints still atomically insert + update rows
+  synchronously; only the slow `reprocess_matching` step is deferred.
+  Result counts (inserted, updated, total) returned accurately.
+- Export endpoints use server-side cursors (`.to_list(None)` collects
+  fully but at the user's filter granularity); no $lookup, no
+  full-collection scan beyond the filtered match. `openpyxl
+  write_only=True` streams rows so memory stays bounded.
+- Filters preserved verbatim from the View pages — no risk of exporting
+  records outside what the user sees.
+
+---
+
+
 ## iter122 — Missed-Reminder Per-Channel Idempotency + Unknown Role Repair (May 26 2026)
 
 ### Issue 1 — Candidate Follow-up Email Sent TWICE

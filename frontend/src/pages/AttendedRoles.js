@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import dayjs from 'dayjs';
 import { toast } from 'sonner';
-import { ArrowLeft, FunnelSimple, ArrowCounterClockwise, SpinnerGap, CaretLeft, CaretRight, CaretDoubleLeft, CaretDoubleRight, MagnifyingGlass, Eye } from '@phosphor-icons/react';
+import { ArrowLeft, FunnelSimple, ArrowCounterClockwise, SpinnerGap, CaretLeft, CaretRight, CaretDoubleLeft, CaretDoubleRight, MagnifyingGlass, Eye, DownloadSimple } from '@phosphor-icons/react';
 import SortableHeader from '../components/SortableHeader';
 import CandidateJourneyModal from '../components/CandidateJourneyModal';
 
@@ -67,6 +67,41 @@ export default function AttendedApplicants() {
     const [goToPage, setGoToPage] = useState('');
     const [sort, setSort] = useState(null);
     const [journeyCandidate, setJourneyCandidate] = useState(null);  // Iter52
+    const [exportMenuOpen, setExportMenuOpen] = useState(false);  // iter123
+
+    // iter123 — CSV/XLSX export honouring all currently-applied filters,
+    // includes dynamic round columns from bb_rounds appended automatically
+    // by the backend.
+    const doExport = async (format) => {
+        setExportMenuOpen(false);
+        try {
+            const params = new URLSearchParams();
+            if (jobRole) params.set('jobRole', jobRole);
+            if (startDate) params.set('startDate', startDate);
+            if (endDate) params.set('endDate', endDate);
+            if (search) params.set('search', search);
+            if (nameQ) params.set('name', nameQ);
+            if (emailQ) params.set('email', emailQ);
+            if (phoneQ) params.set('phone', phoneQ);
+            if (round) params.set('round', round);
+            if (collegeStatus) params.set('collegeStatus', collegeStatus);
+            params.set('format', format);
+            const res = await axios.get(`${API}/api/attended/export?${params.toString()}`,
+                { withCredentials: true, responseType: 'blob' });
+            const blob = new Blob([res.data], {
+                type: format === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `View_Attended_Applicants_${dayjs().format('YYYY-MM-DD')}.${format}`;
+            a.click();
+            URL.revokeObjectURL(url);
+            toast.success(`Exported as ${format.toUpperCase()}`);
+        } catch (e) {
+            toast.error(e?.response?.status === 404 ? 'No data to export' : 'Export failed');
+        }
+    };
     // iter70 — Round columns supplied by backend (dynamic, from bb_rounds).
     const [roundCols, setRoundCols] = useState([]);
 
@@ -262,6 +297,20 @@ export default function AttendedApplicants() {
                         className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium border border-zinc-700 transition-colors">
                         All Records
                     </button>
+                    <div className="relative">
+                        <button onClick={() => setExportMenuOpen(o => !o)} data-testid="export-btn"
+                            className="flex items-center gap-2 px-5 py-2 bg-blue-700 hover:bg-blue-600 text-sm font-medium transition-colors">
+                            <DownloadSimple size={16} /> Export
+                        </button>
+                        {exportMenuOpen && (
+                            <div className="absolute right-0 top-full mt-1 bg-zinc-900 border border-zinc-700 z-20 min-w-[140px] shadow-lg">
+                                <button onClick={() => doExport('xlsx')} data-testid="export-xlsx-btn"
+                                    className="block w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 transition-colors">Export as XLSX</button>
+                                <button onClick={() => doExport('csv')} data-testid="export-csv-btn"
+                                    className="block w-full text-left px-4 py-2 text-sm hover:bg-zinc-800 transition-colors">Export as CSV</button>
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
 

@@ -505,8 +505,19 @@ async def upload_naukri(file: UploadFile = File(...), user: str = Depends(get_cu
             except Exception as e:
                 errors.append(f"Row {idx + 2}: {str(e)}")
 
-        await reprocess_matching()
-        await _sync_job_titles_master()
+        # iter123 — Defer heavy post-upload reprocessing to background task.
+        # `reprocess_matching()` + `_sync_job_titles_master()` traverse all
+        # rows; for production-sized collections they easily exceed Render's
+        # 30s HTTP request timeout, producing 502s. The bulk-upload route
+        # already runs async; individual uploads now match that pattern.
+        async def _bg_post_upload_naukri():
+            try:
+                await reprocess_matching()
+                await _sync_job_titles_master()
+                logger.info("[upload/naukri:bg_post] reprocess + sync complete")
+            except Exception as _be:
+                logger.exception(f"[upload/naukri:bg_post] failed: {_be!r}")
+        asyncio.create_task(_bg_post_upload_naukri())
 
         return {
             "success": True,
@@ -516,7 +527,8 @@ async def upload_naukri(file: UploadFile = File(...), user: str = Depends(get_cu
             "updated": updated,
             "errors": errors[:10],
             "mapped_columns": len(col_map),
-            "unmapped_columns": len(df.columns) - len(col_map)
+            "unmapped_columns": len(df.columns) - len(col_map),
+            "background_processing": True,
         }
 
     except HTTPException:
@@ -605,9 +617,16 @@ async def upload_pipeline(file: UploadFile = File(...), user: str = Depends(get_
             except Exception as e:
                 errors.append(f"Row {idx + 2}: {str(e)}")
 
-        await reprocess_matching()
-        # iter69f (#10A) — sync extracted job titles → job_titles_master + bb_job_roles
-        await _sync_job_titles_master()
+        # iter123 — Defer heavy post-upload reprocessing to background task
+        # to prevent Render 502 timeouts on large pipeline files.
+        async def _bg_post_upload_pipeline():
+            try:
+                await reprocess_matching()
+                await _sync_job_titles_master()
+                logger.info("[upload/pipeline:bg_post] reprocess + sync complete")
+            except Exception as _be:
+                logger.exception(f"[upload/pipeline:bg_post] failed: {_be!r}")
+        asyncio.create_task(_bg_post_upload_pipeline())
 
         return {
             "success": True,
@@ -617,7 +636,8 @@ async def upload_pipeline(file: UploadFile = File(...), user: str = Depends(get_
             "updated": updated,
             "errors": errors[:10],
             "mapped_columns": len(col_map),
-            "unmapped_columns": len(df.columns) - len(col_map)
+            "unmapped_columns": len(df.columns) - len(col_map),
+            "background_processing": True,
         }
 
     except HTTPException:
@@ -1829,6 +1849,168 @@ async def get_global_applicants(
     return {"data": applicants, "total": total, "page": page, "limit": limit}
 
 
+# iter123 — View Applicants Export. Re-runs the same filters as
+# `/api/applicants` but un-paginated, supports CSV + XLSX.
+def _build_global_applicants_match(jobRole, dateType, startDate, endDate, search, name, email, phone, collegeStatus):
+    match = {"isTest": {"$ne": True}}
+    if startDate and endDate:
+        date_field = "submitted_at" if dateType == "Registered" else "schedule_date"
+        match[date_field] = {"$gte": startDate, "$lte": endDate + "\uffff"}
+    if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
+        fval = collegeStatus.strip()
+        if fval == "NIRF":
+            match["_nirf_category"] = "NIRF"
+        elif fval in ("Non NIRF", "Non-NIRF"):
+            match["_nirf_category"] = {"$ne": "NIRF"}
+        elif fval in ("Non-NIRF 101-150", "Non-NIRF 151-200", "Non-NIRF 201-300", "Non-NIRF - No Rank"):
+            match["_nirf_category"] = fval
+        else:
+            match["_college_status"] = fval
+    if jobRole and jobRole.strip() and jobRole.strip().lower() != "all jobs":
+        match["_normalized_job_role"] = {"$regex": f"^{re.escape(jobRole.strip())}$", "$options": "i"}
+    if search:
+        search_re = {"$regex": re.escape(search), "$options": "i"}
+        match["$or"] = [
+            {"name": search_re}, {"email": search_re},
+            {"phone": search_re}, {"_normalized_job_role": search_re},
+        ]
+    _npe_clauses = []
+    if name and name.strip():
+        _npe_clauses.append({"name": {"$regex": re.escape(name.strip()), "$options": "i"}})
+    if email and email.strip():
+        _npe_clauses.append({"email": {"$regex": re.escape(email.strip()), "$options": "i"}})
+    if phone and phone.strip():
+        _npe_clauses.append({"phone": {"$regex": re.escape(phone.strip())}})
+    if _npe_clauses:
+        match["$and"] = (match.get("$and") or []) + _npe_clauses
+    return match
+
+
+def _derive_registered_status(doc):
+    """Replicate the registered_status classifier from /api/applicants."""
+    email_type = str(doc.get("email_type") or "").strip().lower()
+    otp_verified = str(doc.get("otp_verified") or "").strip()
+    sch_d = str(doc.get("schedule_date") or "").strip()
+    sch_t = str(doc.get("schedule_time") or "").strip()
+    if email_type in ("shortlist", "shortlisted") and sch_d and sch_t and otp_verified and otp_verified != "0":
+        return "Attended"
+    if email_type in ("shortlist", "shortlisted") and sch_d and sch_t and (not otp_verified or otp_verified == "0"):
+        return "Not Attended"
+    if email_type in ("shortlist", "shortlisted") and sch_d and sch_t:
+        return "Interview Scheduled"
+    if email_type in ("shortlist", "shortlisted") and (not sch_d) and (not sch_t):
+        return "Interview Not Scheduled"
+    if email_type in ("reject", "rejected"):
+        return "Rejected"
+    if email_type in ("shortlist", "shortlisted"):
+        return "Shortlisted"
+    return "Registered"
+
+
+@api_router.get("/applicants/export")
+async def export_global_applicants(
+    jobRole: str = Query(None),
+    dateType: str = Query("Registered"),
+    startDate: str = Query(None),
+    endDate: str = Query(None),
+    search: str = Query(None),
+    name: str = Query(None),
+    email: str = Query(None),
+    phone: str = Query(None),
+    collegeStatus: str = Query(None),
+    format: str = Query("xlsx", regex="^(xlsx|csv)$"),
+    user: str = Depends(get_current_user),
+):
+    """Export filtered View Applicants rows to CSV/XLSX.
+
+    iter123 — Honours all filters currently applied on the page. Returns
+    the same 17 fields the user requested, in the same order shown to
+    the user, so the export mirrors the table they see.
+    """
+    from fastapi.responses import StreamingResponse
+    import io
+    import csv as _csv
+
+    match = _build_global_applicants_match(jobRole, dateType, startDate, endDate, search, name, email, phone, collegeStatus)
+    projection = {
+        "_id": 0, "name": 1, "email": 1, "phone": 1, "age": 1, "gender": 1,
+        "_college_status": 1, "_college_resolved": 1, "college": 1,
+        "degree": 1, "course": 1, "year_of_graduation": 1,
+        "_normalized_job_role": 1, "job_role": 1, "job_title": 1,
+        "email_type": 1, "otp_verified": 1,
+        "schedule_date": 1, "schedule_time": 1,
+        "submitted_at": 1, "last_update": 1, "result_status": 1,
+    }
+    docs = await db.pipeline_data.find(match, projection).sort([("name", 1)]).to_list(None)
+    if not docs:
+        raise HTTPException(status_code=404, detail="No data available to export")
+
+    headers = [
+        "Name", "Email", "Phone", "Age", "Gender",
+        "College Status", "College", "Degree", "Course", "Year of Graduation",
+        "Job Role", "Registered Status", "Registered Date",
+        "Schedule Date", "Schedule Time", "Attended or Not", "Result Status",
+    ]
+
+    def _row(d):
+        reg_status = _derive_registered_status(d)
+        attended = "Attended" if reg_status == "Attended" else "Not Attended"
+        res_status = (d.get("result_status") or "").strip() if reg_status == "Attended" else "NA"
+        if reg_status == "Attended" and (not res_status or res_status == "-"):
+            res_status = "NA"
+        reg_date = (d.get("submitted_at") or d.get("last_update") or "")[:10]
+        return [
+            d.get("name") or "",
+            d.get("email") or "",
+            d.get("phone") or "",
+            d.get("age") or "",
+            d.get("gender") or "",
+            d.get("_college_status") or "",
+            d.get("_college_resolved") or d.get("college") or "",
+            d.get("degree") or "",
+            d.get("course") or "",
+            d.get("year_of_graduation") or "",
+            d.get("_normalized_job_role") or d.get("job_role") or d.get("job_title") or "Unknown",
+            reg_status,
+            reg_date,
+            d.get("schedule_date") or "",
+            d.get("schedule_time") or "",
+            attended,
+            res_status,
+        ]
+
+    today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    fname = f"View_Applicants_{today_iso}"
+
+    if format == "csv":
+        buf = io.StringIO()
+        w = _csv.writer(buf)
+        w.writerow(headers)
+        for d in docs:
+            w.writerow(_row(d))
+        buf.seek(0)
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{fname}.csv"'},
+        )
+
+    from openpyxl import Workbook
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("View Applicants")
+    ws.append(headers)
+    for d in docs:
+        ws.append(_row(d))
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return StreamingResponse(
+        iter([bio.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}.xlsx"'},
+    )
+
+
 # ============ ATTENDED APPLICANTS MODULE ============
 
 @api_router.get("/attended-roles")
@@ -2076,6 +2258,184 @@ async def get_attended_applicants(
         "columns": columns,
         "round_columns": dynamic_rounds,
     }
+
+
+# iter123 — View Attended Applicants Export. Dynamic round columns from
+# bb_rounds (alphabetical) appended after Result Status. Honours all
+# filters currently applied on the page.
+@api_router.get("/attended/export")
+async def export_attended_applicants(
+    jobRole: str = Query(None),
+    startDate: str = Query(None),
+    endDate: str = Query(None),
+    search: str = Query(None),
+    name: str = Query(None),
+    email: str = Query(None),
+    phone: str = Query(None),
+    round: str = Query(None),
+    collegeStatus: str = Query(None),
+    format: str = Query("xlsx", regex="^(xlsx|csv)$"),
+    user: str = Depends(get_current_user),
+):
+    from fastapi.responses import StreamingResponse
+    import io
+    import csv as _csv
+
+    # Resolve dynamic round columns first (mirrors /api/attended logic).
+    round_cursor = db.bb_rounds.find(
+        {"$or": [{"active": {"$ne": False}}, {"active": {"$exists": False}}]},
+        {"_id": 0, "name": 1},
+    )
+    seen_norm = set()
+    dynamic_rounds: list = []
+    async for r in round_cursor:
+        rn = (r.get("name") or "").strip()
+        if not rn:
+            continue
+        norm = re.sub(r"\s+", "", rn).lower()
+        if norm in seen_norm:
+            continue
+        seen_norm.add(norm)
+        dynamic_rounds.append(rn)
+    dynamic_rounds.sort(key=lambda x: x.lower())
+
+    # Build the same match the /attended endpoint uses (attended = OTP verified).
+    match = {"isTest": {"$ne": True}, "otp_verified": _not_null_filter}
+    if startDate and endDate:
+        match["schedule_date"] = {**_not_null_filter, "$gte": startDate, "$lte": endDate}
+    if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
+        fval = collegeStatus.strip()
+        if fval == "NIRF":
+            match["_nirf_category"] = "NIRF"
+        elif fval in ("Non NIRF", "Non-NIRF"):
+            match["_nirf_category"] = {"$ne": "NIRF"}
+        elif fval in ("Non-NIRF 101-150", "Non-NIRF 151-200", "Non-NIRF 201-300", "Non-NIRF - No Rank"):
+            match["_nirf_category"] = fval
+        else:
+            match["_college_status"] = fval
+    if jobRole and jobRole.strip() and jobRole.strip().lower() != "all jobs":
+        match["_normalized_job_role"] = {"$regex": f"^{re.escape(jobRole.strip())}$", "$options": "i"}
+    if search:
+        search_re = {"$regex": re.escape(search), "$options": "i"}
+        match["$or"] = [
+            {"name": search_re}, {"email": search_re},
+            {"phone": search_re}, {"_normalized_job_role": search_re},
+        ]
+    _npe_clauses = []
+    if name and name.strip():
+        _npe_clauses.append({"name": {"$regex": re.escape(name.strip()), "$options": "i"}})
+    if email and email.strip():
+        _npe_clauses.append({"email": {"$regex": re.escape(email.strip()), "$options": "i"}})
+    if phone and phone.strip():
+        _npe_clauses.append({"phone": {"$regex": re.escape(phone.strip())}})
+    if _npe_clauses:
+        match["$and"] = (match.get("$and") or []) + _npe_clauses
+
+    projection = {
+        "_id": 0, "name": 1, "email": 1, "phone": 1, "age": 1, "gender": 1,
+        "_college_status": 1, "_college_resolved": 1, "college": 1,
+        "degree": 1, "course": 1, "year_of_graduation": 1,
+        "_normalized_job_role": 1, "job_role": 1, "job_title": 1,
+        "schedule_date": 1, "result_status": 1,
+    }
+    docs = await db.pipeline_data.find(match, projection).sort([("name", 1)]).to_list(None)
+    if not docs:
+        raise HTTPException(status_code=404, detail="No data available to export")
+
+    # Fetch all scores for these applicants in one shot.
+    page_emails = list({normalize_email(d.get("email")) for d in docs if d.get("email")})
+    page_phones = list({normalize_phone(d.get("phone")) for d in docs if d.get("phone")})
+    upd_query = []
+    if page_emails: upd_query.append({"email": {"$in": page_emails}})
+    if page_phones: upd_query.append({"phone": {"$in": page_phones}})
+    upd_records = []
+    if upd_query:
+        upd_records = await db.bb_applicant_updates.find(
+            {"$or": upd_query} if len(upd_query) > 1 else upd_query[0],
+            {"_id": 0, "email": 1, "phone": 1, "scores": 1},
+        ).to_list(None)
+
+    def _rkey(rn):
+        return re.sub(r"\s+", "", (rn or "")).lower()
+    scores_by_email: Dict[str, Dict[str, Any]] = {}
+    scores_by_phone: Dict[str, Dict[str, Any]] = {}
+    for upd in upd_records:
+        ue = normalize_email(upd.get("email"))
+        up_ = normalize_phone(upd.get("phone"))
+        s_map = {}
+        for s in (upd.get("scores") or []):
+            rn = (s.get("round_name") or "").strip()
+            if rn:
+                s_map[_rkey(rn)] = s.get("score")
+        if ue:
+            scores_by_email.setdefault(ue, {}).update(s_map)
+        if up_:
+            scores_by_phone.setdefault(up_, {}).update(s_map)
+
+    headers = [
+        "Name", "Email", "Phone", "Age", "Gender",
+        "College Status", "College", "Degree", "Course", "Year of Graduation",
+        "Job Role", "Scheduled Date", "Result Status",
+    ] + dynamic_rounds
+
+    def _row(d):
+        de = normalize_email(d.get("email"))
+        dp = normalize_phone(d.get("phone"))
+        rl: Dict[str, Any] = {}
+        if de and de in scores_by_email:
+            rl.update(scores_by_email[de])
+        if dp and dp in scores_by_phone:
+            for k, v in scores_by_phone[dp].items():
+                rl.setdefault(k, v)
+        row = [
+            d.get("name") or "",
+            d.get("email") or "",
+            d.get("phone") or "",
+            d.get("age") or "",
+            d.get("gender") or "",
+            d.get("_college_status") or "",
+            d.get("_college_resolved") or d.get("college") or "",
+            d.get("degree") or "",
+            d.get("course") or "",
+            d.get("year_of_graduation") or "",
+            d.get("_normalized_job_role") or d.get("job_role") or d.get("job_title") or "Unknown",
+            d.get("schedule_date") or "",
+            d.get("result_status") or "",
+        ]
+        for rn in dynamic_rounds:
+            row.append(rl.get(_rkey(rn), ""))
+        return row
+
+    today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    fname = f"View_Attended_Applicants_{today_iso}"
+
+    if format == "csv":
+        buf = io.StringIO()
+        w = _csv.writer(buf)
+        w.writerow(headers)
+        for d in docs:
+            w.writerow(_row(d))
+        buf.seek(0)
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{fname}.csv"'},
+        )
+
+    from openpyxl import Workbook
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("View Attended Applicants")
+    ws.append(headers)
+    for d in docs:
+        ws.append(_row(d))
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    return StreamingResponse(
+        iter([bio.getvalue()]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}.xlsx"'},
+    )
 
 
 # ============ SCORE SHEET UPLOAD ============
@@ -2731,6 +3091,36 @@ async def _backfill_unknown_classifications_once():
     except Exception as e:
         # Never let backfill crash app startup. Re-run on next boot.
         logger.exception(f"[Iter108:UnknownBackfill] FAILED: {e}")
+
+
+# iter123 — Admin-triggered backfill re-runs. Useful when the iter122
+# fix lands in prod after the `bb_meta.done` flag has already been set
+# on an earlier (buggy) backfill run. Authenticated users only.
+@api_router.post("/admin/reset-backfill/{name}")
+async def reset_backfill_flag(name: str, user: str = Depends(get_current_user)):
+    """Reset a `bb_meta._id={name}` `done` flag and (if it's a known
+    backfill) re-launch it as a background task. Safe to call repeatedly —
+    each backfill itself is idempotent.
+    """
+    known_backfills = {
+        "iter108_unknown_backfill": _backfill_unknown_classifications_once,
+        "iter110_college_status_backfill": _backfill_college_status_once,
+    }
+    if name not in known_backfills:
+        raise HTTPException(status_code=404, detail=f"Unknown backfill: {name}")
+    await db.bb_meta.update_one(
+        {"_id": name},
+        {"$set": {
+            "done": False,
+            "reset_by": user,
+            "reset_at": datetime.now(timezone.utc).isoformat(),
+        }},
+        upsert=True,
+    )
+    asyncio.create_task(known_backfills[name]())
+    return {"success": True, "backfill": name, "status": "relaunched"}
+
+
 
 
 async def _backfill_college_status_once():

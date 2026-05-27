@@ -4846,6 +4846,12 @@ async def schedule_interview(token: str, data: ScheduleBody):
     # Wipe prior schedule/OTP/message flags so (a) no stale OTP from the old
     # slot is honoured, (b) the OTP worker re-sends within the NEW window, and
     # (c) the scheduling confirmation below is the only message candidate sees.
+    # iter123 — Also clear the iter121 OTP per-channel flags and the iter122
+    # missed-reminder per-channel flags. Without these, the OTP worker's new
+    # cursor (`$or: [otp_wa_sent != True, otp_email_sent != True]`) would
+    # still exclude the row because both flags remained True from the
+    # previous schedule — production-reported as "OTP never sent after
+    # reschedule".
     unset_fields = {}
     if is_reschedule:
         unset_fields = {
@@ -4861,6 +4867,25 @@ async def schedule_interview(token: str, data: ScheduleBody):
             "schedule_message_sent_at": "",
             "missed_reminder_sent": "",
             "reminder_24h_sent": "",
+            # iter121 — OTP per-channel flags MUST be cleared on reschedule
+            # so the OTP worker re-fetches the row and re-dispatches the
+            # OTP for the NEW schedule time.
+            "otp_wa_sent": "",
+            "otp_wa_sent_at": "",
+            "otp_email_sent": "",
+            "otp_email_sent_at": "",
+            "otp_dispatch_in_progress": "",
+            "otp_dispatch_started_at": "",
+            # iter122 — Missed-reminder per-channel flags MUST be cleared
+            # so that if the candidate misses the NEW schedule too, a fresh
+            # follow-up dispatch fires (instead of being skipped because
+            # the previous schedule's token still matched).
+            "missed_reminder_wa_sent": "",
+            "missed_reminder_email_sent": "",
+            "missed_reminder_token": "",
+            "missed_reminder_sent_at": "",
+            "missed_marked": "",
+            "missed_at": "",
         }
 
     update_op = {"$set": updates}
