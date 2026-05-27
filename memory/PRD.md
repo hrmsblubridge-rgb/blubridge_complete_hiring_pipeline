@@ -1,3 +1,69 @@
+## iter125b — Interview Schedule Reports Chip Dynamic Detection (Feb 15, 2026)
+
+### Issue — Job-role chip buttons not created dynamically for new roles on Interview Schedule Reports page
+
+**Symptom**: A candidate with a brand-new role and a `schedule_date` set
+appeared correctly in the report table, but the corresponding role
+**chip filter button** was missing. The Job Role dropdown also failed to
+reflect the new role until a manual reprocess.
+
+**Root cause** (`bb_modules.py::get_interview_reports`):
+The `role_counts` aggregation grouped strictly on
+`{"$ifNull": ["$_normalized_job_role", "Unknown"]}`. For freshly-uploaded
+candidates whose `_normalized_job_role` field had not yet been persisted
+by the background `reprocess_matching` pass, the value resolved to
+`null`/`""`, was coerced into the `"Unknown"` bucket, and then filtered
+out by the post-aggregation guard
+(`if canon.strip().lower() in ("", "unknown"): continue`). Yet those
+same rows still appeared in the data table because the per-row projection
+loop used a `_normalized_job_role → job_role → job_title` fallback —
+producing the asymmetry the user observed.
+
+**Fix**: replaced the simple `$ifNull` in the chip aggregation with a
+`$let / $cond` chain that mirrors the data-table fallback chain:
+
+```javascript
+{
+  "$let": {
+    "vars": {
+      "norm": {"$ifNull": ["$_normalized_job_role", ""]},
+      "jr": {"$ifNull": ["$job_role", ""]},
+      "jt": {"$ifNull": ["$job_title", ""]},
+    },
+    "in": {
+      "$cond": [
+        {"$and": [{"$ne": ["$$norm", ""]}, {"$ne": ["$$norm", "Unknown"]}]},
+        "$$norm",
+        {"$cond": [
+          {"$ne": ["$$jr", ""]}, "$$jr",
+          {"$cond": [{"$ne": ["$$jt", ""]}, "$$jt", "Unknown"]},
+        ]},
+      ],
+    },
+  },
+}
+```
+
+**End-to-end verification**:
+- ✅ Inserted a test candidate `Iter125-Chip-Test-NewRole-AAA` with
+  `schedule_date=today`, `schedule_time=11:30`, AND
+  `_normalized_job_role` deliberately omitted (simulating fresh upload).
+- ✅ Hit `GET /api/bb/interview-reports?startDate=today&endDate=today`.
+  Response: `total_chips: 5`, new role chip detected with `count: 1`,
+  alongside `AI & ML Engineer (23)`, `Marketing And Growth (1)`, etc.
+- ✅ `tests/test_iter125b_interview_chip_dynamic.py` (2/2 passing) covers
+  both the aggregation behavior and a source-code regression guard for
+  the `$let / $cond` chain.
+
+**Behaviour going forward**: New job roles arriving via any upload path
+surface as chip buttons on Interview Schedule Reports the moment a
+candidate with that role has a `schedule_date` + `schedule_time` set —
+no need to wait for the background `_persist_derived_fields` sweep to
+finish first.
+
+---
+
+
 ## iter125 — Dynamic Job-Role Insertion Pipeline (Feb 15, 2026)
 
 ### Issue — New job roles still classified as "Unknown"; not appearing in `bb_job_roles`, `job_titles_master`, Job Roles page, or Unmapped Job Keywords section

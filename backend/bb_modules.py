@@ -2399,10 +2399,40 @@ async def get_interview_reports(
     base = sres[0] if sres else {"attended": 0, "not_attended": 0, "premium_colleges": 0, "non_premium_colleges": 0}
 
     # Role counts per filter set
+    #
+    # iter125 — Chip aggregation now mirrors the data-table fallback chain
+    # `_normalized_job_role → job_role → job_title`. Before this, candidates
+    # whose `_normalized_job_role` hadn't been persisted yet (newly uploaded
+    # rows before the background reprocess fires) were bucketed as "Unknown"
+    # by `$ifNull` and then filtered out below — making chips for new roles
+    # invisible even when their candidates were already visible in the
+    # table. Falling back to the raw role inside the `$group._id` keeps the
+    # two layers consistent.
     role_pipeline = [
         {"$match": match},
         {"$group": {
-            "_id": {"$ifNull": ["$_normalized_job_role", "Unknown"]},
+            "_id": {
+                "$let": {
+                    "vars": {
+                        "norm": {"$ifNull": ["$_normalized_job_role", ""]},
+                        "jr": {"$ifNull": ["$job_role", ""]},
+                        "jt": {"$ifNull": ["$job_title", ""]},
+                    },
+                    "in": {
+                        "$cond": [
+                            {"$and": [
+                                {"$ne": ["$$norm", ""]},
+                                {"$ne": ["$$norm", "Unknown"]},
+                            ]},
+                            "$$norm",
+                            {"$cond": [
+                                {"$ne": ["$$jr", ""]}, "$$jr",
+                                {"$cond": [{"$ne": ["$$jt", ""]}, "$$jt", "Unknown"]},
+                            ]},
+                        ],
+                    },
+                },
+            },
             "count": {"$sum": 1},
         }},
         {"$sort": {"count": -1}},
