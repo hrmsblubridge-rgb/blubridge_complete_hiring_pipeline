@@ -41,6 +41,20 @@ export default function MissingApplicants() {
     const [emailQ, setEmailQ] = useState('');
     const [phoneQ, setPhoneQ] = useState('');
     const [collegeStatus, setCollegeStatus] = useState('');
+    // iter125f — Job Role filter; sourced from the centralized
+    // `/api/bb/job-roles` endpoint so the dropdown stays in sync with
+    // bb_job_roles + job_titles_master + canonical mapping (no
+    // hardcoded list, no stale cache, future-safe for new uploads).
+    const [jobRole, setJobRole] = useState('');
+    const [bbRoles, setBbRoles] = useState([]);
+    useEffect(() => {
+        (async () => {
+            try {
+                const r = await axios.get(`${API}/api/bb/job-roles`, { withCredentials: true });
+                setBbRoles(r.data.roles || []);
+            } catch (_e) { /* dropdown stays empty on auth failure */ }
+        })();
+    }, []);
     const [rows, setRows] = useState([]);
     const [total, setTotal] = useState(0);
     const [loading, setLoading] = useState(false);
@@ -61,8 +75,9 @@ export default function MissingApplicants() {
         if (emailQ) p.email = emailQ;
         if (phoneQ) p.phone = phoneQ;
         if (collegeStatus) p.collegeStatus = collegeStatus;
+        if (jobRole) p.jobRole = jobRole;
         return p;
-    }, [fromDate, toDate, dateFilter, reportType, nameQ, emailQ, phoneQ, collegeStatus]);
+    }, [fromDate, toDate, dateFilter, reportType, nameQ, emailQ, phoneQ, collegeStatus, jobRole]);
 
     const fetchRows = useCallback(async (pg = page, sz = pageSize) => {
         setLoading(true);
@@ -89,7 +104,7 @@ export default function MissingApplicants() {
         // iter113 — Reset preserves today/today date filter; All Records drops dates entirely.
         setFromDate(today()); setToDate(today());
         setDateFilter('registered'); setReportType('all');
-        setNameQ(''); setEmailQ(''); setPhoneQ(''); setCollegeStatus('');
+        setNameQ(''); setEmailQ(''); setPhoneQ(''); setCollegeStatus(''); setJobRole('');
         setPage(1); setPageSize(100); setGoToPage('');
         setTimeout(() => fetchRows(1, 100), 0);
     };
@@ -215,6 +230,18 @@ export default function MissingApplicants() {
                                 <option value="Non-NIRF 151-200">Non-NIRF 151-200</option>
                                 <option value="Non-NIRF 201-300">Non-NIRF 201-300</option>
                                 <option value="Non-NIRF - No Rank">Non-NIRF - No Rank</option>
+                            </select>
+                        </div>
+                        {/* iter125f — Job Role filter sourced dynamically from
+                            /api/bb/job-roles (the same centralized endpoint
+                            used by View Applicants / Interview Reports). No
+                            hardcoded list — future-safe for new roles. */}
+                        <div>
+                            <label className="text-[11px] font-semibold tracking-[0.16em] text-[#9b9787] uppercase block mb-1">Job Role</label>
+                            <select value={jobRole} onChange={(e) => setJobRole(e.target.value)} data-testid="filter-job-role"
+                                className="w-full bg-[#faf9f1] border border-[#e5e3d8] rounded-lg px-3 py-2 text-sm">
+                                <option value="">All</option>
+                                {bbRoles.map(r => <option key={r.id} value={r.name}>{r.name}</option>)}
                             </select>
                         </div>
                     </div>

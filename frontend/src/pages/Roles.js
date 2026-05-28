@@ -107,8 +107,18 @@ export default function Applicants() {
     useEffect(() => {
         (async () => {
             try {
-                const res = await axios.get(`${API}/api/job-roles`, { withCredentials: true });
-                setJobRoles(res.data.job_roles || []);
+                // iter125f — Source job-role dropdown from the centralized
+                // canonical catalogue `/api/bb/job-roles` (bb_job_roles +
+                // auto-synced job_titles_master) instead of `/api/job-roles`
+                // which only includes roles with >=1 pipeline_data record.
+                // Roles that live only in `registered_candidates` (e.g.
+                // Social Media Marketer with 0 pd / 6 rc) were being silently
+                // dropped from this filter; now every catalogued role shows
+                // up, including newly uploaded ones (sync runs on every
+                // dataset upload).
+                const res = await axios.get(`${API}/api/bb/job-roles`, { withCredentials: true });
+                const roles = (res.data.roles || []).map(r => ({ job_role: r.name }));
+                setJobRoles(roles);
             } catch {}
         })();
     }, []);

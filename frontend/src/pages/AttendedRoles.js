@@ -114,8 +114,13 @@ export default function AttendedApplicants() {
     useEffect(() => {
         (async () => {
             try {
-                const res = await axios.get(`${API}/api/job-roles`, { withCredentials: true });
-                setJobRoles(res.data.job_roles || []);
+                // iter125f — Centralized canonical role catalogue (see
+                // Roles.js for the full rationale). Replaces the
+                // pipeline_data-filtered `/api/job-roles` which dropped
+                // valid roles that lived only in registered_candidates.
+                const res = await axios.get(`${API}/api/bb/job-roles`, { withCredentials: true });
+                const roles = (res.data.roles || []).map(r => ({ job_role: r.name }));
+                setJobRoles(roles);
             } catch {}
         })();
     }, []);

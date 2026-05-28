@@ -2004,11 +2004,19 @@ async def missing_applicants(
     email: Optional[str] = Query(None),
     phone: Optional[str] = Query(None),
     collegeStatus: Optional[str] = Query(None),
+    jobRole: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(100, ge=1, le=500),
 ):
     """List candidates who missed downstream stages: shortlisted+not-scheduled
-    or scheduled+not-attended. Reads only `pipeline_data`."""
+    or scheduled+not-attended. Reads only `pipeline_data`.
+
+    iter125f — `jobRole` filter accepts the canonical/raw role string from
+    the frontend dropdown (sourced from `/api/bb/job-roles`). Matching is
+    case-insensitive across `_normalized_job_role`, `job_role`, and
+    `job_title` to stay consistent with how other pages filter (no
+    hardcoded role list, no stale cache).
+    """
     await _require_auth(request)
     match = _build_missing_applicants_match(from_date, to_date, date_filter, report_type)
     # iter111 — Per-field Name/Email/Phone + 5-bucket College Status filters.
@@ -2021,6 +2029,14 @@ async def missing_applicants(
         _npe.append({"phone": {"$regex": re.escape(phone.strip())}})
     if _npe:
         match["$and"] = (match.get("$and") or []) + _npe
+    # iter125f — Job Role filter (case-insensitive, multi-field).
+    if jobRole and jobRole.strip():
+        jr_rx = {"$regex": f"^{re.escape(jobRole.strip())}$", "$options": "i"}
+        match["$and"] = (match.get("$and") or []) + [{"$or": [
+            {"_normalized_job_role": jr_rx},
+            {"job_role": jr_rx},
+            {"job_title": jr_rx},
+        ]}]
     if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
         fval = collegeStatus.strip()
         if fval == "NIRF":
@@ -2063,16 +2079,53 @@ async def export_missing_applicants(
     to_date: Optional[str] = Query(None),
     date_filter: str = Query("registered"),
     report_type: str = Query("all"),
+    jobRole: Optional[str] = Query(None),
+    name: Optional[str] = Query(None),
+    email: Optional[str] = Query(None),
+    phone: Optional[str] = Query(None),
+    collegeStatus: Optional[str] = Query(None),
     format: str = Query("xlsx", regex="^(xlsx|csv)$"),
 ):
     """Export the same rows as /missing-applicants (no pagination) in CSV/XLSX.
-    Dates render as dd-mm-yyyy and times as hh:mm AM/PM."""
+    Dates render as dd-mm-yyyy and times as hh:mm AM/PM.
+
+    iter125f — Mirrors the same `jobRole` (+ name/email/phone/collegeStatus)
+    filter chain as the paginated endpoint so the downloaded file matches
+    exactly what the user sees on screen."""
     await _require_auth(request)
     from fastapi.responses import StreamingResponse
     import io
     import csv as _csv
 
     match = _build_missing_applicants_match(from_date, to_date, date_filter, report_type)
+    # iter125f — Apply the same per-field filters used by the paginated
+    # endpoint so the export is consistent with the on-screen table.
+    _npe = []
+    if name and name.strip():
+        _npe.append({"name": {"$regex": re.escape(name.strip()), "$options": "i"}})
+    if email and email.strip():
+        _npe.append({"email": {"$regex": re.escape(email.strip()), "$options": "i"}})
+    if phone and phone.strip():
+        _npe.append({"phone": {"$regex": re.escape(phone.strip())}})
+    if _npe:
+        match["$and"] = (match.get("$and") or []) + _npe
+    if jobRole and jobRole.strip():
+        jr_rx = {"$regex": f"^{re.escape(jobRole.strip())}$", "$options": "i"}
+        match["$and"] = (match.get("$and") or []) + [{"$or": [
+            {"_normalized_job_role": jr_rx},
+            {"job_role": jr_rx},
+            {"job_title": jr_rx},
+        ]}]
+    if collegeStatus and collegeStatus.strip() and collegeStatus.strip().lower() != "all":
+        fval = collegeStatus.strip()
+        if fval == "NIRF":
+            match["_nirf_category"] = "NIRF"
+        elif fval in ("Non NIRF", "Non-NIRF"):
+            match["_nirf_category"] = {"$ne": "NIRF"}
+        elif fval in ("Non-NIRF 101-150", "Non-NIRF 151-200", "Non-NIRF 201-300", "Non-NIRF - No Rank"):
+            match["_nirf_category"] = fval
+        else:
+            match["_college_status"] = fval
     cursor = _db.pipeline_data.find(match, {"_id": 0})
     docs = await cursor.to_list(None)
     if not docs:

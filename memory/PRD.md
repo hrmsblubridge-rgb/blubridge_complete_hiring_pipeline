@@ -1,3 +1,59 @@
+## iter125f — Centralized Job Role dropdown across Missing/View/Attended (Feb 15, 2026)
+
+### Issue 1 — Missing Applicants page lacked a Job Role filter
+Added a dynamic dropdown sourced from `/api/bb/job-roles` (the canonical
+bb_job_roles + auto-synced job_titles_master catalogue used by other
+pages). Backend endpoint `/api/bb/missing-applicants` and its `/export`
+sibling now accept an optional `jobRole` query param and apply the same
+multi-field case-insensitive match used elsewhere
+(`_normalized_job_role | job_role | job_title`).
+
+### Issue 2 — View Applicants + View Attended Applicants dropdowns missed roles
+Both pages were fetching `/api/job-roles` (the candidate-count-filtered
+endpoint that only includes roles with >=1 record in `pipeline_data`).
+Roles that live only in `registered_candidates` — e.g. **Social Media
+Marketer** (0 pd / 6 rc) — never appeared in the dropdown. Switched
+both pages to fetch from `/api/bb/job-roles`, the canonical complete
+catalogue. Mapped the response shape (`roles: [{id, name, ...}]`) to
+the legacy in-component shape (`job_role: name`) so the rest of each
+component required zero changes.
+
+### Centralized source — every page now reads the same endpoint
+| Page | Dropdown source | Status |
+|---|---|---|
+| View Applicants (Roles.js) | `/api/bb/job-roles` | ✅ iter125f |
+| View Attended (AttendedRoles.js) | `/api/bb/job-roles` | ✅ iter125f |
+| Missing Applicants (MissingApplicants.js) | `/api/bb/job-roles` | ✅ iter125f (new) |
+| Interview Schedule Reports | `/api/bb/job-roles` | already canonical |
+| `/api/bb/job-roles` itself | `bb_job_roles` (auto-synced from uploads via `_sync_job_titles_master`) | future-safe |
+
+Future role additions surface in every dropdown automatically — the
+sync runs on every dataset upload (iter125 pipeline) and the dropdowns
+re-fetch on page mount.
+
+### Verification
+- `/api/bb/job-roles` returns **57 roles** including Social Media
+  Marketer + all imported uploads.
+- `/api/bb/missing-applicants?jobRole=AI System Engineer` returns 1578
+  filtered records (covers both raw "AI System Engineer" and
+  canonical-mapped "AI System Engineer & Deep Learning" rows).
+- `/api/bb/missing-applicants/export?jobRole=…` produces a CSV/XLSX
+  matching the on-screen filtered table exactly.
+- 6/6 new tests in `test_iter125f_job_role_dropdown_consistency.py`
+  pass (backend endpoint params + frontend source consistency guards).
+- 29/29 tests pass across the entire iter125 family.
+
+### Production-safety
+- ✅ Zero non-test rows touched
+- ✅ Backward-compatible: legacy `/api/job-roles` endpoint preserved
+  (still used by analytics charts); only the dropdown sources changed
+- ✅ No hardcoded role names anywhere
+- ✅ Dropdown stays in sync with future uploads via existing
+  `_sync_job_titles_master` flow
+
+---
+
+
 ## iter125e — Interview Reports chip baseline now consistent with table (Feb 15, 2026)
 
 ### Issue — "Social Media Marketer" (and similar roles) chip never rendered
