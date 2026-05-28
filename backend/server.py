@@ -1561,12 +1561,42 @@ async def get_summary(
         ]
     }
 
+    # iter125c — Robust role/category resolution.
+    # Mirrors the data-table fallback chain `_normalized_job_role → job_role
+    # → job_title` inside the `$group._id` so candidates whose derived field
+    # hasn't been persisted yet still bucket under their REAL role instead
+    # of collapsing into "Unknown". Same idea as iter125b for Interview
+    # Reports — keeps Summary Statistics consistent with the canonical
+    # role on every row regardless of background-reprocess timing.
+    _role_id_expr = {
+        "$let": {
+            "vars": {
+                "norm": {"$ifNull": ["$_normalized_job_role", ""]},
+                "jr": {"$ifNull": ["$job_role", ""]},
+                "jt": {"$ifNull": ["$job_title", ""]},
+            },
+            "in": {
+                "$cond": [
+                    {"$and": [
+                        {"$ne": ["$$norm", ""]},
+                        {"$ne": ["$$norm", "Unknown"]},
+                    ]},
+                    "$$norm",
+                    {"$cond": [
+                        {"$ne": ["$$jr", ""]}, "$$jr",
+                        {"$cond": [{"$ne": ["$$jt", ""]}, "$$jt", "Unknown"]},
+                    ]},
+                ],
+            },
+        },
+    }
+
     # PIPELINE-FIRST: aggregate funnel + counts from pipeline_data
     pipe_pipeline = [
         {"$match": pipe_match},
         {"$group": {
             "_id": {
-                "role": {"$ifNull": ["$_normalized_job_role", "Unknown"]},
+                "role": _role_id_expr,
                 "cat": {"$ifNull": ["$_nirf_category", "Non NIRF"]},
             },
             "total_registered": {"$sum": 1},
@@ -1586,7 +1616,7 @@ async def get_summary(
         {"$match": naukri_match},
         {"$group": {
             "_id": {
-                "role": {"$ifNull": ["$_normalized_job_role", "Unknown"]},
+                "role": _role_id_expr,
                 "cat": {"$ifNull": ["$_nirf_category", "Non NIRF"]},
             },
             "naukri_total": {"$sum": 1},
@@ -1635,17 +1665,47 @@ async def get_job_roles(user: str = Depends(get_current_user)):
     """Unique job roles with HR-internal applicant counts (pipeline_data).
     iter99 — Roll up by READ-TIME canonical title using job_keyword_mapping,
     so dashboard charts and filters see one row per canonical job role even
-    if pipeline_data still carries raw imported variants."""
+    if pipeline_data still carries raw imported variants.
+    iter125c — Aggregation now falls back through
+    `_normalized_job_role → job_role → job_title` inside `$group._id`, so
+    freshly-uploaded rows whose derived field isn't persisted yet still
+    surface under their real role (instead of being silently dropped by
+    the legacy `{"_normalized_job_role": {"$nin": [None,"","Unknown"]}}`
+    pre-filter)."""
+    role_id_expr = {
+        "$let": {
+            "vars": {
+                "norm": {"$ifNull": ["$_normalized_job_role", ""]},
+                "jr": {"$ifNull": ["$job_role", ""]},
+                "jt": {"$ifNull": ["$job_title", ""]},
+            },
+            "in": {
+                "$cond": [
+                    {"$and": [
+                        {"$ne": ["$$norm", ""]},
+                        {"$ne": ["$$norm", "Unknown"]},
+                    ]},
+                    "$$norm",
+                    {"$cond": [
+                        {"$ne": ["$$jr", ""]}, "$$jr",
+                        {"$cond": [{"$ne": ["$$jt", ""]}, "$$jt", ""]},
+                    ]},
+                ],
+            },
+        },
+    }
     pipeline = [
-        {"$match": {"_normalized_job_role": {"$nin": [None, "", "Unknown"]},
-                     "isTest": {"$ne": True}}},
-        {"$group": {"_id": "$_normalized_job_role", "count": {"$sum": 1}}},
+        {"$match": {"isTest": {"$ne": True}}},
+        {"$group": {"_id": role_id_expr, "count": {"$sum": 1}}},
+        {"$match": {"_id": {"$nin": ["", "Unknown"]}}},
     ]
     raw_results = await db.pipeline_data.aggregate(pipeline, allowDiskUse=False).to_list(None)
     kw_to_canonical, _ = await _build_canonical_index()
     rolled: dict = {}
     for r in raw_results:
         canon = _canonicalize_job_role(r["_id"], kw_to_canonical)
+        if not canon or canon.strip().lower() in ("", "unknown"):
+            continue
         rolled[canon] = rolled.get(canon, 0) + r["count"]
     results = [{"job_role": k, "count": v} for k, v in rolled.items()]
     results.sort(key=lambda x: (-x["count"], x["job_role"].lower()))

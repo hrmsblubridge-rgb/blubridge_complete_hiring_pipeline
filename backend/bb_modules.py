@@ -4872,40 +4872,32 @@ async def schedule_interview(token: str, data: ScheduleBody):
     otp = _generate_otp()
     updates["otp"] = otp
 
-    # ---- RESCHEDULE RESET ----
+    # ---- RESCHEDULE RESET (iter125c — split into two phases) ----
     # Wipe prior schedule/OTP/message flags so (a) no stale OTP from the old
     # slot is honoured, (b) the OTP worker re-sends within the NEW window, and
     # (c) the scheduling confirmation below is the only message candidate sees.
-    # iter123 — Also clear the iter121 OTP per-channel flags and the iter122
-    # missed-reminder per-channel flags. Without these, the OTP worker's new
-    # cursor (`$or: [otp_wa_sent != True, otp_email_sent != True]`) would
-    # still exclude the row because both flags remained True from the
-    # previous schedule — production-reported as "OTP never sent after
-    # reschedule".
-    unset_fields = {}
+    #
+    # **Ordering invariant (iter125c)**: OTP per-channel flags
+    # (`otp_wa_sent`, `otp_email_sent`, `otp_dispatch_in_progress`) are
+    # cleared ONLY AFTER `notify_schedule_confirmation` returns. If they
+    # are cleared before that send, the OTP worker (30s tick) can claim
+    # the row in the window between the unset and the schedule-confirm
+    # send completing — making the candidate receive the OTP BEFORE the
+    # schedule-details message. Production-reported symptom on the
+    # tester's 2nd reschedule. Splitting the unsets enforces strict
+    # ordering: SCHEDULE DETAILS first, OTP second.
+    pre_send_unset_fields = {}
+    post_send_unset_fields = {}
     if is_reschedule:
-        unset_fields = {
+        pre_send_unset_fields = {
             "otp_sent": "",
             "otp_sent_at": "",
             "otpGeneratedAt": "",
             "otpExpiry": "",
             "otp_expired": "",
             "otp_expired_at": "",
-            "interview_mail_sent": "",
-            "interview_mail_sent_at": "",
-            "schedule_message_sent": "",
-            "schedule_message_sent_at": "",
             "missed_reminder_sent": "",
             "reminder_24h_sent": "",
-            # iter121 — OTP per-channel flags MUST be cleared on reschedule
-            # so the OTP worker re-fetches the row and re-dispatches the
-            # OTP for the NEW schedule time.
-            "otp_wa_sent": "",
-            "otp_wa_sent_at": "",
-            "otp_email_sent": "",
-            "otp_email_sent_at": "",
-            "otp_dispatch_in_progress": "",
-            "otp_dispatch_started_at": "",
             # iter122 — Missed-reminder per-channel flags MUST be cleared
             # so that if the candidate misses the NEW schedule too, a fresh
             # follow-up dispatch fires (instead of being skipped because
@@ -4917,11 +4909,49 @@ async def schedule_interview(token: str, data: ScheduleBody):
             "missed_marked": "",
             "missed_at": "",
         }
+        post_send_unset_fields = {
+            # iter121 — OTP per-channel flags MUST be cleared on reschedule
+            # so the OTP worker re-fetches the row and re-dispatches the
+            # OTP for the NEW schedule time.
+            "otp_wa_sent": "",
+            "otp_wa_sent_at": "",
+            "otp_email_sent": "",
+            "otp_email_sent_at": "",
+            "otp_dispatch_in_progress": "",
+            "otp_dispatch_started_at": "",
+        }
 
     update_op = {"$set": updates}
-    if unset_fields:
-        update_op["$unset"] = unset_fields
+    if pre_send_unset_fields:
+        update_op["$unset"] = pre_send_unset_fields
     await _db.bb_registrations.update_one({"_id": reg["_id"]}, update_op)
+
+    # iter125c — Atomic CAS guard on schedule-details dispatch. The deferred
+    # bg_worker `_schedule_link_sender` ALSO sends `notify_schedule_confirmation`
+    # whenever `interview_mail_sent != True`. Since we just unset that flag,
+    # both this inline send AND the bg_worker can fire — yielding a DUPLICATE
+    # schedule-details message (production-reported on 2nd reschedule).
+    # Flipping `interview_mail_sent_in_progress=True` first via a filter-with-
+    # flag-not-true update means only one runner ever wins the claim.
+    _schedule_send_now_iso = datetime.now(timezone.utc).isoformat()
+    _claimed_schedule_send = False
+    if is_reschedule:
+        _cas = await _db.bb_registrations.update_one(
+            {"_id": reg["_id"],
+             "interview_mail_sent_in_progress": {"$ne": True}},
+            {"$set": {
+                "interview_mail_sent_in_progress": True,
+                "interview_mail_sent_in_progress_at": _schedule_send_now_iso,
+            }},
+        )
+        _claimed_schedule_send = (_cas.modified_count == 1)
+        if not _claimed_schedule_send:
+            _logger.info(
+                f"[ScheduleConfirm] SKIP duplicate — already-claimed by another "
+                f"runner for {reg.get('email')}"
+            )
+    else:
+        _claimed_schedule_send = True  # first-time schedule: no CAS needed
 
     # Update HR pipeline_data (source of truth for Summary/View/Attended)
     email = reg.get("email", "")
@@ -4939,12 +4969,17 @@ async def schedule_interview(token: str, data: ScheduleBody):
     # Send schedule confirmation (WhatsApp + Email) — was previously gated on
     # `shortlist_mail_sent` which meant the WhatsApp rarely fired for new
     # registrations scheduling immediately. Now fires every time, cutoff-guarded.
+    #
+    # iter125c — Gated by `_claimed_schedule_send` so duplicate sends from a
+    # concurrent bg_worker tick are eliminated, AND post-send OTP-flag unsets
+    # are performed AFTER this completes so the OTP worker cannot fire the
+    # OTP before the schedule details arrive at the candidate.
     is_test_record = bool(reg.get("isTest"))
     import os as _os
     _cutoff = _os.environ.get("MESSAGING_CUTOFF_TS", "9999-12-31T23:59:59+00:00")
     _is_new_record = (reg.get("registered_at") or "0000") >= _cutoff
     try:
-        if _is_new_record:
+        if _is_new_record and _claimed_schedule_send:
             from messaging import notify_schedule_confirmation
             wa_ok, em_ok = await notify_schedule_confirmation(
                 reg.get("full_name", ""), phone, email,
@@ -4953,7 +4988,8 @@ async def schedule_interview(token: str, data: ScheduleBody):
             ok = bool(wa_ok or em_ok)
             _logger.info(
                 f"[ScheduleConfirm] email={email} phone={phone} "
-                f"date={data.date.strip()} time={time_24} wa_ok={wa_ok} em_ok={em_ok}"
+                f"date={data.date.strip()} time={time_24} wa_ok={wa_ok} em_ok={em_ok} "
+                f"is_reschedule={is_reschedule}"
             )
             await _db.bb_registrations.update_one(
                 {"_id": reg["_id"]},
@@ -4969,11 +5005,47 @@ async def schedule_interview(token: str, data: ScheduleBody):
                     # source the user was seeing.
                     "interview_mail_sent": ok,
                     "interview_mail_sent_at": datetime.now(timezone.utc).isoformat(),
+                },
+                # iter125c — Release the in-progress CAS lock unconditionally
+                # so future reschedules can re-claim. Also drop deprecated
+                # `interview_mail_sent_in_progress_at` stamp.
+                "$unset": {
+                    "interview_mail_sent_in_progress": "",
+                    "interview_mail_sent_in_progress_at": "",
                 }},
+            )
+        elif not _claimed_schedule_send:
+            _logger.info(
+                f"[ScheduleConfirm] SKIP send — CAS lost to a concurrent runner "
+                f"for {email}"
             )
         else:
             _logger.info(f"[CutoffGuard] Skipped scheduling msg for legacy record {email}")
     except Exception as e:
         _logger.exception(f"Schedule confirmation send failed: {e}")
+        # Release the CAS lock so a retry can fire.
+        try:
+            await _db.bb_registrations.update_one(
+                {"_id": reg["_id"]},
+                {"$unset": {
+                    "interview_mail_sent_in_progress": "",
+                    "interview_mail_sent_in_progress_at": "",
+                }},
+            )
+        except Exception:
+            pass
+
+    # iter125c — POST-SEND: clear OTP per-channel flags so the OTP worker can
+    # now fire the OTP. Sequencing is enforced: schedule details first, OTP
+    # second.
+    if is_reschedule and post_send_unset_fields:
+        await _db.bb_registrations.update_one(
+            {"_id": reg["_id"]},
+            {"$unset": post_send_unset_fields},
+        )
+        _logger.info(
+            f"[Reschedule:OTPGate] OTP per-channel flags cleared AFTER schedule "
+            f"confirmation send for {email} — OTP worker may now fire"
+        )
 
     return {"success": True, "is_reschedule": is_reschedule, "otp": otp}

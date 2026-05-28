@@ -1,3 +1,83 @@
+## iter125c — Summary Stats Unknown bucket + Reschedule sequencing/duplicates (Feb 15, 2026)
+
+### Issue 1 — View Applicants Summary Statistics still misclassified existing roles as "Unknown"
+**Root cause** (`server.py::get_summary`): the funnel-aggregation pipeline
+grouped rows on `{"$ifNull": ["$_normalized_job_role", "Unknown"]}` —
+identical bug pattern to iter125b. Candidates whose derived field
+wasn't persisted yet (fresh upload, in-progress reprocess, OR an upload
+path that missed persist) collapsed into the "Unknown" bucket even
+though their raw `job_role` / `job_title` was perfectly valid.
+
+**Fix**: replaced with a `$let / $cond` fallback chain
+`_normalized_job_role → job_role → job_title` inside `$group._id.role`
+for BOTH the pipeline_data funnel and the naukri_applies counts.
+Buckets now display the candidate's actual role label (matching the
+row-level fallback used elsewhere).
+
+### Issue 2 — `/api/job-roles` dropped freshly-uploaded rows
+**Root cause**: the endpoint pre-filtered
+`{"_normalized_job_role": {"$nin": [None, "", "Unknown"]}}`. Any row
+without that derived field was silently excluded — so a brand-new role
+in pipeline_data didn't appear in the dropdown until the background
+reprocess swept it.
+
+**Fix**: rewrote the aggregation with the same `$let / $cond` fallback
+chain; the `$match` after `$group` now filters out only literal empty
+/ "Unknown" `_id` values. Freshly-uploaded rows surface immediately
+under their raw role.
+
+### Issue 3 — Reschedule: OTP sent BEFORE schedule details + duplicate schedule details
+**Root cause** (`bb_modules.py::schedule_interview`): on reschedule,
+the function unset ALL OTP and message flags BEFORE calling
+`notify_schedule_confirmation`. This created two race conditions:
+  - **Ordering**: the OTP worker (30s tick) saw `otp_wa_sent != True`
+    AND `otp_email_sent != True` AND schedule_date/time set → claimed
+    the row and fired the OTP while the inline schedule confirmation
+    was still mid-flight on Resend/AiSensy.
+  - **Duplicate**: the unset wiped `interview_mail_sent`, allowing the
+    deferred bg_worker `_worker_schedule_link_sender` to ALSO send
+    `notify_schedule_confirmation` for the same row.
+
+**Fix** (3 parts):
+1. **Split unsets**: `pre_send_unset_fields` (OTP legacy + missed-reminder
+   flags) AND `post_send_unset_fields` (OTP per-channel flags only).
+   Pre-send unset runs BEFORE the inline send; post-send unset runs
+   AFTER `notify_schedule_confirmation` returns. The OTP worker is now
+   gated until after the candidate has received the schedule details.
+2. **Atomic CAS lock**: `interview_mail_sent_in_progress=True` claimed
+   via a filter-with-flag-not-true update before the inline send.
+   Released (unset) after the send completes or fails.
+3. **bg_worker honors the lock**: `_worker_schedule_link_sender` filter
+   now excludes `interview_mail_sent_in_progress: True` rows AND
+   performs its own CAS claim before sending, ensuring at most one
+   runner ever invokes `notify_schedule_confirmation` per row.
+
+**Verification — three test suites (7 + 1 new = 8 new tests, 14 total
+across iter125 family, all passing)**:
+- `tests/test_iter125c_summary_jobroles_reschedule.py` (7 tests):
+  source-code guards + endpoint-aggregation behavior for the fallback
+  chain + sequencing/CAS landmarks in `schedule_interview` and
+  `_worker_schedule_link_sender`.
+- `tests/test_iter125c_reschedule_simulation.py` (1 functional test):
+  Simulates 1st schedule + 2 reschedules using tester credentials
+  `rishi.nayak@blubridge.com` / `9443109903` with
+  `notify_schedule_confirmation` monkey-patched to a recording stub
+  (NO live messages to anyone). Asserts:
+  * each reschedule fires EXACTLY one send invocation
+  * `interview_mail_sent_in_progress` always released
+  * OTP per-channel flags cleared AFTER send completes (proves
+    ordering invariant).
+- End-to-end curl verification of `/api/summary` and `/api/job-roles`:
+  newly-inserted rows with empty `_normalized_job_role` now appear
+  under their raw role label, not "Unknown".
+
+**Production-safety**: ZERO live messages were sent during validation.
+ZERO non-test rows were touched (test rows used `isTest:True` and
+cleaned themselves up regardless of pass/fail).
+
+---
+
+
 ## iter125b — Interview Schedule Reports Chip Dynamic Detection (Feb 15, 2026)
 
 ### Issue — Job-role chip buttons not created dynamically for new roles on Interview Schedule Reports page

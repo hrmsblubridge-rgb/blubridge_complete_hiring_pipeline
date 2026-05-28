@@ -359,16 +359,37 @@ async def _worker_schedule_link_sender():
             # rejection sends in this worker.
 
             # Send deferred interview mails (NEW only): shortlist sent but interview mail not yet sent
+            # iter125c — Honour the inline `interview_mail_sent_in_progress`
+            # CAS lock so a concurrent submit_schedule HTTP handler isn't
+            # duplicated by this worker. The lock is released by the
+            # inline path after notify_schedule_confirmation completes.
             deferred_cursor = _db.bb_registrations.find({
                 **_cutoff_filter(),
                 "shortlist_mail_sent": True,
                 "interview_mail_sent": {"$ne": True},
+                "interview_mail_sent_in_progress": {"$ne": True},
                 "schedule_date": {"$nin": [None, ""], "$exists": True},
                 "schedule_time": {"$nin": [None, ""], "$exists": True},
             })
             deferred_docs = await deferred_cursor.to_list(None)
 
             for doc in deferred_docs:
+                # iter125c — Atomic CAS claim: only one runner may send for
+                # this row, even across worker restarts / concurrent ticks.
+                cas = await _db.bb_registrations.update_one(
+                    {"_id": doc["_id"],
+                     "interview_mail_sent": {"$ne": True},
+                     "interview_mail_sent_in_progress": {"$ne": True}},
+                    {"$set": {
+                        "interview_mail_sent_in_progress": True,
+                        "interview_mail_sent_in_progress_at": now.isoformat(),
+                    }},
+                )
+                if cas.modified_count == 0:
+                    _logger.info(
+                        f"[InterviewMail] SKIP duplicate — CAS lost for {doc.get('email')}"
+                    )
+                    continue
                 from messaging import notify_schedule_confirmation
                 await notify_schedule_confirmation(
                     doc.get("full_name", ""),
@@ -380,7 +401,11 @@ async def _worker_schedule_link_sender():
                 )
                 await _db.bb_registrations.update_one(
                     {"_id": doc["_id"]},
-                    {"$set": {"interview_mail_sent": True, "interview_mail_sent_at": now.isoformat()}}
+                    {"$set": {"interview_mail_sent": True, "interview_mail_sent_at": now.isoformat()},
+                     "$unset": {
+                        "interview_mail_sent_in_progress": "",
+                        "interview_mail_sent_in_progress_at": "",
+                     }}
                 )
                 _logger.info(f"[InterviewMail] Deferred send to {doc.get('email')}")
 
