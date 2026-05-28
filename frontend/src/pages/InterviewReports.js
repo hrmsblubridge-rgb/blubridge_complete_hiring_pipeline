@@ -80,8 +80,13 @@ export default function InterviewReports() {
 
     const applyFilters = () => { setPage(1); fetchData(1, pageSize, sort); };
     // iter113 — Reset preserves today/today date filter; All Records drops dates entirely.
-    const resetFilters = () => { setStartDate(_today_iso); setEndDate(_today_iso); setJobRole(''); setAttendance(''); setCollegeType(''); setNameQ(''); setEmailQ(''); setPhoneQ(''); setPage(1); setSort(null); };
-    const handleAllRecords = () => { setStartDate(''); setEndDate(''); setPage(1); };
+    // iter125d — Auto-expand chip list when user enters "All Records" or "Reset"
+    // mode so EVERY role with scheduled candidates is visible as a button. The
+    // previous default (top-5 only, hidden behind a "SHOW ALL" link) made many
+    // valid roles invisible — production-reported as "chip buttons not
+    // generated for new roles" even though the role/dropdown/records existed.
+    const resetFilters = () => { setStartDate(_today_iso); setEndDate(_today_iso); setJobRole(''); setAttendance(''); setCollegeType(''); setNameQ(''); setEmailQ(''); setPhoneQ(''); setPage(1); setSort(null); setShowAllRoles(true); };
+    const handleAllRecords = () => { setStartDate(''); setEndDate(''); setPage(1); setShowAllRoles(true); };
     const handleSortChange = (next) => { setSort(next); setPage(1); };
     const totalPages = Math.ceil(total / pageSize) || 1;
     const navPage = (pg) => { if (pg >= 1 && pg <= totalPages) { setPage(pg); fetchData(pg, pageSize, sort); } };

@@ -1,3 +1,83 @@
+## iter125d — Re-registration round reset + chip auto-expand + /health + Login UX (Feb 15, 2026)
+
+### Issue 1 — Old round names / scores persist after re-registration
+**Root cause**: the existing tester re-registration reset cleared
+`bb_applicant_updates.scores: []` and `status: ""` but LEFT in place
+the stale identity (`name`, `job_role`, `phone`), import flags
+(`isImported`, `import_batch_id`, `imported_at`), stale `schedule_date`,
+and any DYNAMIC top-level round-prefixed field (`Coding_score`,
+`Round_1_status`, etc.). When Update Scores was next called, the
+"preserve existing rounds" merge in `update_applicant_score` re-added
+the old round entries — the user observed "old round names and scores
+still persisting". Plus the NON-tester re-registration path didn't
+reset scores at all.
+
+**Fix**:
+- New centralized `bb_modules._clear_applicant_round_state(match_filter,
+  new_identity)` helper performs the FULL reset:
+  * `scores: []`, `status`, `result_status` cleared
+  * identity (`name`, `phone`, `job_role`) overwritten with NEW values
+  * `$unset`s `isImported`, `import_batch_id`, `imported_at`,
+    `schedule_date`, rejection flags
+  * DYNAMICALLY discovers round-prefixed fields from BOTH `bb_rounds`
+    (canonical catalogue) AND a heuristic key-scan of actual stored
+    docs — no round names hardcoded. Future rounds inserted into
+    `bb_rounds` are auto-handled.
+- Wired into ALL three re-registration paths:
+  * tester direct register
+  * non-tester 4-month re-register (previously had NO score reset)
+  * college-drive flow
+- Structured log line: `[ApplicantReset] cleared bb_applicant_updates
+  matched=N modified=M dyn_unset=[...]`
+
+### Issue 2 — Interview Schedule Reports chip buttons hidden behind "SHOW ALL"
+**Root cause**: frontend defaulted to showing only the top-5 roles
+(`roleEntries.slice(0, 5)`) with a "SHOW ALL" expand toggle. Clicking
+"All Records" didn't auto-expand the chip list, so a user looking for
+"Social Media Marketer" (etc.) saw it in the dropdown + record-rows but
+NOT as a chip button.
+
+**Fix** (`pages/InterviewReports.js`): both `handleAllRecords` AND
+`resetFilters` now call `setShowAllRoles(true)`. Every role with at
+least one scheduled candidate surfaces as a chip immediately.
+
+### Issue 3 — `/health` endpoint added
+Lightweight liveness probe at `/health` (GET + HEAD). No auth, no DB
+query, no logging — true zero-overhead. Placed immediately before
+`@app.on_event("shutdown")` per spec. Verified:
+```
+GET /health   -> 200 (0 bytes)
+HEAD /health  -> 200 (0 bytes)
+```
+
+### Issue 4 — Login "Default credentials" helper text removed
+`pages/Login.js`: stripped the `<div>...<p>Default credentials:
+<code>Admin User / Admin User</code></p></div>` block from beneath the
+Sign In form. Authentication logic + admin credentials unchanged.
+Verified end-to-end via screenshot — Login page shows only the form.
+
+### Verification — 20/20 tests passing in iter125 family
+- `test_iter125d_reregister_chips_health_login.py` (6 tests):
+  * Helper exists + wired into all three re-register paths
+  * Functional reset of seeded `bb_applicant_updates` doc — scores,
+    status, identity, import flags, dynamic round fields all cleared
+  * Dynamic round-field discovery from `bb_rounds`
+  * Frontend chip auto-expand on All Records + Reset
+  * `/health` route exists, mounted on `app` (not `api_router`), no
+    DB/auth/logging, placed before shutdown handler
+  * Login page no longer contains "Default credentials" text
+- iter125 + 125b + 125c (14 tests) all still passing.
+
+### Production-safety
+- ✅ Zero live messages dispatched during validation
+- ✅ Zero non-test rows touched (all tests used `isTest:True` rows
+  scoped to `iter125d_*@example.com` emails, self-cleaned)
+- ✅ Same DB cluster (cluster0.mggyn5a.mongodb.net / hr_analytics)
+- ✅ Backward-compatible: existing endpoints unchanged
+
+---
+
+
 ## iter125c — Summary Stats Unknown bucket + Reschedule sequencing/duplicates (Feb 15, 2026)
 
 ### Issue 1 — View Applicants Summary Statistics still misclassified existing roles as "Unknown"

@@ -300,6 +300,122 @@ def _score_record_ts(rec: dict) -> str:
     return str(rec.get("created_at") or rec.get("updated_at") or "")
 
 
+# ─────────────────── iter125d — Re-registration round reset helper ───────────────────
+
+# Stable identity fields preserved on a reset (email/phone are the match
+# key; everything else is rewritten or wiped).
+_APPLICANT_UPDATES_PRESERVE = {"_id", "email"}
+
+# Top-level fields that must always be reset to a canonical empty state.
+_APPLICANT_UPDATES_RESET_TO_EMPTY = {
+    "scores": [],
+    "status": "",
+    "result_status": "",
+    "rejection_notified": False,
+    "import_rejection_notified": False,
+    # iter98 — clear rejection_sent so the 19:00 rejection dispatcher
+    # can re-fire on the new evaluation cycle.
+    "rejection_sent": False,
+    "rejection_sent_at": "",
+    "rejection_send_ok": False,
+}
+
+# Fields that must be `$unset` (removed entirely) — these include legacy
+# import-flow flags + stale schedule fields that, if left in place, cause
+# downstream workers (e.g. import rejection dispatcher) to re-process the
+# OLD applicant identity instead of the freshly re-registered one.
+_APPLICANT_UPDATES_UNSET_STATIC = (
+    "isImported", "import_batch_id", "imported_at",
+    "schedule_date", "rejection_pending",
+    "rejection_backfilled_at", "rejection_notified_at",
+)
+
+
+async def _clear_applicant_round_state(match_filter: dict, new_identity: dict) -> dict:
+    """Centralised reset for re-registration: every matching
+    `bb_applicant_updates` doc gets
+
+      * `scores: []` + status/result_status reset
+      * stale rejection / import flags cleared
+      * identity (name, phone, job_role) overwritten to the NEW values
+        from the fresh registration submission
+      * any DYNAMIC top-level round-prefixed field (`round_<n>_score`,
+        `<round>_status`, `<round>_rating`, etc.) discovered on the
+        actual stored doc(s) is `$unset` so future round additions
+        are also reset without hardcoding round names.
+
+    Round name discovery sources (both used, none hardcoded):
+      1. `bb_rounds` collection — the canonical round catalogue.
+      2. A heuristic scan of the actual doc keys for any key containing
+         `round`, `score`, `rating`, `result`, or `status` that isn't in
+         the system-preserve set.
+
+    Returns: {matched, modified, unset_fields: list[str]}
+    """
+    # Build the dynamic-unset list from bb_rounds first
+    dyn_unset = set()
+    try:
+        async for rd in _db.bb_rounds.find({}, {"_id": 0, "name": 1}):
+            base = re.sub(r"[^a-zA-Z0-9]+", "_", str(rd.get("name") or "").strip()).strip("_")
+            if not base:
+                continue
+            for suffix in ("", "_score", "_status", "_result", "_rating", "_remarks"):
+                dyn_unset.add(f"{base}{suffix}")
+                dyn_unset.add(f"{base.lower()}{suffix}")
+    except Exception:
+        pass
+
+    # Also scan actual matched docs for any round-ish key we might have missed
+    sample_doc_keys: set = set()
+    try:
+        async for d in _db.bb_applicant_updates.find(match_filter, {"_id": 0}).limit(20):
+            for k in d.keys():
+                kl = k.lower()
+                if k in _APPLICANT_UPDATES_PRESERVE or k in _APPLICANT_UPDATES_RESET_TO_EMPTY:
+                    continue
+                if any(token in kl for token in ("round", "score", "rating", "result_status", "remarks")):
+                    sample_doc_keys.add(k)
+    except Exception:
+        pass
+    # `scores` is already in the reset-to-empty bucket; don't unset it.
+    sample_doc_keys.discard("scores")
+    sample_doc_keys.discard("result_status")
+
+    unset_combined = (
+        set(_APPLICANT_UPDATES_UNSET_STATIC) | dyn_unset | sample_doc_keys
+    )
+    # Cannot $set and $unset the same field — strip any collision.
+    unset_combined -= set(_APPLICANT_UPDATES_RESET_TO_EMPTY.keys())
+
+    set_doc = dict(_APPLICANT_UPDATES_RESET_TO_EMPTY)
+    set_doc["scores_reset_at"] = datetime.now(timezone.utc).isoformat()
+    # Overwrite identity to fresh values so downstream Score Imports /
+    # Update Scores find the row by email and see the CURRENT name + role,
+    # not the previous-cycle stale identity.
+    if new_identity.get("name"):
+        set_doc["name"] = new_identity["name"]
+    if new_identity.get("phone"):
+        set_doc["phone"] = new_identity["phone"]
+    if new_identity.get("job_role"):
+        set_doc["job_role"] = new_identity["job_role"]
+    set_doc["updated_at"] = set_doc["scores_reset_at"]
+
+    op = {"$set": set_doc}
+    if unset_combined:
+        op["$unset"] = {k: "" for k in unset_combined}
+
+    r = await _db.bb_applicant_updates.update_many(match_filter, op)
+    _logger.info(
+        f"[ApplicantReset] cleared bb_applicant_updates matched={r.matched_count} "
+        f"modified={r.modified_count} dyn_unset={sorted(unset_combined)}"
+    )
+    return {
+        "matched": r.matched_count,
+        "modified": r.modified_count,
+        "unset_fields": sorted(unset_combined),
+    }
+
+
 async def _build_round_wise_scores(
     email: str,
     phone: str,
@@ -1364,32 +1480,26 @@ async def register_college_applicant(data: CollegeRegistrationBody):
                     )
                 except Exception as _e:
                     _logger.warning(f"[Pipeline:tester] college bb_registrations reset skipped: {_e}")
-                # iter70 (#6) — Clear applicant round scores so the freshly
-                # re-registered candidate starts a clean evaluation cycle.
-                # bb_rounds definitions are NOT touched; only the per-applicant
-                # `scores[]` array is wiped + status reset.
+                # iter70 (#6) + iter125d — Clear applicant round scores +
+                # stale identity so the freshly re-registered candidate
+                # starts a clean evaluation cycle. Routed through the
+                # centralized `_clear_applicant_round_state` helper so
+                # dynamic round fields (any custom `<round>_score`,
+                # `<round>_status`, etc.) are also `$unset` without
+                # hardcoding names.
                 try:
-                    upd_res = await _db.bb_applicant_updates.update_many(
+                    upd_res = await _clear_applicant_round_state(
                         {"$or": [{"email": target_email}, {"phone": phone_normalized}]},
-                        {"$set": {
-                            "scores": [],
-                            "status": "",
-                            "result_status": "",
-                            "rejection_notified": False,
-                            "import_rejection_notified": False,
-                            # iter98 — Re-registration MUST clear rejection_sent
-                            # too. Otherwise the 19:00 evening dispatcher
-                            # filter `rejection_sent: {$ne: True}` skips this
-                            # row forever for the new application cycle.
-                            "rejection_sent": False,
-                            "rejection_sent_at": "",
-                            "rejection_send_ok": False,
-                            "scores_reset_at": submitted_at,
-                        }},
+                        new_identity={
+                            "name": (data.full_name or "").strip(),
+                            "phone": phone_normalized,
+                            "job_role": role,
+                        },
                     )
                     _logger.info(
                         f"[Pipeline:tester] college_drive SCORES_RESET "
-                        f"matched={upd_res.matched_count} modified={upd_res.modified_count} "
+                        f"matched={upd_res['matched']} modified={upd_res['modified']} "
+                        f"dyn_unset={upd_res['unset_fields']} "
                         f"email={target_email} phone={phone_normalized}"
                     )
                 except Exception as _e:
@@ -4475,31 +4585,34 @@ async def register_applicant(data: RegistrationBody):
                 await reset_otp_on_reschedule(data.email.strip().lower(), phone_normalized)
             except Exception as _e:
                 _logger.warning(f"[Pipeline:tester] OTP wipe skipped: {_e}")
-            # iter70 (#6) — Reset applicant round scores so the candidate
-            # restarts with a fresh evaluation cycle. bb_rounds definitions
-            # are NOT touched; only the per-applicant `scores[]` array.
+            # iter70 (#6) + iter125d (Issue 1) — Reset applicant round scores so
+            # the candidate restarts with a fresh evaluation cycle. The reset
+            # MUST also rewrite the stale identity fields (`name`, `job_role`,
+            # `schedule_date`) and clear all import-flow flags
+            # (`isImported`, `import_batch_id`, `imported_at`) — otherwise the
+            # next Update-Scores upsert (in `update_applicant_score`) finds
+            # the OLD doc by email, sees Round 1: 15.0 reappear in the
+            # "preserve existing rounds" merge branch, and the user observes
+            # "stale round scores persisting" after re-registration.
+            #
+            # ALSO uses `_clear_dynamic_round_fields_from_doc` to dynamically
+            # find ANY top-level round-prefixed field (e.g. `round_1_score`,
+            # `Coding_score`, `interview_round_status`) and `$unset` it.
+            # No round names are hardcoded — sourced from `bb_rounds` + a
+            # heuristic scan of doc keys.
             try:
-                upd_res = await _db.bb_applicant_updates.update_many(
+                upd_res = await _clear_applicant_round_state(
                     match_filter,
-                    {"$set": {
-                        "scores": [],
-                        "status": "",
-                        "result_status": "",
-                        "rejection_notified": False,
-                        "import_rejection_notified": False,
-                        # iter98 — clear rejection_sent on re-registration so
-                        # the new application cycle can re-trigger a 19:00
-                        # rejection dispatch if/when the recruiter rejects.
-                        "rejection_sent": False,
-                        "rejection_sent_at": "",
-                        "rejection_send_ok": False,
-                        "scores_reset_at": datetime.now(timezone.utc).isoformat(),
-                    }},
+                    new_identity={
+                        "name": data.full_name.strip(),
+                        "phone": phone_normalized,
+                        "job_role": job_role,
+                    },
                 )
                 _logger.info(
-                    f"[Pipeline:tester] SCORES_RESET matched={upd_res.matched_count} "
-                    f"modified={upd_res.modified_count} email={data.email.strip().lower()} "
-                    f"phone={phone_normalized}"
+                    f"[Pipeline:tester] SCORES_RESET matched={upd_res['matched']} "
+                    f"modified={upd_res['modified']} dyn_round_fields_unset={upd_res['unset_fields']} "
+                    f"email={data.email.strip().lower()} phone={phone_normalized}"
                 )
             except Exception as _e:
                 _logger.warning(f"[Pipeline:tester] bb_applicant_updates reset skipped: {_e}")
@@ -4562,6 +4675,30 @@ async def register_applicant(data: RegistrationBody):
             await reset_otp_on_reschedule(data.email.strip().lower(), phone_normalized)
         except Exception as _e:
             _logger.warning(f"[Pipeline] non-tester re-register OTP wipe skipped: {_e}")
+        # iter125d (Issue 1) — Non-tester re-register MUST also reset round
+        # scores. Without this, a candidate who attended an interview 4+
+        # months ago and re-applies sees the previous evaluation cycle's
+        # scores carry over into the new application. Spec says they should
+        # behave like a fresh candidate.
+        try:
+            nt_reset = await _clear_applicant_round_state(
+                {"$or": [
+                    {"email": data.email.strip().lower()},
+                    {"phone": phone_normalized},
+                ]},
+                new_identity={
+                    "name": data.full_name.strip(),
+                    "phone": phone_normalized,
+                    "job_role": job_role,
+                },
+            )
+            _logger.info(
+                f"[Pipeline:non-tester] SCORES_RESET matched={nt_reset['matched']} "
+                f"modified={nt_reset['modified']} dyn_round_fields_unset={nt_reset['unset_fields']} "
+                f"email={data.email.strip().lower()} phone={phone_normalized}"
+            )
+        except Exception as _e:
+            _logger.warning(f"[Pipeline] non-tester re-register bb_applicant_updates reset skipped: {_e}")
     else:
         await _db.pipeline_data.update_one(
             {"email": data.email.strip().lower()},

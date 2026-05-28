@@ -4278,6 +4278,17 @@ async def startup_event():
     await start_all_workers()
     logger.info("Messaging background workers launched")
 
+
+# iter125d — Lightweight liveness probe for external uptime monitors
+# (Render keep-alive / UptimeRobot / Pingdom). No auth, no DB queries,
+# no logging — stays a true zero-overhead endpoint. Mounted directly on
+# `app` (not `api_router`) so the path is `/health`, not `/api/health`,
+# which is the convention most hosted-monitor services expect.
+@app.api_route("/health", methods=["GET", "HEAD"])
+async def health():
+    return Response(status_code=200)
+
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
