@@ -2518,33 +2518,31 @@ async def get_interview_reports(
     # invisible even when their candidates were already visible in the
     # table. Falling back to the raw role inside the `$group._id` keeps the
     # two layers consistent.
+    role_id_expr = {
+        "$let": {
+            "vars": {
+                "norm": {"$ifNull": ["$_normalized_job_role", ""]},
+                "jr": {"$ifNull": ["$job_role", ""]},
+                "jt": {"$ifNull": ["$job_title", ""]},
+            },
+            "in": {
+                "$cond": [
+                    {"$and": [
+                        {"$ne": ["$$norm", ""]},
+                        {"$ne": ["$$norm", "Unknown"]},
+                    ]},
+                    "$$norm",
+                    {"$cond": [
+                        {"$ne": ["$$jr", ""]}, "$$jr",
+                        {"$cond": [{"$ne": ["$$jt", ""]}, "$$jt", "Unknown"]},
+                    ]},
+                ],
+            },
+        },
+    }
     role_pipeline = [
         {"$match": match},
-        {"$group": {
-            "_id": {
-                "$let": {
-                    "vars": {
-                        "norm": {"$ifNull": ["$_normalized_job_role", ""]},
-                        "jr": {"$ifNull": ["$job_role", ""]},
-                        "jt": {"$ifNull": ["$job_title", ""]},
-                    },
-                    "in": {
-                        "$cond": [
-                            {"$and": [
-                                {"$ne": ["$$norm", ""]},
-                                {"$ne": ["$$norm", "Unknown"]},
-                            ]},
-                            "$$norm",
-                            {"$cond": [
-                                {"$ne": ["$$jr", ""]}, "$$jr",
-                                {"$cond": [{"$ne": ["$$jt", ""]}, "$$jt", "Unknown"]},
-                            ]},
-                        ],
-                    },
-                },
-            },
-            "count": {"$sum": 1},
-        }},
+        {"$group": {"_id": role_id_expr, "count": {"$sum": 1}}},
         {"$sort": {"count": -1}},
         {"$limit": 100},
     ]
@@ -2568,6 +2566,62 @@ async def get_interview_reports(
         rolled_counts[canon] = rolled_counts.get(canon, 0) + r["count"]
     role_counts = dict(sorted(rolled_counts.items(), key=lambda kv: -kv[1])[:100])
 
+    # iter125e — `all_role_counts` is the JOB-ROLE-INDEPENDENT chip baseline.
+    # The legacy `role_counts` above mirrors the current filter (so when the
+    # user picks a role in the dropdown, it collapses to just that role's
+    # count). The frontend chip strip needs the FULL distribution to render
+    # every chip regardless of which role is currently filtered — otherwise
+    # newly added roles like "Social Media Marketer" never appear because
+    # the source-fallback logic locks to pipeline_data whenever it has any
+    # matching rows, leaving roles that live only in `registered_candidates`
+    # invisible.
+    #
+    # Chip count semantics MUST match what the table will show when that
+    # role is selected:
+    #   * If pipeline_data has >=1 candidate for the role → table uses
+    #     pipeline_data → chip count = pd_count
+    #   * Else → table falls back to registered_candidates → chip count
+    #     = rc_count
+    # We aggregate from BOTH collections in parallel and pick the count
+    # from whichever would be the chosen src. This makes the chip strip
+    # internally consistent with the row table for every role.
+    base_match = _build_interview_reports_match(
+        startDate, endDate, None, attendance, collegeType,
+        _canonical_index=kw_to_canonical, _mappings=raw_mappings,
+    )
+
+    async def _agg_by_role(_coll):
+        cur = await _coll.aggregate([
+            {"$match": base_match},
+            {"$group": {"_id": role_id_expr, "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 500},
+        ], allowDiskUse=False).to_list(None)
+        out: dict = {}
+        for r in cur:
+            if not r["_id"]:
+                continue
+            canon = _canonicalize_job_role(r["_id"], kw_to_canonical)
+            if not canon or canon.strip().lower() in ("", "unknown"):
+                continue
+            out[canon] = out.get(canon, 0) + r["count"]
+        return out
+
+    pd_counts = await _agg_by_role(_db.pipeline_data)
+    rc_counts = await _agg_by_role(_db.registered_candidates)
+    # Merge with table-consistent semantics: pd wins if non-zero, else rc.
+    base_rolled = dict(pd_counts)
+    for role, cnt in rc_counts.items():
+        if base_rolled.get(role, 0) == 0:
+            base_rolled[role] = cnt
+    all_role_counts = dict(sorted(base_rolled.items(), key=lambda kv: -kv[1])[:200])
+    _logger.info(
+        f"[InterviewReports:Chips] all_role_counts={len(all_role_counts)} roles "
+        f"(pd_only_roles={len(pd_counts)} rc_only_roles={sum(1 for r in rc_counts if r not in pd_counts)}) "
+        f"top={list(all_role_counts.items())[:5]} "
+        f"src_primary={'pipeline_data' if src is _db.pipeline_data else 'registered_candidates'}"
+    )
+
     total_pages = (total + limit - 1) // limit if total else 1
     return {
         "data": rows,
@@ -2577,6 +2631,11 @@ async def get_interview_reports(
         "totalPages": total_pages,
         "summary": {
             "role_counts": role_counts,
+            # iter125e — Job-role-INDEPENDENT chip baseline. Frontend uses this
+            # to render the chip strip so EVERY role with at least one
+            # scheduled candidate in the current date/attendance/college slice
+            # is always visible, regardless of the currently selected jobRole.
+            "all_role_counts": all_role_counts,
             "attended": base.get("attended", 0),
             "not_attended": base.get("not_attended", 0),
             "premium_colleges": base.get("premium_colleges", 0),

@@ -1,3 +1,84 @@
+## iter125e — Interview Reports chip baseline now consistent with table (Feb 15, 2026)
+
+### Issue — "Social Media Marketer" (and similar roles) chip never rendered
+The chip flashed briefly when clicking "All Records" then disappeared.
+Filtering by the role in the dropdown showed records in the table but
+no chip button. Other newly-added roles followed the same pattern.
+
+### Root cause — Multi-layer
+1. **Frontend stale baseline**: `baselineRoleCounts` was a `useRef` cache
+   captured ONLY when `jobRole === ''`. Once a role was selected, the
+   chip strip kept showing the old baseline forever, never picking up
+   newly-uploaded roles.
+2. **Backend src-fallback asymmetry**: `/api/bb/interview-reports`
+   picks `src` based on filtered total — `pipeline_data` first,
+   `registered_candidates` only if pd has 0 matches. So when "All
+   Records" was clicked, pd had 30k+ rows → src locked to pd → chips
+   computed from pd → roles only present in rc (e.g. Social Media
+   Marketer with 0/6 split) became invisible.
+3. **Data drift between collections**: 5 of 6 SMM-labeled rc rows had
+   pipeline_data counterparts with DIFFERENT `_normalized_job_role`
+   (e.g. "AI & ML Engineer" in pd vs "Social Media Marketer" in rc).
+   Plain union-with-dedupe undercounts the chip; plain sum
+   double-counts overlapping candidates.
+
+### Fix
+**Backend** (`bb_modules.py::get_interview_reports`):
+- New `summary.all_role_counts` payload built via TABLE-CONSISTENT
+  merge:
+  ```python
+  pd_counts = agg_by_role(pipeline_data, base_match)
+  rc_counts = agg_by_role(registered_candidates, base_match)
+  merged = pd_counts.copy()
+  for role, cnt in rc_counts.items():
+      if merged.get(role, 0) == 0:
+          merged[role] = cnt   # rc fills the gap only when pd is empty
+  ```
+  Mirrors the table's `src` fallback so chip count == table count when
+  the user selects that role. No double-counting for overlapping
+  candidates (pd wins when both have records).
+- `role_id_expr` extracted as a reusable variable for both the filtered
+  and baseline aggregations.
+- Structured log: `[InterviewReports:Chips] all_role_counts=N roles
+  pd_only_roles=X rc_only_roles=Y top=[(...)] src_primary=...`
+
+**Frontend** (`pages/InterviewReports.js`):
+- Replaced the `baselineRoleCounts.current` ref with
+  `summary.all_role_counts` read directly from each response → no stale
+  cache. Selected role's live count from `role_counts[jobRole]` is
+  merged on top so the selected chip shows its current filtered count.
+
+### End-to-end verification (live API)
+| Scenario | Chip baseline (`all_role_counts`) | Filtered table count |
+|---|---|---|
+| No filter (All) | **51 roles, SMM: 6** ✅ | n/a |
+| Filter = Social Media Marketer | SMM: 6 ✅ | SMM: 6 ✅ |
+| AI & ML Engineer | 17434 ✅ | 17434 ✅ |
+
+Top chips now visible without clicking "SHOW ALL":
+`AI & ML Engineer (17434), Full Stack Developer (1865), AI System
+Engineer (1437) ... Social Media Marketer (6), TESTPUB_Role
+(1) ... IT Support (1)` — every role with at least one scheduled
+candidate.
+
+### Tests — 24/24 passing across iter125 family
+- `test_iter125e_chip_baseline_consistency.py` (4 tests):
+  * Source-code guard: response field + per-collection aggregator
+  * Functional: rc-only seeded role surfaces in merged baseline
+  * Critical: chip count == table count for rc-only role
+  * Frontend guard: chip strip reads `summary.all_role_counts`, no
+    `baselineRoleCounts.current`
+
+### Production-safety
+- ✅ Zero live messages dispatched
+- ✅ Zero non-test rows touched (all seeded via `iter125e_*@example.invalid`,
+  self-cleaned)
+- ✅ Backward-compatible: legacy `role_counts` field preserved alongside
+  new `all_role_counts` so any external consumer keeps working
+
+---
+
+
 ## iter125d — Re-registration round reset + chip auto-expand + /health + Login UX (Feb 15, 2026)
 
 ### Issue 1 — Old round names / scores persist after re-registration

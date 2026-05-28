@@ -135,19 +135,29 @@ export default function InterviewReports() {
     };
 
     const roleCounts = summary.role_counts || {};
-    // iter103 — The backend's role_counts is scoped to the current filter
-    // (so it collapses to just the selected role when jobRole is set). To
-    // keep all chips visible, we pin the "All" view's role_counts in a ref
-    // and only refresh it when no jobRole filter is active. Buttons + total
-    // counts use the pinned baseline; the data table still uses the
-    // filtered response.
-    const baselineRoleCounts = useRef({});
+    // iter125e — `all_role_counts` is a job-role-INDEPENDENT chip baseline
+    // returned by the backend. It always reflects every role with at least
+    // one scheduled candidate in the current date/attendance/college slice,
+    // regardless of which jobRole the user has selected in the dropdown.
+    // Replaces the previous `baselineRoleCounts` ref-based heuristic which
+    // captured the baseline ONLY when jobRole === '' and went stale the
+    // moment a new role (e.g. "Social Media Marketer") was added after
+    // page load — production-reported as "chip not generated even though
+    // role + records exist".
+    const allRoleCounts = summary.all_role_counts || roleCounts;
     const baselineTotal = useRef(0);
-    if (jobRole === '' && Object.keys(roleCounts).length) {
-        baselineRoleCounts.current = roleCounts;
+    if (jobRole === '' && total) {
         baselineTotal.current = total;
     }
-    const baseEntries = Object.entries(baselineRoleCounts.current).sort((a, b) => b[1] - a[1]);
+    // Merge the selected jobRole's current count into the baseline so the
+    // selected chip always shows the LIVE filtered count (matching the
+    // table); other chips show the unfiltered totals so the user knows
+    // what's available.
+    const mergedRoleCounts = { ...allRoleCounts };
+    if (jobRole && roleCounts[jobRole] != null) {
+        mergedRoleCounts[jobRole] = roleCounts[jobRole];
+    }
+    const baseEntries = Object.entries(mergedRoleCounts).sort((a, b) => b[1] - a[1]);
     // Move the selected role to the front (after "All") so users always
     // see what they have selected at a glance.
     const roleEntries = jobRole
