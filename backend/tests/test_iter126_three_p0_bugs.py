@@ -97,6 +97,52 @@ async def test_clear_applicant_round_state_no_mongo_conflict(db):
 
 
 @pytest.mark.asyncio
+async def test_clear_applicant_round_state_wipes_score_sheet(db):
+    """iter126b — Re-registration must ALSO delete score_sheet rows so the
+    Update Applicants Scores modal does NOT surface stale Upload Score
+    Sheet entries from a previous applicant cycle (different email but
+    same phone — e.g. rishinayak@gmail.com → rishi.nayak@blubridge.com).
+    """
+    import bb_modules
+    bb_modules._db = db
+
+    new_email = f"iter126b-new-{uuid.uuid4().hex[:8]}@example.invalid"
+    old_email = f"iter126b-old-{uuid.uuid4().hex[:8]}@example.invalid"
+    phone = "8000099887"
+
+    # Seed score_sheet with stale entries under the OLD email + the phone
+    # (matches the real production pattern).
+    stale_rows = [
+        {"email": old_email, "phone": phone, "name": "Old Name",
+         "round_name": "Java", "score": 10.0, "_iter126_test": True},
+        {"email": old_email, "phone": phone, "name": "Old Name",
+         "round_name": "BA", "score": 12.0, "_iter126_test": True},
+        {"email": old_email, "phone": phone, "name": "Old Name",
+         "round_name": "LA", "score": 14.0, "_iter126_test": True},
+    ]
+    await db.score_sheet.insert_many(stale_rows)
+
+    try:
+        # Re-registration calls the helper with the NEW email + same phone.
+        match_filter = {"$or": [{"email": new_email}, {"phone": phone}]}
+        await bb_modules._clear_applicant_round_state(
+            match_filter,
+            {"name": "Fresh Name", "phone": phone, "job_role": "Engineer"},
+        )
+
+        remaining = await db.score_sheet.count_documents({
+            "$or": [{"email": old_email}, {"phone": phone}, {"email": new_email}]
+        })
+        assert remaining == 0, (
+            f"Stale score_sheet rows still present after reset: {remaining}"
+        )
+
+    finally:
+        await db.score_sheet.delete_many({"_iter126_test": True})
+        await db.bb_applicant_updates.delete_many({"_iter126_test": True})
+
+
+@pytest.mark.asyncio
 async def test_clear_applicant_round_state_unset_excludes_set_keys(db):
     """Source-code guard: the helper must compute $unset AFTER set_doc is
     built and explicitly subtract all $set keys to prevent the conflict."""

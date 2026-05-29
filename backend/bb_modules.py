@@ -413,6 +413,56 @@ async def _clear_applicant_round_state(match_filter: dict, new_identity: dict) -
         f"[ApplicantReset] cleared bb_applicant_updates matched={r.matched_count} "
         f"modified={r.modified_count} dyn_unset={sorted(unset_combined)}"
     )
+
+    # iter126b — Also wipe `score_sheet` entries (the Upload Score Sheet
+    # target). Without this, `get_attended_for_scores` falls back to
+    # score_sheet when `bb_applicant_updates.scores` is empty, and stale
+    # round scores from a PREVIOUS upload re-surface for the freshly
+    # re-registered candidate (the exact "May 29 Final Rishi" report —
+    # Java/BA/LA/Mensa Org/Accounts2 scores from a May 27 upload kept
+    # appearing). score_sheet rows from the previous applicant identity
+    # often have a different email (e.g. `rishinayak@gmail.com` vs the
+    # tester's `rishi.nayak@blubridge.com`) but the SAME phone — so we
+    # match using the email/phone-OR clause already supplied by the
+    # caller in `match_filter`. We additionally OR in the new_identity
+    # phone so the right rows are caught even if the re-registration
+    # email is brand-new (no historical row to match on email alone).
+    score_sheet_filter_clauses = []
+    raw_filter = match_filter.get("$or") if isinstance(match_filter, dict) else None
+    if isinstance(raw_filter, list):
+        score_sheet_filter_clauses.extend(raw_filter)
+    elif isinstance(match_filter, dict):
+        for k in ("email", "phone"):
+            v = match_filter.get(k)
+            if v:
+                score_sheet_filter_clauses.append({k: v})
+    # Add new_identity phone (last-10-digits + raw forms) for safety.
+    ident_phone_raw = (new_identity or {}).get("phone")
+    if ident_phone_raw:
+        digits = re.sub(r"\D", "", str(ident_phone_raw))
+        if digits:
+            score_sheet_filter_clauses.append({"phone": digits})
+            if len(digits) > 10:
+                score_sheet_filter_clauses.append({"phone": digits[-10:]})
+    # Dedupe filter clauses.
+    seen = set()
+    unique_clauses = []
+    for c in score_sheet_filter_clauses:
+        key = tuple(sorted(c.items()))
+        if key not in seen:
+            seen.add(key)
+            unique_clauses.append(c)
+    if unique_clauses:
+        try:
+            sheet_filter = {"$or": unique_clauses} if len(unique_clauses) > 1 else unique_clauses[0]
+            sheet_del = await _db.score_sheet.delete_many(sheet_filter)
+            _logger.info(
+                f"[ApplicantReset] cleared score_sheet deleted={sheet_del.deleted_count} "
+                f"filter={sheet_filter}"
+            )
+        except Exception as _sheet_err:
+            _logger.warning(f"[ApplicantReset] score_sheet cleanup skipped: {_sheet_err!r}")
+
     return {
         "matched": r.matched_count,
         "modified": r.modified_count,

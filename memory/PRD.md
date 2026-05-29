@@ -1,4 +1,69 @@
-## iter126 — Three P0 Production Bug Fixes (Feb 16, 2026)
+## iter126b — Re-registration also wipes score_sheet (Feb 16, 2026)
+User re-registered as "May 29 Final Rishi" using tester credentials, but
+the Update Applicants Scores modal still showed the OLD round scores
+(Java=10, BA=12, LA=14, Mensa Org=16, Accounts2=18) from a May 27
+Upload Score Sheet batch — the iter126 reset had cleared
+`bb_applicant_updates.scores=[]` but the stale data lived in a
+DIFFERENT collection.
+
+### Root cause
+`get_attended_for_scores` merges scores from TWO sources:
+```python
+if upd.get("scores"):
+    merged_scores = upd["scores"]
+else:
+    # Fallback — pull from score_sheet by email OR phone
+    matched = []
+    if email in score_by_email: matched.extend(...)
+    if phone in score_by_phone: matched.extend(...)
+```
+On re-registration the iter126 helper correctly cleared
+`bb_applicant_updates.scores=[]` — which triggered the `else` branch —
+and the fallback pulled 5 stale rows from `score_sheet`. The previous
+applicant cycle had uploaded those rows under a DIFFERENT email
+(`rishinayak@gmail.com` vs the tester's `rishi.nayak@blubridge.com`)
+but the SAME phone (`9443109903`), so the phone-match path was the
+exact culprit.
+
+### Fix (`bb_modules.py::_clear_applicant_round_state`)
+After clearing `bb_applicant_updates`, the helper now ALSO deletes
+`score_sheet` rows matching the same email/phone clause AND the new
+identity's phone (with last-10-digits normalisation, covering the
+common production storage variations). Filter clauses are deduplicated
+before the bulk delete. New log line:
+`[ApplicantReset] cleared score_sheet deleted=N filter={...}`.
+
+Production hot-fix: deleted the 5 stale rows for
+`rishi.nayak@blubridge.com` / `9443109903` so the user can immediately
+observe an empty Update Score modal on the next view.
+
+### Verification
+- New test `test_clear_applicant_round_state_wipes_score_sheet`:
+  seeds 3 stale `score_sheet` rows under an OLD email + shared phone,
+  calls the helper with the NEW email + same phone, asserts zero rows
+  remain. Passes.
+- All 8 iter126 tests now green; all 16 iter125 regression tests still
+  green.
+
+### Files modified
+- `/app/backend/bb_modules.py` — `_clear_applicant_round_state` extended
+  with `score_sheet` cleanup block.
+
+### Files updated
+- `/app/backend/tests/test_iter126_three_p0_bugs.py` — added
+  `test_clear_applicant_round_state_wipes_score_sheet`.
+
+### Production-safety
+- Only deletes `score_sheet` rows matching the SAME email/phone as the
+  re-registering candidate (not a global wipe).
+- All 4 re-registration paths (tester direct, tester college-drive,
+  non-tester 4-month re-register, college-drive non-tester) automatically
+  inherit the fix because they all funnel through the helper.
+
+---
+
+
+
 
 User reported (Message 577) three critical bugs after iter125f shipped. All
 three are now fixed and covered by `tests/test_iter126_three_p0_bugs.py`
