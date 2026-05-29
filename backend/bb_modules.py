@@ -381,12 +381,6 @@ async def _clear_applicant_round_state(match_filter: dict, new_identity: dict) -
     sample_doc_keys.discard("scores")
     sample_doc_keys.discard("result_status")
 
-    unset_combined = (
-        set(_APPLICANT_UPDATES_UNSET_STATIC) | dyn_unset | sample_doc_keys
-    )
-    # Cannot $set and $unset the same field — strip any collision.
-    unset_combined -= set(_APPLICANT_UPDATES_RESET_TO_EMPTY.keys())
-
     set_doc = dict(_APPLICANT_UPDATES_RESET_TO_EMPTY)
     set_doc["scores_reset_at"] = datetime.now(timezone.utc).isoformat()
     # Overwrite identity to fresh values so downstream Score Imports /
@@ -399,6 +393,16 @@ async def _clear_applicant_round_state(match_filter: dict, new_identity: dict) -
     if new_identity.get("job_role"):
         set_doc["job_role"] = new_identity["job_role"]
     set_doc["updated_at"] = set_doc["scores_reset_at"]
+
+    unset_combined = (
+        set(_APPLICANT_UPDATES_UNSET_STATIC) | dyn_unset | sample_doc_keys
+    )
+    # Cannot $set and $unset the same field — strip ALL collisions with
+    # the fully-built set_doc (includes scores_reset_at, updated_at,
+    # identity overwrites + the static reset-to-empty bucket). Also
+    # strip the identity/preserve key set so we never $unset email/_id.
+    unset_combined -= set(set_doc.keys())
+    unset_combined -= _APPLICANT_UPDATES_PRESERVE
 
     op = {"$set": set_doc}
     if unset_combined:
@@ -2729,17 +2733,61 @@ async def get_attended_for_scores(
     if endDate:
         match["schedule_date"] = {**match.get("schedule_date", {}), "$lte": endDate}
 
-    # Source: pipeline_data first (live collection per May 2026 architecture),
-    # fallback to legacy registered_candidates for older environments.
-    src = _db.pipeline_data
-    total = await src.count_documents(match)
-    if total == 0:
-        src = _db.registered_candidates
-        total = await src.count_documents(match)
+    # iter126 — UNION pipeline_data + registered_candidates (mirrors the
+    # iter125e chip-baseline fix). Previously, narrow date ranges that
+    # matched 0 pipeline_data rows fell back to registered_candidates and
+    # surfaced rc-only candidates (e.g. rishi.nayak tester rows); widening
+    # the range produced pipeline_data hits, locked `src` to pipeline_data,
+    # and SILENTLY DROPPED those same rc-only candidates from the table.
+    # Now both collections are unioned, deduplicated by email (then by
+    # phone as a secondary key), and paginated together.
+    union_pipeline = [
+        {"$match": match},
+        {"$project": {
+            "_id": 0, "email": 1, "phone": 1, "name": 1,
+            "schedule_date": 1, "job_role": 1, "job_title": 1,
+            "_normalized_job_role": 1, "result_status": 1,
+            "otp_verified": 1,
+        }},
+        {"$unionWith": {
+            "coll": "registered_candidates",
+            "pipeline": [
+                {"$match": match},
+                {"$project": {
+                    "_id": 0, "email": 1, "phone": 1, "name": 1,
+                    "schedule_date": 1, "job_role": 1, "job_title": 1,
+                    "_normalized_job_role": 1, "result_status": 1,
+                    "otp_verified": 1,
+                }},
+            ],
+        }},
+        # Dedupe key: prefer email when present, else phone digits. Group
+        # picks the most-recent schedule_date entry per identity so the
+        # row reflects the latest interview slot.
+        {"$addFields": {
+            "_dedupe_key": {
+                "$let": {
+                    "vars": {
+                        "em": {"$toLower": {"$ifNull": ["$email", ""]}},
+                        "ph": {"$ifNull": ["$phone", ""]},
+                    },
+                    "in": {"$cond": [{"$ne": ["$$em", ""]}, "$$em", "$$ph"]},
+                },
+            },
+        }},
+        {"$sort": {"schedule_date": -1}},
+        {"$group": {"_id": "$_dedupe_key", "doc": {"$first": "$$ROOT"}}},
+        {"$replaceRoot": {"newRoot": "$doc"}},
+    ]
+
+    # Count total unique rows across both collections.
+    count_docs = await _db.pipeline_data.aggregate(
+        union_pipeline + [{"$count": "n"}], allowDiskUse=True
+    ).to_list(None)
+    total = (count_docs[0]["n"] if count_docs else 0)
 
     skip = (page - 1) * limit
-    pipeline = [
-        {"$match": match},
+    page_pipeline = union_pipeline + [
         {"$sort": _build_sort(sort_by, sort_dir, allowed={
             "name": "name", "email": "email", "phone": "phone",
             "schedule_date": "schedule_date",
@@ -2749,12 +2797,10 @@ async def get_attended_for_scores(
         {"$skip": skip},
         {"$limit": limit},
         {"$project": {
-            "_id": 0, "email": 1, "phone": 1, "name": 1,
-            "schedule_date": 1, "job_role": 1, "job_title": 1,
-            "result_status": 1,
+            "_id": 0, "_dedupe_key": 0,
         }},
     ]
-    docs = await src.aggregate(pipeline, allowDiskUse=False).to_list(None)
+    docs = await _db.pipeline_data.aggregate(page_pipeline, allowDiskUse=True).to_list(None)
 
     # Page-scoped status overrides
     page_emails = [(d.get("email") or "").strip().lower() for d in docs if d.get("email")]

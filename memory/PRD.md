@@ -1,3 +1,127 @@
+## iter126 — Three P0 Production Bug Fixes (Feb 16, 2026)
+
+User reported (Message 577) three critical bugs after iter125f shipped. All
+three are now fixed and covered by `tests/test_iter126_three_p0_bugs.py`
+(7/7 passing). All iter125 regression suites still green (16/16).
+
+### Bug A — Re-registration MongoDB Conflict on `scores_reset_at`
+**Symptom**: Tester re-registration raised
+`Updating the path 'scores_reset_at' would create a conflict at
+'scores_reset_at'` → reset silently failed → old rounds/scores persisted.
+
+**Root cause** (`bb_modules.py::_clear_applicant_round_state`): the
+dynamic round-field scan added any doc key containing "score" to the
+`$unset` set. `scores_reset_at` matched the heuristic AND was also
+written by the helper's `$set` block. The conflict-prevention strip
+(`unset_combined -= set(_APPLICANT_UPDATES_RESET_TO_EMPTY.keys())`) only
+subtracted the static reset-to-empty bucket — NOT the additional keys
+the helper adds dynamically (`scores_reset_at`, `updated_at`, `name`,
+`phone`, `job_role`).
+
+**Fix**: reordered the helper to build `set_doc` FIRST, then strip
+`unset_combined -= set(set_doc.keys())` (subtracts EVERY field that will
+be `$set`). Also strips `_APPLICANT_UPDATES_PRESERVE` so we never $unset
+the identity/`_id` keys. The conflict can no longer occur regardless of
+which round names exist in `bb_rounds`.
+
+### Bug B — Phantom Daily "Final Reject" WhatsApp to Tester
+**Symptom**: Tester `rishi.nayak@blubridge.com` / `9443109903` received
+an auto-dispatched "Final Reject" WhatsApp + Email every day around
+20:00 IST (configured `REJECTION_DISPATCH_HOUR=20`).
+
+**Root cause** (`bg_workers.py::_worker_import_rejection_mailer`):
+1. Score Import flows mark the tester `bb_applicant_updates` row as
+   `status='Rejected'`.
+2. Tester re-registration helper resets `rejection_sent: False` so the
+   row re-enters the worker's filter on every cycle.
+3. Worker has no exclusion for `bb_test_credentials` recipients —
+   testers must opt-in via Manual Alerts, but the auto-dispatcher
+   ignored that boundary.
+
+**Fix**: at the start of each tick, the worker loads tester
+emails+phones from `bb_test_credentials` (normalized: lowercase email,
+last-10-digits phone). Both Source A (`bb_applicant_updates`) and
+Source B (`bb_registrations`) loops check each candidate against this
+set; matches are quarantined with
+`rejection_auto_skipped_tester=True`, `rejection_notified=True`, so the
+row stops matching the filter on subsequent ticks and no message is
+dispatched. Pre-quarantined the existing tester row in production data
+to clear the immediate phantom risk. New `[RejectSkip:A:TESTER]` /
+`[RejectSkip:B:TESTER]` log lines + `skipped_tester` count in the
+BATCH_DONE summary provide audit visibility.
+
+### Bug C — "Update Applicants Scores" Date Filter Dropped Records
+**Symptom**: Records visible in a narrow date range disappeared when
+the user widened the range — exact same asymmetry pattern as the
+iter125e chip-baseline bug, but on a different endpoint.
+
+**Root cause** (`bb_modules.py::get_attended_for_scores`): the endpoint
+queried `pipeline_data` first, fell back to `registered_candidates`
+ONLY when the pipeline_data count was zero. A wider date range produced
+at least one pipeline_data hit → `src` locked to pipeline_data → every
+rc-only candidate within that range was silently dropped from the
+table.
+
+**Fix**: replaced the src-fallback with `$unionWith` (pipeline_data ∪
+registered_candidates) followed by `$group` on a dedupe key
+(lowercased email, fallback to phone). The unioned aggregation sorts,
+counts, paginates, and projects the same way the old single-collection
+query did — but now BOTH collections contribute regardless of date
+range. Same iter125e pattern applied symmetrically. No new index
+required; aggregation runs with `allowDiskUse=True` to scale on
+production-sized data.
+
+### Verification
+- `tests/test_iter126_three_p0_bugs.py` — 7/7 PASS:
+  * `test_clear_applicant_round_state_no_mongo_conflict` — functional
+    seed of an existing `scores_reset_at` + dynamic round field +
+    isImported flag → reset succeeds, all wiped, no exception.
+  * `test_clear_applicant_round_state_unset_excludes_set_keys` —
+    source-code guard for `unset_combined -= set(set_doc.keys())`.
+  * `test_rejection_worker_skips_tester_credentials` — source-code
+    guard for `bb_test_credentials` + `RejectSkip:A:TESTER` /
+    `RejectSkip:B:TESTER` log lines in both source loops.
+  * `test_rejection_filter_excludes_pre_quarantined_tester` —
+    behavioral check on live data: `rishi.nayak@blubridge.com` no
+    longer matches the worker filter after pre-quarantine.
+  * `test_attended_for_scores_unions_both_collections` — source-code
+    guard for `$unionWith` + `_dedupe_key` + removal of the old
+    `src = _db.registered_candidates` fallback pattern.
+  * `test_attended_for_scores_includes_rc_only_row` — functional seed
+    of one pd-only + one rc-only candidate on the same date → both
+    surface in the endpoint response.
+  * `test_attended_for_scores_no_duplicate_when_both_collections_have_same_email`
+    — dedupe guarantee: same email in both collections yields ONE row.
+- All 16 iter125d/e/f tests still green — zero regression.
+
+### Production-safety
+- ✅ Tester row pre-quarantined in production data; daily phantom stops
+  immediately on next worker tick.
+- ✅ Zero non-test rows touched in test fixtures (all tagged
+  `_iter126_test=True`, deleted in `finally`).
+- ✅ Backward-compatible: endpoint response schema identical
+  (`{data, total, page, limit, totalPages, available_rounds}`); old
+  fields like `score_records`, `round_wise_scores`, `latest_*`,
+  `total_score` preserved.
+- ✅ Aggregation runs with `allowDiskUse=True` so it scales on
+  production-sized data without index changes.
+
+### Files modified
+- `/app/backend/bb_modules.py`
+  * `_clear_applicant_round_state` — reordered + subtract `set_doc.keys()`
+  * `get_attended_for_scores` — `$unionWith` + dedupe instead of
+    src-fallback
+- `/app/backend/bg_workers.py`
+  * `_worker_import_rejection_mailer` — tester-credential exclusion in
+    both Source A and Source B loops + BATCH_DONE counter
+
+### Files added
+- `/app/backend/tests/test_iter126_three_p0_bugs.py` (7 tests)
+
+---
+
+
+
 ## iter125f — Centralized Job Role dropdown across Missing/View/Attended (Feb 15, 2026)
 
 ### Issue 1 — Missing Applicants page lacked a Job Role filter
