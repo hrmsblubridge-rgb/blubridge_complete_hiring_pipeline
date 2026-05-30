@@ -841,29 +841,46 @@ async def _sync_job_titles_master():
       [JobRoleSync] INSERT job_titles_master normalized="<norm>"
       [JobRoleSync] INSERT bb_job_roles name="<raw>"
       [JobRoleSync] SUMMARY scanned=<N> jtm_inserts=<X> bb_inserts=<Y>
+
+    iter127 — Coverage extended:
+      * Also scans `_normalized_job_role` (the resolved canonical value
+        shown in Analytics) — previously omitted, so canonical roles like
+        "AI & ML Engineer" derived from raw "AI And ML Engineer - C++ or
+        Java Developer" never made it into the catalog.
+      * Also scans `registered_candidates` — covers the college-drive
+        intake that bypasses pipeline_data/naukri_applies.
+      * Eliminates the gap where analytics shows a role but Job Roles /
+        Job Role dropdown / Unmapped Job Keywords don't.
     """
     sources = []
-    # Naukri uploads → job_title
-    naukri_titles = await db.naukri_applies.aggregate(
-        [{"$match": {"job_title": {"$nin": [None, ""]}}},
-         {"$group": {"_id": "$job_title"}}]
-    ).to_list(None)
-    for r in naukri_titles:
-        sources.append((r["_id"], "naukri"))
-    # HR Pipeline uploads → job_role (pipeline_data uses `job_role`, with
-    # legacy `job_title` as fallback)
-    pipeline_roles = await db.pipeline_data.aggregate(
-        [{"$match": {"job_role": {"$nin": [None, ""]}}},
-         {"$group": {"_id": "$job_role"}}]
-    ).to_list(None)
-    for r in pipeline_roles:
-        sources.append((r["_id"], "pipeline"))
-    pipeline_legacy = await db.pipeline_data.aggregate(
-        [{"$match": {"job_role": {"$in": [None, ""]}, "job_title": {"$nin": [None, ""]}}},
-         {"$group": {"_id": "$job_title"}}]
-    ).to_list(None)
-    for r in pipeline_legacy:
-        sources.append((r["_id"], "pipeline_legacy"))
+    # iter127 — Scan ALL fields that can surface a role in any user-facing
+    # view. Order matters only for the source tag in logs; the dedupe key
+    # (normalized title) collapses duplicates across sources.
+    scan_targets = [
+        # (collection, field, source_tag)
+        (db.naukri_applies, "job_title", "naukri"),
+        (db.naukri_applies, "_normalized_job_role", "naukri_canonical"),
+        (db.pipeline_data, "job_role", "pipeline"),
+        (db.pipeline_data, "job_title", "pipeline_legacy"),
+        (db.pipeline_data, "_normalized_job_role", "pipeline_canonical"),
+        (db.registered_candidates, "job_role", "registered"),
+        (db.registered_candidates, "job_title", "registered_legacy"),
+        (db.registered_candidates, "_normalized_job_role", "registered_canonical"),
+    ]
+    for coll, field, tag in scan_targets:
+        try:
+            cursor = coll.aggregate([
+                {"$match": {field: {"$nin": [None, ""]}}},
+                {"$group": {"_id": f"${field}"}},
+            ])
+            async for r in cursor:
+                v = r.get("_id")
+                if v:
+                    sources.append((v, tag))
+        except Exception as _scan_err:
+            logger.warning(
+                f"[JobRoleSync] scan skipped coll={coll.name} field={field}: {_scan_err!r}"
+            )
 
     seen = set()
     scanned = 0
@@ -873,6 +890,9 @@ async def _sync_job_titles_master():
         scanned += 1
         raw = str(raw_value or "").strip()
         if not raw:
+            continue
+        # iter127 — Skip the literal "Unknown" bucket; it's not a real role.
+        if raw.lower() == "unknown":
             continue
         normalized = _normalize_text_for_matching(raw)
         if not normalized or normalized in seen:
@@ -924,6 +944,32 @@ async def _sync_job_titles_master():
         f"[JobRoleSync] SUMMARY scanned={scanned} unique={len(seen)} "
         f"jtm_inserts={jtm_inserts} bb_inserts={bb_inserts}"
     )
+    return {"scanned": scanned, "unique": len(seen), "jtm_inserts": jtm_inserts, "bb_inserts": bb_inserts}
+
+
+# iter127 — Periodic safety-net sync. Runs `_sync_job_titles_master` every
+# `JOB_ROLE_SYNC_INTERVAL_SECONDS` seconds (default 900 = 15 min) so the
+# catalog converges even if a post-upload background task silently dies
+# (Render redeploy mid-task, OOM kill, unhandled exception in the
+# `_bg_post_upload_*` task wrapper). The sync function itself is
+# idempotent (dedupes via case-insensitive lookups + the unique index on
+# job_titles_master.normalized_job_title), so re-running it is harmless
+# and cheap when nothing changed.
+async def _periodic_job_titles_sync():
+    interval = int(os.environ.get("JOB_ROLE_SYNC_INTERVAL_SECONDS", "900"))
+    if interval < 60:
+        interval = 60  # floor at 1 minute
+    logger.info(f"[JobRoleSync] periodic safety-net started interval={interval}s")
+    # First run is immediate (covers the case where the startup one-shot
+    # was scheduled but hasn't run yet); after that, wait `interval`.
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            await _sync_job_titles_master()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[JobRoleSync] periodic tick failed: {e!r}")
 
 
 async def _get_job_keyword_mappings() -> list:
@@ -4140,6 +4186,21 @@ async def startup_event():
     # Unknown/null `_normalized_job_role` using current keyword mappings.
     # Idempotent via `bb_meta` flag so reboots don't repeat the work.
     asyncio.create_task(_backfill_unknown_classifications_once())
+
+    # iter127 — One-shot historical sync of every analytics-visible role
+    # into `bb_job_roles` + `job_titles_master`. Catches the gap where a
+    # canonical resolved role (e.g. "AI & ML Engineer" derived from a raw
+    # upload title) appears in Summary Statistics but never made it into
+    # the catalog (and therefore the Job Roles page / dropdowns / Unmapped
+    # Keywords). Runs only once per process boot; subsequent uploads use
+    # the upgraded `_sync_job_titles_master` directly + the periodic
+    # safety net below.
+    asyncio.create_task(_sync_job_titles_master())
+
+    # iter127 — Periodic safety-net sync. Even if a post-upload background
+    # task dies (Render restart, worker exception), the catalog converges
+    # within minutes because this loop re-runs the sync every 15 minutes.
+    asyncio.create_task(_periodic_job_titles_sync())
 
     # iter110 — One-shot backfill: reclassify rows whose `_college_status`
     # was set under the old binary scheme ("NIRF - #N" or "Non NIRF") and

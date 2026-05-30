@@ -1,3 +1,127 @@
+## iter127 — Dynamic Job-Role Auto-Registration Robustness (Feb 16, 2026)
+
+User report: new job roles were correctly DETECTED (appeared in
+Analytics → View Applicants Summary Statistics) but were NOT being
+inserted into `bb_job_roles` / `job_titles_master`, breaking the Job
+Roles page, dropdown filters, and Unmapped Job Keywords section.
+
+### Root cause — TWO independent gaps
+
+**Gap A — Coverage**: `_sync_job_titles_master` (`server.py`) scanned
+ONLY the raw `job_role` / `job_title` fields. Canonical resolved values
+that live on `_normalized_job_role` (e.g. "AI & ML Engineer" derived
+from a raw upload title of "AI And ML Engineer - C++ or Java
+Developer") were invisible to the sync. Analytics groups by
+`_normalized_job_role` first, so the canonical surfaced in Summary
+Statistics but never made it to the catalog. `registered_candidates`
+was also never scanned, so college-drive intake roles were missing.
+
+**Gap B — Trigger reliability**: post-upload, the sync ran as a
+fire-and-forget background task (`asyncio.create_task`). When the task
+died mid-execution — Render redeploy, OOM kill, unhandled exception
+inside the wrapper — the catalog stayed out of sync until the next
+manual reprocess. There was no periodic safety net.
+
+### Fix
+
+**1. `_sync_job_titles_master` — coverage extended**
+
+`server.py` rewrote the scan loop to iterate over a table of
+`(collection, field, source_tag)` tuples:
+
+```python
+scan_targets = [
+    (db.naukri_applies, "job_title", "naukri"),
+    (db.naukri_applies, "_normalized_job_role", "naukri_canonical"),
+    (db.pipeline_data, "job_role", "pipeline"),
+    (db.pipeline_data, "job_title", "pipeline_legacy"),
+    (db.pipeline_data, "_normalized_job_role", "pipeline_canonical"),
+    (db.registered_candidates, "job_role", "registered"),
+    (db.registered_candidates, "job_title", "registered_legacy"),
+    (db.registered_candidates, "_normalized_job_role", "registered_canonical"),
+]
+```
+
+Also explicitly skips the literal "Unknown" bucket so it never gets
+cataloged. Function now returns a summary dict
+(`{scanned, unique, jtm_inserts, bb_inserts}`) for downstream
+observability (used in tests + the periodic worker's logs).
+
+**2. Periodic safety-net worker `_periodic_job_titles_sync`**
+
+Launched at startup via `asyncio.create_task`. Re-runs the sync every
+`JOB_ROLE_SYNC_INTERVAL_SECONDS` env var (default 900 = 15 min). Sync
+is idempotent (case-insensitive `bb_job_roles.name` lookup + unique
+index on `job_titles_master.normalized_job_title`), so repeated runs
+when nothing changed are cheap and harmless. Wraps each tick in
+`try/except` so a single transient Mongo blip never kills the loop.
+
+**3. One-shot historical backfill at startup**
+
+`startup_event` now schedules `_sync_job_titles_master()` directly on
+boot — catches any roles that accumulated while the periodic worker
+was offline (e.g. between deploys, before iter127 shipped).
+
+### Verification
+
+- **Before fix**: 63 analytics-visible roles → 1 missing from
+  `bb_job_roles` ('Social Media Growth Manager  (AI / Deep Tech)'),
+  3 missing from `job_titles_master`.
+- **After fix**: 63 analytics-visible roles → **0 missing from
+  bb_job_roles**, all canonical resolved values now cataloged in
+  `job_titles_master` (count grew 78 → 111 — captured every
+  `_normalized_job_role` resolution that never had a raw counterpart).
+
+`tests/test_iter127_job_role_auto_registration.py` — 10/10 PASS:
+- Source-code guards: scans `_normalized_job_role` across all 3
+  collections, scans `registered_candidates`, skips literal "Unknown",
+  periodic worker exists, startup schedules both periodic + one-shot.
+- Functional behaviour:
+  * Seed pipeline_data row with DIFFERENT raw `job_role` vs canonical
+    `_normalized_job_role` → both get cataloged.
+  * Seed registered_candidates row with a brand-new role → cataloged
+    in BOTH `bb_job_roles` and `job_titles_master`.
+  * "Unknown" seed row → NOT cataloged.
+  * Two consecutive sync calls → no duplicates (idempotency).
+  * End-to-end production data check: zero analytics-visible roles
+    orphaned from `bb_job_roles`.
+- All 24 iter125 + iter126 regression tests still green.
+
+### Files modified
+- `/app/backend/server.py`
+  * `_sync_job_titles_master` — coverage expanded to all 8 source
+    (collection, field) pairs incl. `_normalized_job_role`; returns
+    summary dict; skips literal "Unknown"
+  * New `_periodic_job_titles_sync` coroutine
+  * `startup_event` schedules one-shot sync + periodic safety-net
+
+### Files added
+- `/app/backend/tests/test_iter127_job_role_auto_registration.py` (10 tests)
+
+### Production-safety
+- ✅ Pure read-on-write architecture — no production rows modified.
+- ✅ Sync uses case-insensitive lookups + unique index dedupe; safe
+  against races and idempotent on repeated runs.
+- ✅ Periodic worker wraps each tick in try/except — a Mongo blip
+  never crashes the loop.
+- ✅ Interval is env-configurable (`JOB_ROLE_SYNC_INTERVAL_SECONDS`)
+  with a 60s floor so a misconfiguration can't spam the DB.
+- ✅ Test fixtures tagged `_iter127_test=True`, self-cleaned in
+  `finally` blocks regardless of pass/fail.
+- ✅ Sync function still returns the same logs (`[JobRoleSync]
+  DETECTED ... SUMMARY ...`) — observability unchanged for ops.
+
+### Future-proofing
+- Any new collection that stores a role can be added by appending a
+  single tuple to `scan_targets`.
+- Any new field (e.g. `_alternative_role`) can be added the same way.
+- Adjust the safety-net cadence per environment via
+  `JOB_ROLE_SYNC_INTERVAL_SECONDS` without code change.
+
+---
+
+
+
 ## iter126b — Re-registration also wipes score_sheet (Feb 16, 2026)
 User re-registered as "May 29 Final Rishi" using tester credentials, but
 the Update Applicants Scores modal still showed the OLD round scores
