@@ -748,31 +748,25 @@ async def _worker_import_rejection_mailer():
             sent = 0
             skipped_no_name = 0
             skipped_send_failed = 0
-            skipped_tester = 0
+            skipped_same_cycle = 0
 
-            # iter126 — Tester-credential exclusion. Score Imports repeatedly
-            # mark the tester row (rishi.nayak@blubridge.com / 9443109903 etc.)
-            # as status='Rejected'; with `rejection_sent` cleared on every
-            # re-registration reset, this fired a phantom "Final Reject"
-            # WhatsApp + Email DAILY at REJECTION_DISPATCH_HOUR. Testers must
-            # opt-in via Manual Applicant Alerts; auto-dispatch is suppressed.
-            import re as _re
-            tester_emails: set = set()
-            tester_phones: set = set()
-            try:
-                async for _tc in _db.bb_test_credentials.find({}, {"_id": 0, "email": 1, "phone": 1}):
-                    _em = (_tc.get("email") or "").strip().lower()
-                    _ph_raw = _re.sub(r"\D", "", str(_tc.get("phone") or ""))
-                    if _em:
-                        tester_emails.add(_em)
-                    if _ph_raw:
-                        tester_phones.add(_ph_raw[-10:])
-            except Exception as _tc_err:
-                _logger.warning(f"[RejectScheduler:TESTER_LOAD_FAIL] {_tc_err!r}")
-            _logger.info(
-                f"[RejectScheduler:TESTERS] emails={sorted(tester_emails)} phones={sorted(tester_phones)} "
-                "(these recipients are EXCLUDED from auto-rejection)"
-            )
+            # iter128 — Cycle-token idempotency (replaces iter126 blanket
+            # tester exclusion). Each dispatch is tagged with a
+            # `rejection_cycle_token` derived from the row's most-recent
+            # cycle marker (`scores_reset_at` || `imported_at` ||
+            # `updated_at`). Pre-dispatch, the worker compares the row's
+            # current cycle_token to the stored `rejection_sent_for_cycle`.
+            #
+            #   * token matches → row was ALREADY rejected for THIS
+            #     evaluation cycle → skip silently (no phantom re-fires
+            #     even if `rejection_sent` gets reset by some other code
+            #     path mid-cycle).
+            #   * token differs (or absent) → fresh cycle (e.g. tester
+            #     re-registered + re-imported) → dispatch is allowed and
+            #     persists the new token after success.
+            #
+            # Works uniformly for testers and real applicants — no blanket
+            # blacklists, no per-recipient overrides needed.
 
             # ---- Source A: post-interview rejections (bb_applicant_updates) ----
             filter_a = {
@@ -788,27 +782,18 @@ async def _worker_import_rejection_mailer():
             async for doc in cursor_a:
                 email = (doc.get("email") or "").strip()
                 phone = (doc.get("phone") or "").strip()
-                # iter126 — Tester exclusion (see TESTERS log line above).
-                _em_norm = email.lower()
-                _ph_norm = _re.sub(r"\D", "", phone)[-10:] if phone else ""
-                if _em_norm in tester_emails or (_ph_norm and _ph_norm in tester_phones):
-                    skipped_tester += 1
-                    # Mark the row so it stops matching the filter on subsequent
-                    # ticks — testers must opt-in via Manual Alerts, this is a
-                    # terminal skip not a transient one.
-                    await _db.bb_applicant_updates.update_one(
-                        {"_id": doc["_id"]},
-                        {"$set": {
-                            "rejection_sent": False,
-                            "rejection_auto_skipped_tester": True,
-                            "rejection_auto_skipped_at": now_local.isoformat(),
-                            "rejection_notified": True,
-                            "rejection_notified_at": now_local.isoformat(),
-                        }},
-                    )
+                # iter128 — Cycle-token check (see header above).
+                cycle_token_a = (
+                    str(doc.get("scores_reset_at") or "")
+                    or str(doc.get("imported_at") or "")
+                    or str(doc.get("updated_at") or "")
+                )
+                prior_token_a = str(doc.get("rejection_sent_for_cycle") or "")
+                if cycle_token_a and prior_token_a and cycle_token_a == prior_token_a:
+                    skipped_same_cycle += 1
                     _logger.info(
-                        f"[RejectSkip:A:TESTER] email={email!r} phone={phone!r} "
-                        f"reason=bb_test_credentials_match doc_id={doc.get('_id')}"
+                        f"[RejectSkip:A:SAME_CYCLE] email={email!r} phone={phone!r} "
+                        f"cycle_token={cycle_token_a!r} — already dispatched for this cycle"
                     )
                     continue
                 # iter115 — Canonical-latest lookup for Source A (mirrors the
@@ -883,6 +868,10 @@ async def _worker_import_rejection_mailer():
                             "rejection_notified": True,
                             "rejection_notified_at": now_local.isoformat(),
                             "rejection_send_ok": bool(ok),
+                            # iter128 — Cycle token so a same-cycle re-fire
+                            # is impossible even if `rejection_sent` gets
+                            # cleared mid-cycle by some other code path.
+                            "rejection_sent_for_cycle": cycle_token_a,
                         }},
                     )
                     sent += 1
@@ -903,23 +892,19 @@ async def _worker_import_rejection_mailer():
             async for doc in cursor_b:
                 email = (doc.get("email") or "").strip()
                 phone = (doc.get("phone") or "").strip()
-                # iter126 — Tester exclusion (see TESTERS log line above).
-                _em_norm = email.lower()
-                _ph_norm = _re.sub(r"\D", "", phone)[-10:] if phone else ""
-                if _em_norm in tester_emails or (_ph_norm and _ph_norm in tester_phones):
-                    skipped_tester += 1
-                    await _db.bb_registrations.update_one(
-                        {"_id": doc["_id"]},
-                        {"$set": {
-                            "rejection_sent": False,
-                            "rejection_pending": False,
-                            "rejection_auto_skipped_tester": True,
-                            "rejection_auto_skipped_at": now_local.isoformat(),
-                        }},
-                    )
+                # iter128 — Cycle-token check (Source B uses
+                # `registered_at` || `updated_at` as the cycle marker;
+                # bb_registrations doesn't have scores_reset_at).
+                cycle_token_b = (
+                    str(doc.get("registered_at") or "")
+                    or str(doc.get("updated_at") or "")
+                )
+                prior_token_b = str(doc.get("rejection_sent_for_cycle") or "")
+                if cycle_token_b and prior_token_b and cycle_token_b == prior_token_b:
+                    skipped_same_cycle += 1
                     _logger.info(
-                        f"[RejectSkip:B:TESTER] email={email!r} phone={phone!r} "
-                        f"reason=bb_test_credentials_match doc_id={doc.get('_id')}"
+                        f"[RejectSkip:B:SAME_CYCLE] email={email!r} phone={phone!r} "
+                        f"cycle_token={cycle_token_b!r} — already dispatched for this cycle"
                     )
                     continue
                 # iter113 — Same canonical lookup as Source A: prefer the
@@ -975,6 +960,8 @@ async def _worker_import_rejection_mailer():
                             "rejection_pending": False,
                             "reject_notified": bool(ok),
                             "reject_notified_at": now_local.isoformat() if ok else None,
+                            # iter128 — Cycle token (see Source A comment).
+                            "rejection_sent_for_cycle": cycle_token_b,
                         }},
                     )
                     sent += 1
@@ -986,14 +973,14 @@ async def _worker_import_rejection_mailer():
             _logger.info(
                 f"[RejectScheduler] BATCH_DONE sent={sent} "
                 f"skipped_missing_field={skipped_no_name} send_failed={skipped_send_failed} "
-                f"skipped_tester={skipped_tester}"
+                f"skipped_same_cycle={skipped_same_cycle}"
             )
 
         except Exception as e:
             _logger.info(
                 f"[RejectScheduler] BATCH_DONE sent={sent} "
                 f"skipped_missing_field={skipped_no_name} send_failed={skipped_send_failed} "
-                f"skipped_tester={skipped_tester}"
+                f"skipped_same_cycle={skipped_same_cycle}"
             )
 
         except Exception as e:

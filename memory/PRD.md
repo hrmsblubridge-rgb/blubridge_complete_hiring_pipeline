@@ -1,3 +1,93 @@
+## iter128 — Cycle-Token Idempotency for Rejection Dispatcher (Feb 16, 2026)
+
+### Context
+User pushed back on iter126's tester-credential blanket exclusion:
+they wanted **no phantom messages** AND **legitimate rejections to test
+recipients to still fire**. The iter126 fix achieved the first but
+broke the second. iter128 replaces the blanket block with a sharper,
+per-cycle idempotency mechanism that applies uniformly to all
+recipients (no tester-specific logic).
+
+### Mechanism
+Each rejection dispatch is now tagged with a `rejection_sent_for_cycle`
+token derived from the row's cycle marker:
+
+| Source | Cycle-marker chain |
+|---|---|
+| A (bb_applicant_updates) | `scores_reset_at` → `imported_at` → `updated_at` |
+| B (bb_registrations) | `registered_at` → `updated_at` |
+
+**Pre-dispatch**: worker compares current cycle_token to
+`rejection_sent_for_cycle`. Equal → skip silently (already sent for
+this cycle). Different / absent → fresh cycle → dispatch allowed.
+
+**Post-dispatch**: writes `rejection_sent_for_cycle = <current_token>`
+so the same cycle can never re-fire even if `rejection_sent` gets
+cleared by some other code path.
+
+### Why this works for both phantoms AND legitimate retries
+- **Phantom prevention**: even when re-registration clears
+  `rejection_sent=False` (correct behavior — new cycle should be able
+  to send), the dispatcher still skips if `cycle_token` matches the
+  previous one. So if `rejection_sent` is cleared accidentally
+  (e.g. some helper resets it without advancing the cycle marker),
+  no re-fire occurs.
+- **Legitimate testing**: each tester re-registration advances
+  `scores_reset_at` → new cycle_token → dispatcher fires once
+  per cycle as designed. Tester gets the same treatment as a real
+  applicant.
+- **First-ever dispatch**: row has no `rejection_sent_for_cycle` →
+  guard passes → first dispatch fires.
+
+### Live production verification
+- **20:31 IST**: dispatcher tick fired for `rishi.nayak@blubridge.com`
+  with the un-quarantined row → `[RejectSend:A] DONE ok=True`
+  (WhatsApp + Email both succeeded via AiSensy + Resend).
+- Row state after dispatch:
+  ```
+  rejection_sent: True
+  rejection_sent_at: 2026-05-30T20:31:07+05:30
+  rejection_sent_for_cycle: 2026-05-30T07:20:11.309974+00:00
+  rejection_send_ok: True
+  ```
+- Next tick within the same 20:00–23:59 IST window: row no longer
+  matches filter (`rejection_sent: True`). Tomorrow morning's reset of
+  the row (if re-registered) advances `scores_reset_at` → new cycle →
+  legitimate fresh dispatch.
+
+### Files modified
+- `/app/backend/bg_workers.py::_worker_import_rejection_mailer`
+  * Removed iter126 `bb_test_credentials` pre-loop load + per-doc
+    tester-skip blocks (both Source A and Source B)
+  * Added cycle_token computation + `RejectSkip:A:SAME_CYCLE` /
+    `RejectSkip:B:SAME_CYCLE` pre-dispatch checks
+  * Persistence on success now writes `rejection_sent_for_cycle`
+  * BATCH_DONE log shows `skipped_same_cycle` counter
+
+### Files added
+- `/app/backend/tests/test_iter128_rejection_cycle_token.py` (7 tests)
+
+### Files updated
+- `/app/backend/tests/test_iter126_three_p0_bugs.py` — two iter126
+  assertions converted to deprecation tombstones (assert the obsolete
+  blanket block is GONE, assert the tester row is un-quarantined)
+
+### Production-safety
+- ✅ No blanket blacklists; testers and real applicants follow the
+  same single code path.
+- ✅ Backward-compatible: rows with no `rejection_sent_for_cycle`
+  field (every pre-iter128 row) pass the guard naturally on first
+  dispatch and persist the token after.
+- ✅ Existing `rejection_sent: True` idempotency is preserved as a
+  primary guard; cycle-token is a stricter secondary guard for
+  defense-in-depth.
+- ✅ The production tester row was un-quarantined (iter126 flags
+  cleared) and tonight's legitimate dispatch fired successfully.
+
+---
+
+
+
 ## iter127 — Dynamic Job-Role Auto-Registration Robustness (Feb 16, 2026)
 
 User report: new job roles were correctly DETECTED (appeared in

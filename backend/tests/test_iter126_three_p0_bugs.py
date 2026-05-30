@@ -162,39 +162,33 @@ async def test_clear_applicant_round_state_unset_excludes_set_keys(db):
 
 @pytest.mark.asyncio
 async def test_rejection_worker_skips_tester_credentials(db):
-    """Source-code guard + behavioral check that the rejection mailer
-    worker skips bb_test_credentials matches."""
+    """SUPERSEDED by iter128 — the iter126 blanket tester block was too
+    broad (blocked legitimate rejections to test recipients). Replaced
+    with cycle-token idempotency in `test_iter128_rejection_cycle_token.py`.
+    Kept here as a deprecation tombstone."""
     import inspect
     import bg_workers
-
     src = inspect.getsource(bg_workers._worker_import_rejection_mailer)
-    # Must load tester emails/phones at the top of each tick.
-    assert "bb_test_credentials" in src
-    assert "tester_emails" in src
-    assert "tester_phones" in src
-    # Must perform the per-doc skip in BOTH sources.
-    assert "RejectSkip:A:TESTER" in src
-    assert "RejectSkip:B:TESTER" in src
+    # Must NOT contain the obsolete iter126 blanket exclusion.
+    assert "RejectSkip:A:TESTER" not in src
+    assert "RejectSkip:B:TESTER" not in src
 
 
 @pytest.mark.asyncio
 async def test_rejection_filter_excludes_pre_quarantined_tester(db):
-    """Once a tester row is quarantined (rejection_notified=True), it must
-    no longer match the worker's filter — preventing the daily phantom."""
-    # The production tester row was pre-quarantined as part of the iter126
-    # fix. Assert it does NOT match the worker filter.
-    filter_a = {
-        "status": "Rejected",
-        "rejection_sent": {"$ne": True},
-        "rejection_notified": {"$ne": True},
-        "import_rejection_notified": {"$ne": True},
-        "updated_at": {"$gte": "2026-05-11T18:30:00+00:00"},
-    }
-    cursor = db.bb_applicant_updates.find(filter_a, {"email": 1, "_id": 0})
-    eligible = [d.get("email") async for d in cursor]
-    # No tester email should leak through.
-    assert "rishi.nayak@blubridge.com" not in eligible, (
-        f"Tester email still eligible for auto-rejection: {eligible}"
+    """SUPERSEDED by iter128 — tester rows are no longer hard-quarantined.
+    Idempotency is now cycle-token based, so legitimate new-cycle
+    rejections to testers fire correctly. The production tester row was
+    un-quarantined as part of iter128."""
+    doc = await db.bb_applicant_updates.find_one(
+        {"email": "rishi.nayak@blubridge.com"}
+    )
+    if doc is None:
+        pytest.skip("Tester row not in this environment")
+    # No longer asserting the row is filter-excluded; only that the
+    # iter126 quarantine flag is gone.
+    assert not doc.get("rejection_auto_skipped_tester"), (
+        "iter126 quarantine flag still present — un-quarantine incomplete"
     )
 
 
