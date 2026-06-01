@@ -62,7 +62,18 @@ export default function PublicJobView() {
                             </div>
                         </div>
                     )}
-                    {!loading && !error && jo && (
+                    {!loading && !error && jo && jo.inactive && (
+                        // iter130 — Professional "unavailable" notice for
+                        // deactivated openings (spec-mandated copy).
+                        <div className="bg-[#fffdf7] rounded-xl shadow-sm overflow-hidden" data-testid="public-job-inactive">
+                            <div className="bg-rose-700 h-3 rounded-t-xl"></div>
+                            <div className="p-8 text-center space-y-4">
+                                <h2 className="text-2xl font-bold text-gray-900" data-testid="public-job-inactive-title">{jo.title}</h2>
+                                <p className="text-sm text-gray-700 whitespace-pre-line leading-relaxed" data-testid="public-job-inactive-message">{jo.message}</p>
+                            </div>
+                        </div>
+                    )}
+                    {!loading && !error && jo && !jo.inactive && (
                         <div className="bg-[#fffdf7] rounded-xl shadow-sm overflow-hidden" data-testid="public-job-content">
                             <div className="bg-[#1a2332] h-3 rounded-t-xl"></div>
                             <div className="p-8 space-y-5">

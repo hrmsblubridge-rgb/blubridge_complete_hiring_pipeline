@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { ArrowLeft, Plus, PencilSimple, Trash, X, Link as LinkIcon, Copy } from '@phosphor-icons/react';
+import LifecycleControl, { StatusDot } from '../components/LifecycleControl';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -133,7 +134,10 @@ export default function HiringForms() {
                             <div key={f.id} className="bg-zinc-900 border border-zinc-800 p-5" data-testid={`form-${f.id}`}>
                                 <div className="flex items-start justify-between">
                                     <div>
-                                        <h3 className="font-medium">{f.name}</h3>
+                                        <div className="flex items-center gap-2">
+                                            <StatusDot status={f.status} testId={`form-${f.id}-status-dot`} />
+                                            <h3 className="font-medium">{f.name}</h3>
+                                        </div>
                                         <p className="text-xs text-zinc-500 mt-1">Type: {f.form_type_name} | Role: {f.job_role}</p>
                                         {f.conditions && Object.keys(f.conditions).length > 0 && (
                                             <div className="flex flex-wrap gap-2 mt-2">
@@ -147,6 +151,7 @@ export default function HiringForms() {
                                         )}
                                     </div>
                                     <div className="flex gap-2 shrink-0">
+                                        <LifecycleControl entity="hiring-forms" id={f.id} name={f.name} status={f.status} onChanged={fetchAll} testIdPrefix={`form-${f.id}-lifecycle`} />
                                         <a href={`/register/${f.slug || f.id}`} target="_blank" rel="noreferrer" data-testid={`link-${f.id}`} className="p-2 text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800" title="Open Registration Link"><LinkIcon size={16} /></a>
                                         <button
                                             onClick={() => {

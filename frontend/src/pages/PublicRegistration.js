@@ -94,6 +94,29 @@ export default function PublicRegistration() {
     if (loading) return <div className="min-h-screen bg-[#f3f1e9] flex items-center justify-center text-gray-500">Loading...</div>;
     if (error) return <div className="min-h-screen bg-[#f3f1e9] flex items-center justify-center text-red-500">{error}</div>;
 
+    // iter130 — Hiring form deactivated: render the professional
+    // "Applications Currently Closed" notice exactly as spec'd.
+    if (form?.inactive) {
+        return (
+            <div className="min-h-screen bg-[#f3f1e9] flex flex-col" data-testid="public-form-inactive-page">
+                <header className="bg-[#efede5] border-b border-gray-300 py-4 px-6 flex justify-center">
+                    <img src="/blubridge-logo.webp" alt="Blubridge" />
+                </header>
+                <div className="flex-1 flex items-start justify-center px-4 py-10">
+                    <div className="w-full max-w-2xl">
+                        <div className="bg-[#fffdf7] rounded-xl shadow-sm overflow-hidden" data-testid="public-form-inactive">
+                            <div className="bg-rose-700 h-3 rounded-t-xl"></div>
+                            <div className="p-8 text-center space-y-4">
+                                <h2 className="text-2xl font-bold text-gray-900" data-testid="public-form-inactive-title">{form.title}</h2>
+                                <p className="text-sm text-gray-700 whitespace-pre-line leading-relaxed" data-testid="public-form-inactive-message">{form.message}</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
     // Job Description Page
     if (step === 'jd' && form?.job_opening) {
         const jo = form.job_opening;

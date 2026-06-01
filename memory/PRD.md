@@ -1,3 +1,150 @@
+## iter130 — Activate / Deactivate Lifecycle (Feb 16, 2026)
+
+### Scope
+Adds full Activate / Deactivate lifecycle to three entities:
+`bb_job_roles`, `bb_job_openings`, `bb_hiring_forms`. Cascade-on-
+deactivate, NO-cascade-on-activate, fully idempotent migration on
+startup, public endpoints surface professional "unavailable" payloads
+when the entity is inactive.
+
+### Database fields added
+Three collections receive identical optional fields (added by
+idempotent startup migration `_ensure_status_indexes_and_backfill`):
+
+| Field              | Type   | Notes |
+|--------------------|--------|-------|
+| `status`           | string | "active" (default) \| "inactive" |
+| `deactivated_at`   | ISO    | UTC timestamp; null when active |
+| `deactivated_by`   | string | "manual" \| "job_role" \| "job_opening" |
+| `activated_at`     | ISO    | UTC timestamp; null when inactive |
+
+`status` index created on all 3 collections for fast filter queries.
+
+### API endpoints added
+```
+POST   /api/bb/job-roles/{role_id}/activate
+POST   /api/bb/job-roles/{role_id}/deactivate
+GET    /api/bb/job-roles/{role_id}/cascade-preview
+POST   /api/bb/job-openings/{opening_id}/activate
+POST   /api/bb/job-openings/{opening_id}/deactivate
+GET    /api/bb/job-openings/{opening_id}/cascade-preview
+POST   /api/bb/hiring-forms/{form_id}/activate
+POST   /api/bb/hiring-forms/{form_id}/deactivate
+```
+
+Auth: all admin endpoints require existing `_require_auth(request)`.
+Returns: `{success: true, status, cascade: {openings_affected,
+forms_affected}}`.
+
+### Cascade rules (per spec, validated by scenario tests)
+
+| Action                  | Effect                                              |
+|-------------------------|-----------------------------------------------------|
+| Deactivate Job Role     | role + every linked opening + every linked form → inactive (`deactivated_by="job_role"`) |
+| Reactivate Job Role     | role → active; openings + forms STAY inactive       |
+| Deactivate Job Opening  | opening + every linked form → inactive (`deactivated_by="job_opening"`) |
+| Reactivate Job Opening  | opening → active; forms STAY inactive               |
+| Deactivate Hiring Form  | form → inactive; role + opening UNCHANGED          |
+| Reactivate Hiring Form  | form → active; nothing else changes                |
+
+### Public endpoint behaviour
+- `GET /api/pub/job-opening/{id_or_slug}` — inactive opening returns
+  `{inactive: true, title: "Job Opening Unavailable", message: "..."}`
+  (HTTP 200, structured payload so the frontend can render the
+  professional notice rather than a generic 404).
+- `GET /api/pub/form/{id_or_slug}` — inactive form returns
+  `{inactive: true, title: "Applications Currently Closed",
+  message: "..."}`. Spec-mandated copy preserved verbatim.
+
+### Frontend changes
+New reusable component `/app/frontend/src/components/LifecycleControl.jsx`:
+- `<LifecycleControl entity="job-roles|job-openings|hiring-forms"
+  id name status onChanged />` — renders the square activate/deactivate
+  icon, opens a modal showing current status + (for roles & openings)
+  a LIVE cascade-preview warning fetched from
+  `/cascade-preview` ("This will also deactivate N opening(s) and
+  M form(s)"). Action button is red Deactivate / green Activate.
+- `<StatusDot status />` — pulsing green/red dot for the top-left of
+  each list row (uses `animate-pulse` + `box-shadow` for the glow).
+
+Wired into:
+- `pages/ManageJobRoles.js`
+- `pages/JobOpenings.js`
+- `pages/HiringForms.js`
+
+Public pages updated to render the new inactive notices:
+- `pages/PublicJobView.jsx` — new `inactive` branch
+- `pages/PublicRegistration.js` — new `inactive` branch
+
+### APPLICANT-PROTECTION CONTRACT (CRITICAL)
+The `status` flag is consulted ONLY by:
+1. The 8 admin lifecycle endpoints (above) — owners-only via
+   `_require_auth`.
+2. The 2 public-facing fetch endpoints — gate the FIRST step of a new
+   applicant's journey.
+
+It is **NEVER** consulted by any internal applicant-processing path:
+OTP verify, schedule, attended, score-import, registration completion,
+analytics, notifications, dispatcher workers — all are untouched.
+Already-registered, scheduled, attended, or pending applicants
+continue normally regardless of role/opening/form deactivation. Test
+Scenario 6 explicitly snapshots a seeded applicant's `pipeline_data` +
+`bb_applicant_updates` rows before/after a role deactivation and
+asserts byte-identical equality.
+
+### Validation — 10/10 backend tests pass
+`tests/test_iter130_activate_deactivate_lifecycle.py`:
+1. `test_migration_backfills_default_active` — idempotent backfill
+2. **Scenario 1**: deactivate role cascades to openings + forms
+3. **Scenario 2**: reactivate role does NOT cascade
+4. **Scenario 3**: deactivate opening cascades ONLY to forms
+5. **Scenario 4**: reactivate opening does NOT cascade
+6. **Scenario 5**: hiring form lifecycle is standalone
+7. **Scenario 6**: applicant data UNCHANGED by deactivation (critical)
+8. Public job opening returns spec-mandated inactive payload
+9. Public hiring form returns spec-mandated inactive payload
+10. Cascade preview counts ignore already-inactive rows
+
+All 48 tests across iter125-130 still green (zero regression).
+
+### Live production migration result
+`[Lifecycle:migration] backfilled status='active': {'bb_job_roles': 82,
+'bb_job_openings': 2, 'bb_hiring_forms': 1}` — all 85 existing rows
+defaulted to `active`; zero data corruption, zero applicant-row
+touches.
+
+### Files modified
+- `/app/backend/bb_modules.py` — lifecycle helpers, 8 endpoints,
+  list-endpoint `status` surface, public short-circuits, migration
+  function
+- `/app/backend/server.py` — `startup_event` schedules
+  `_ensure_status_indexes_and_backfill()`
+- `/app/frontend/src/pages/ManageJobRoles.js`
+- `/app/frontend/src/pages/JobOpenings.js`
+- `/app/frontend/src/pages/HiringForms.js`
+- `/app/frontend/src/pages/PublicJobView.jsx`
+- `/app/frontend/src/pages/PublicRegistration.js`
+
+### Files added
+- `/app/frontend/src/components/LifecycleControl.jsx`
+- `/app/backend/tests/test_iter130_activate_deactivate_lifecycle.py`
+
+### Production-safety summary
+- ✅ No live applicant data modified.
+- ✅ Idempotent migration touches only rows where `status` field is
+  missing/null/empty.
+- ✅ Backward-compatible: list endpoints `setdefault("status",
+  "active")` so a row with no field still ships as active to the UI.
+- ✅ Cascade logic is transactionally safe (single `update_many` per
+  collection, ordered before sub-cascade).
+- ✅ Auth-gated on every admin endpoint; public endpoints remain
+  read-only.
+- ✅ Frontend lint clean across all 6 modified files.
+
+---
+
+
+
 ## iter129 — Per-File-Type Concurrent Queue Workers (Feb 16, 2026)
 
 ### Symptom

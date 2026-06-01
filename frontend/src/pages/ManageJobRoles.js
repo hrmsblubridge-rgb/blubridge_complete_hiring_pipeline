@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { ArrowLeft, Plus, PencilSimple, Trash, X, Briefcase } from '@phosphor-icons/react';
+import LifecycleControl, { StatusDot } from '../components/LifecycleControl';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -58,9 +59,13 @@ export default function ManageJobRoles() {
                  roles.length === 0 ? <div className="text-center py-20 text-zinc-600" data-testid="empty-state"><Briefcase size={48} className="mx-auto mb-4 text-zinc-700" /><p>No job roles yet.</p></div> :
                  <div className="space-y-3" data-testid="roles-list">
                     {roles.map(r => (
-                        <div key={r.id} className="bg-zinc-900 border border-zinc-800 px-5 py-4 flex items-center justify-between" data-testid={`role-${r.id}`}>
-                            <span className="font-medium">{r.name}</span>
+                        <div key={r.id} className="bg-zinc-900 border border-zinc-800 px-5 py-4 flex items-center justify-between relative" data-testid={`role-${r.id}`}>
+                            <div className="flex items-center gap-3">
+                                <StatusDot status={r.status} testId={`role-${r.id}-status-dot`} />
+                                <span className="font-medium">{r.name}</span>
+                            </div>
                             <div className="flex gap-2">
+                                <LifecycleControl entity="job-roles" id={r.id} name={r.name} status={r.status} onChanged={fetch_} testIdPrefix={`role-${r.id}-lifecycle`} />
                                 <button onClick={() => openEdit(r)} data-testid={`edit-${r.id}`} className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800 transition-colors"><PencilSimple size={16} /></button>
                                 <button onClick={() => handleDelete(r.id)} data-testid={`delete-${r.id}`} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800 transition-colors"><Trash size={16} /></button>
                             </div>

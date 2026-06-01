@@ -721,9 +721,17 @@ async def list_job_roles(request: Request):
             r = bb_rows[nrm]
             r["id"] = str(r.pop("_id"))
             r["name"] = canonical  # force canonical casing
+            r.setdefault("status", "active")  # iter130 lifecycle
             out.append(r)
         else:
-            out.append({"id": f"canonical:{nrm}", "name": canonical, "source": "canonical"})
+            # iter130 — Synthetic canonical entry. Status defaults to
+            # active; materialized on first deactivation.
+            out.append({
+                "id": f"canonical:{nrm}",
+                "name": canonical,
+                "source": "canonical",
+                "status": "active",
+            })
 
     # 2) bb_job_roles rows that aren't mapped keywords and not already
     #    surfaced as canonical → truly independent manual creates.
@@ -732,6 +740,7 @@ async def list_job_roles(request: Request):
             continue
         seen_norms.add(nrm)
         r["id"] = str(r.pop("_id"))
+        r.setdefault("status", "active")  # iter130 lifecycle
         out.append(r)
 
     out.sort(key=lambda x: (x.get("name") or "").lower())
@@ -788,6 +797,329 @@ async def delete_job_role(role_id: str, request: Request):
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     return {"success": True}
+
+
+# ============ iter130 — ACTIVATE / DEACTIVATE LIFECYCLE ============
+#
+# Adds an idempotent active/inactive flag to bb_job_roles,
+# bb_job_openings, and bb_hiring_forms with cascade-on-deactivate
+# semantics:
+#
+#   * Deactivate Job Role     → cascade-deactivate all linked Openings
+#                               and all linked Hiring Forms.
+#   * Deactivate Job Opening  → cascade-deactivate all linked Hiring
+#                               Forms.
+#   * Deactivate Hiring Form  → standalone, no cascade.
+#
+# Re-activation NEVER cascades; downstream items remain inactive until
+# manually activated (per spec).
+#
+# APPLICANT-PROTECTION CONTRACT: The `status` flag is consulted ONLY by
+# public entry points (`pub_router.get("/form/...)` and
+# `pub_router.get("/job-opening/...)`) and the admin lifecycle endpoints
+# below. No internal applicant-processing path (OTP verify, schedule,
+# attended, score, analytics, registration completion) reads `status`.
+# Already-registered, scheduled, or attended applicants are completely
+# unaffected by deactivation.
+
+
+_VALID_STATUSES = {"active", "inactive"}
+
+
+def _looks_like_oid(s: str) -> bool:
+    """True iff `s` is a valid 24-char hex Mongo ObjectId. Used by the
+    role cascade to decide between {_id: ObjectId} and {name: <str>}."""
+    try:
+        ObjectId(s)
+        return True
+    except Exception:
+        return False
+
+
+async def _job_role_doc_for_id_or_name(role_id_or_name: str):
+    """Resolve a role lifecycle target. The Job Roles list mixes real
+    `bb_job_roles` rows with synthetic canonical entries whose `id` is
+    `canonical:<normalized>`. For the synthetic case, we materialize a
+    real row on-demand so subsequent reads see the lifecycle flag."""
+    if not role_id_or_name:
+        return None
+    # Real bb_job_roles row by ObjectId.
+    if _looks_like_oid(role_id_or_name):
+        try:
+            doc = await _db.bb_job_roles.find_one({"_id": _oid(role_id_or_name)})
+            if doc:
+                return doc
+        except Exception:
+            pass
+    # Canonical synthetic id: `canonical:<normalized>` → materialize.
+    if role_id_or_name.startswith("canonical:"):
+        from server import _build_canonical_index as _bci, _normalize_text_for_matching as _nrm
+        kw_to_canonical, _ = await _bci()
+        nrm_target = role_id_or_name.split("canonical:", 1)[1]
+        canonical_name = next(
+            (c for c in kw_to_canonical.values() if _nrm(c) == nrm_target),
+            None,
+        )
+        if not canonical_name:
+            return None
+        existing = await _db.bb_job_roles.find_one(
+            {"name": {"$regex": f"^{re.escape(canonical_name)}$", "$options": "i"}}
+        )
+        if existing:
+            return existing
+        # Materialize so lifecycle flag has a home.
+        new_doc = {
+            "name": canonical_name,
+            "source": "canonical_materialized",
+            "status": "active",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        result = await _db.bb_job_roles.insert_one(new_doc)
+        new_doc["_id"] = result.inserted_id
+        return new_doc
+    # Fallback: name match (case-insensitive).
+    return await _db.bb_job_roles.find_one(
+        {"name": {"$regex": f"^{re.escape(role_id_or_name)}$", "$options": "i"}}
+    )
+
+
+async def _cascade_preview_counts(role_doc=None, opening_doc=None) -> dict:
+    """Compute live cascade counts so the UI can show
+    "This will also deactivate N opening(s) and M form(s)" before the
+    user confirms. Either `role_doc` or `opening_doc` may be provided."""
+    counts = {"openings": 0, "forms": 0}
+    if role_doc is not None:
+        role_name = (role_doc.get("name") or "").strip()
+        if role_name:
+            rx = {"$regex": f"^{re.escape(role_name)}$", "$options": "i"}
+            counts["openings"] = await _db.bb_job_openings.count_documents(
+                {"job_role": rx, "status": {"$ne": "inactive"}}
+            )
+            counts["forms"] = await _db.bb_hiring_forms.count_documents(
+                {"job_role": rx, "status": {"$ne": "inactive"}}
+            )
+    elif opening_doc is not None:
+        oid_str = str(opening_doc.get("_id"))
+        counts["forms"] = await _db.bb_hiring_forms.count_documents(
+            {"job_opening_id": oid_str, "status": {"$ne": "inactive"}}
+        )
+    return counts
+
+
+async def _set_status_with_cascade(
+    *, collection_name: str, doc, status: str, deactivated_by: str = "manual"
+) -> dict:
+    """Persist a status flip on the given doc and (only on deactivation)
+    cascade-deactivate downstream items per spec. Returns a summary."""
+    if status not in _VALID_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    coll = _db[collection_name]
+    set_doc = {"status": status}
+    if status == "inactive":
+        set_doc["deactivated_at"] = now_iso
+        set_doc["deactivated_by"] = deactivated_by
+        set_doc["activated_at"] = None
+    else:
+        set_doc["activated_at"] = now_iso
+        set_doc["deactivated_at"] = None
+        set_doc["deactivated_by"] = None
+    await coll.update_one({"_id": doc["_id"]}, {"$set": set_doc})
+
+    cascade = {"openings_affected": 0, "forms_affected": 0}
+    if status == "inactive":
+        if collection_name == "bb_job_roles":
+            role_name = (doc.get("name") or "").strip()
+            if role_name:
+                rx = {"$regex": f"^{re.escape(role_name)}$", "$options": "i"}
+                # Cascade to openings.
+                openings = await _db.bb_job_openings.find(
+                    {"job_role": rx, "status": {"$ne": "inactive"}},
+                    {"_id": 1},
+                ).to_list(None)
+                if openings:
+                    await _db.bb_job_openings.update_many(
+                        {"_id": {"$in": [o["_id"] for o in openings]}},
+                        {"$set": {
+                            "status": "inactive",
+                            "deactivated_at": now_iso,
+                            "deactivated_by": "job_role",
+                            "activated_at": None,
+                        }},
+                    )
+                cascade["openings_affected"] = len(openings)
+                # Cascade to forms by job_role match.
+                forms_by_role = await _db.bb_hiring_forms.find(
+                    {"job_role": rx, "status": {"$ne": "inactive"}},
+                    {"_id": 1},
+                ).to_list(None)
+                # Also catch any forms attached to the cascaded openings
+                # (covers forms whose job_role drifted from their opening).
+                opening_ids = [str(o["_id"]) for o in openings]
+                forms_by_opening = []
+                if opening_ids:
+                    forms_by_opening = await _db.bb_hiring_forms.find(
+                        {"job_opening_id": {"$in": opening_ids},
+                         "status": {"$ne": "inactive"}},
+                        {"_id": 1},
+                    ).to_list(None)
+                all_form_ids = list({f["_id"] for f in forms_by_role + forms_by_opening})
+                if all_form_ids:
+                    await _db.bb_hiring_forms.update_many(
+                        {"_id": {"$in": all_form_ids}},
+                        {"$set": {
+                            "status": "inactive",
+                            "deactivated_at": now_iso,
+                            "deactivated_by": "job_role",
+                            "activated_at": None,
+                        }},
+                    )
+                cascade["forms_affected"] = len(all_form_ids)
+        elif collection_name == "bb_job_openings":
+            oid_str = str(doc["_id"])
+            forms = await _db.bb_hiring_forms.find(
+                {"job_opening_id": oid_str, "status": {"$ne": "inactive"}},
+                {"_id": 1},
+            ).to_list(None)
+            if forms:
+                await _db.bb_hiring_forms.update_many(
+                    {"_id": {"$in": [f["_id"] for f in forms]}},
+                    {"$set": {
+                        "status": "inactive",
+                        "deactivated_at": now_iso,
+                        "deactivated_by": "job_opening",
+                        "activated_at": None,
+                    }},
+                )
+            cascade["forms_affected"] = len(forms)
+
+    _logger.info(
+        f"[Lifecycle] {collection_name} id={str(doc['_id'])} → {status} "
+        f"(by={deactivated_by}, cascade={cascade})"
+    )
+    return {"success": True, "status": status, "cascade": cascade}
+
+
+async def _ensure_status_indexes_and_backfill():
+    """Idempotent migration: every existing row in the 3 lifecycle
+    collections gets `status='active'` if the field is missing. Runs
+    once per process boot via the existing server.startup_event."""
+    affected = {}
+    for coll_name in ("bb_job_roles", "bb_job_openings", "bb_hiring_forms"):
+        try:
+            r = await _db[coll_name].update_many(
+                {"status": {"$in": [None, ""]}}
+                if False
+                else {"$or": [{"status": {"$exists": False}}, {"status": None}, {"status": ""}]},
+                {"$set": {"status": "active"}},
+            )
+            affected[coll_name] = r.modified_count
+            await _db[coll_name].create_index("status")
+        except Exception as e:
+            _logger.warning(f"[Lifecycle:migration] {coll_name} skipped: {e!r}")
+    _logger.info(f"[Lifecycle:migration] backfilled status='active': {affected}")
+    return affected
+
+
+# ── Lifecycle endpoints ─────────────────────────────────────────────────
+
+class _LifecycleBody(BaseModel):
+    pass  # no body needed — id is in the path
+
+
+@bb_router.get("/job-roles/{role_id}/cascade-preview")
+async def cascade_preview_job_role(role_id: str, request: Request):
+    """Returns the LIVE counts of dependent active openings + forms so
+    the UI can show "This will also deactivate N opening(s) and M
+    form(s)" before the user confirms a Job Role deactivation."""
+    await _require_auth(request)
+    doc = await _job_role_doc_for_id_or_name(role_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Job role not found")
+    counts = await _cascade_preview_counts(role_doc=doc)
+    return {"status": doc.get("status") or "active", **counts}
+
+
+@bb_router.get("/job-openings/{opening_id}/cascade-preview")
+async def cascade_preview_job_opening(opening_id: str, request: Request):
+    """Returns the LIVE count of dependent active forms before
+    deactivating a Job Opening."""
+    await _require_auth(request)
+    doc = await _db.bb_job_openings.find_one({"_id": _oid(opening_id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Job opening not found")
+    counts = await _cascade_preview_counts(opening_doc=doc)
+    return {"status": doc.get("status") or "active", **counts}
+
+
+@bb_router.post("/job-roles/{role_id}/deactivate")
+async def deactivate_job_role(role_id: str, request: Request):
+    await _require_auth(request)
+    doc = await _job_role_doc_for_id_or_name(role_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Job role not found")
+    return await _set_status_with_cascade(
+        collection_name="bb_job_roles", doc=doc, status="inactive",
+        deactivated_by="manual",
+    )
+
+
+@bb_router.post("/job-roles/{role_id}/activate")
+async def activate_job_role(role_id: str, request: Request):
+    await _require_auth(request)
+    doc = await _job_role_doc_for_id_or_name(role_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Job role not found")
+    # Activation never cascades.
+    return await _set_status_with_cascade(
+        collection_name="bb_job_roles", doc=doc, status="active",
+    )
+
+
+@bb_router.post("/job-openings/{opening_id}/deactivate")
+async def deactivate_job_opening(opening_id: str, request: Request):
+    await _require_auth(request)
+    doc = await _db.bb_job_openings.find_one({"_id": _oid(opening_id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Job opening not found")
+    return await _set_status_with_cascade(
+        collection_name="bb_job_openings", doc=doc, status="inactive",
+        deactivated_by="manual",
+    )
+
+
+@bb_router.post("/job-openings/{opening_id}/activate")
+async def activate_job_opening(opening_id: str, request: Request):
+    await _require_auth(request)
+    doc = await _db.bb_job_openings.find_one({"_id": _oid(opening_id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Job opening not found")
+    return await _set_status_with_cascade(
+        collection_name="bb_job_openings", doc=doc, status="active",
+    )
+
+
+@bb_router.post("/hiring-forms/{form_id}/deactivate")
+async def deactivate_hiring_form(form_id: str, request: Request):
+    await _require_auth(request)
+    doc = await _db.bb_hiring_forms.find_one({"_id": _oid(form_id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Hiring form not found")
+    return await _set_status_with_cascade(
+        collection_name="bb_hiring_forms", doc=doc, status="inactive",
+        deactivated_by="manual",
+    )
+
+
+@bb_router.post("/hiring-forms/{form_id}/activate")
+async def activate_hiring_form(form_id: str, request: Request):
+    await _require_auth(request)
+    doc = await _db.bb_hiring_forms.find_one({"_id": _oid(form_id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Hiring form not found")
+    return await _set_status_with_cascade(
+        collection_name="bb_hiring_forms", doc=doc, status="active",
+    )
 
 
 # ============ FORM TYPES ============
@@ -868,6 +1200,10 @@ async def list_hiring_forms(request: Request):
     forms = await _db.bb_hiring_forms.find({}).sort("created_at", -1).to_list(None)
     for f in forms:
         f["id"] = str(f.pop("_id"))
+        # iter130 — Surface lifecycle so the UI can render the
+        # green/red dot and the activate/deactivate modal. Backfill
+        # default for legacy rows that pre-date the migration.
+        f.setdefault("status", "active")
         # Backfill slug on-the-fly for legacy docs missing it
         if not f.get("slug"):
             base = _slugify(f.get("name") or f.get("job_role") or "form")
@@ -1749,6 +2085,8 @@ async def list_job_openings(request: Request):
             await _db.bb_job_openings.update_one({"_id": o["_id"]}, {"$set": {"slug": slug}})
             o["slug"] = slug
         o["id"] = str(o.pop("_id"))
+        # iter130 — Surface lifecycle for UI dot + modal.
+        o.setdefault("status", "active")
         # iter108 — Emit synthesized descriptive_sections so the admin UI gets
         # a uniform shape whether the row is legacy or new-schema.
         o["descriptive_sections"] = _job_opening_sections(o)
@@ -1856,6 +2194,22 @@ async def get_public_job_opening(opening_id_or_slug: str):
             pass
     if not opening:
         raise HTTPException(status_code=404, detail="Job opening not found")
+    # iter130 — Inactive openings surface a structured "unavailable"
+    # payload (HTTP 200 so the frontend can render the professional
+    # notice page rather than a generic 404 / error toast).
+    if (opening.get("status") or "active") == "inactive":
+        return {
+            "inactive": True,
+            "title": "Job Opening Unavailable",
+            "message": (
+                "Thank you for your interest.\n\n"
+                "This job opening has been temporarily or permanently "
+                "taken down by the company and is no longer accepting "
+                "applications.\n\n"
+                "We appreciate your interest and encourage you to check "
+                "back later for future opportunities."
+            ),
+        }
     return {
         "title":                opening.get("title", ""),
         "job_role":             opening.get("job_role", ""),
@@ -4436,6 +4790,25 @@ async def get_public_form(form_id: str):
     form = await _resolve_form_by_slug_or_id(form_id)
     if not form:
         raise HTTPException(status_code=404, detail="Form not found")
+    # iter130 — Inactive hiring form short-circuits with the
+    # professional "applications closed" notice. We preserve the form's
+    # id + slug so the frontend can still show the proper URL context
+    # if it wants to, but no conditions/job-opening payload is shipped.
+    if (form.get("status") or "active") == "inactive":
+        return {
+            "id": str(form["_id"]),
+            "slug": form.get("slug", ""),
+            "inactive": True,
+            "title": "Applications Currently Closed",
+            "message": (
+                "Thank you for your interest in joining our company.\n\n"
+                "Unfortunately, applications for this position are "
+                "currently unavailable because this hiring opportunity "
+                "has been taken down or paused by the company.\n\n"
+                "We apologize for any inconvenience and encourage you "
+                "to revisit our careers page for future openings."
+            ),
+        }
     # Backfill slug if missing (legacy doc)
     if not form.get("slug"):
         base = _slugify(form.get("name") or form.get("job_role") or "form")

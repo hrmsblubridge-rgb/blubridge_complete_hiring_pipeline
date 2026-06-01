@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { ArrowLeft, Plus, PencilSimple, Trash, X, FolderOpen, Link as LinkIcon, Copy } from '@phosphor-icons/react';
+import LifecycleControl, { StatusDot } from '../components/LifecycleControl';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -107,7 +108,10 @@ export default function JobOpenings() {
                         <div key={o.id} className="bg-zinc-900 border border-zinc-800 p-5" data-testid={`opening-${o.id}`}>
                             <div className="flex items-start justify-between">
                                 <div className="space-y-1">
-                                    <h3 className="font-medium">{o.title}</h3>
+                                    <div className="flex items-center gap-2">
+                                        <StatusDot status={o.status} testId={`opening-${o.id}-status-dot`} />
+                                        <h3 className="font-medium">{o.title}</h3>
+                                    </div>
                                     <div className="flex flex-wrap gap-2 text-xs text-zinc-500">
                                         {o.job_role && <span>Role: {o.job_role}</span>}
                                         {o.vacancies && <span>Vacancies: {o.vacancies}</span>}
@@ -117,6 +121,7 @@ export default function JobOpenings() {
                                     {o.education?.length > 0 && <div className="flex gap-1 mt-1">{o.education.map((e, i) => <span key={i} className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded">{e}</span>)}</div>}
                                 </div>
                                 <div className="flex gap-2 shrink-0">
+                                    <LifecycleControl entity="job-openings" id={o.id} name={o.title} status={o.status} onChanged={fetchAll} testIdPrefix={`opening-${o.id}-lifecycle`} />
                                     <a href={`/jobs/view/${o.slug || o.id}`} target="_blank" rel="noreferrer"
                                         data-testid={`opening-link-${o.id}`}
                                         title="Open Public Job Description"

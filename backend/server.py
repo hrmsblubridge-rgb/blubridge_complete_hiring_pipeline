@@ -4241,6 +4241,14 @@ async def startup_event():
     # any non-test rows still missing the field. Idempotent via bb_meta.
     asyncio.create_task(_backfill_college_status_once())
 
+    # iter130 — Lifecycle (Activate/Deactivate) status backfill.
+    # Adds `status='active'` to every existing bb_job_roles /
+    # bb_job_openings / bb_hiring_forms row that lacks the field, and
+    # creates a `status` index on each collection. Idempotent — only
+    # touches rows where the field is missing/null/empty.
+    from bb_modules import _ensure_status_indexes_and_backfill
+    asyncio.create_task(_ensure_status_indexes_and_backfill())
+
     # Backfill slugs for existing hiring forms + ensure unique index
     try:
         await backfill_form_slugs()
