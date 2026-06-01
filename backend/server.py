@@ -3128,7 +3128,12 @@ except (PermissionError, OSError) as _e:
 
 # ============ DB-DRIVEN BACKGROUND QUEUE WORKER ============
 
-_worker_running = False
+# iter129 — Per-file-type worker registry (replaces the legacy single
+# `_worker_running` boolean). Each file_type (naukri, pipeline, score)
+# gets its OWN concurrent worker task so a slow pipeline batch can never
+# starve the naukri queue (or vice-versa). The set tracks file_types
+# that currently have a live worker so start_all_workers is idempotent.
+_worker_running: set = set()
 # Single-flight guard for deferred reprocess_matching. Prevents overlapping
 # `registered_candidates.drop()` + insert_many races when multiple drain
 # events happen in quick succession.
@@ -3347,25 +3352,40 @@ import socket as _socket
 HOST_ID = os.environ.get("HOST_ID") or _socket.gethostname() or "unknown-host"
 
 
-async def _bg_queue_worker():
-    """Persistent background worker: continuously polls bulk_upload_queue for pending jobs.
-    Processes ONE file at a time, sequentially. Runs independent of UI/browser.
-    Hardened against malformed legacy queue documents — never dies on a bad row.
+async def _bg_queue_worker(file_type_scope: str = None):
+    """Persistent background worker: continuously polls bulk_upload_queue
+    for pending jobs of `file_type_scope` (e.g. "naukri", "pipeline",
+    "score"). Processes ONE file at a time per scope, sequentially. Runs
+    independent of UI/browser. Hardened against malformed legacy queue
+    documents — never dies on a bad row.
 
-    ATOMIC CLAIM: Uses `find_one_and_update` to claim the next pending row in a
-    single round-trip — preventing any concurrent writer (older deploy, atlas
-    trigger, duplicate task) from sniping the row between our find and update.
+    iter129 — Per-file-type concurrency: by scoping each worker to a
+    single `file_type`, naukri uploads no longer wait behind a pipeline
+    backlog (or vice-versa). Each worker runs as its own asyncio task
+    launched by `start_all_workers`. Backward-compatible: passing
+    `file_type_scope=None` reverts to the legacy single-FIFO behaviour.
+
+    ATOMIC CLAIM: Uses `find_one_and_update` to claim the next pending
+    row in a single round-trip — preventing any concurrent writer
+    (older deploy, atlas trigger, duplicate task) from sniping the row
+    between our find and update.
 
     POST-BATCH MATCHING: To keep per-file processing fast, the heavy
     `reprocess_matching()` rebuild is deferred until after the queue is
-    drained (no more pending jobs). It runs ONCE per drained batch.
+    drained (no more pending jobs in THIS scope). It runs ONCE per
+    drained batch.
     """
-    global _worker_running
-    if _worker_running:
+    # iter129 — Per-file-type registry. Allows up to one worker per
+    # file_type to be alive at any time; legacy callers without a scope
+    # use the sentinel key "_legacy".
+    scope_key = file_type_scope or "_legacy"
+    if scope_key in _worker_running:
         return
-    _worker_running = True
+    _worker_running.add(scope_key)
     worker_pid = os.getpid()
-    logger.info(f"Background queue worker started (pid={worker_pid})")
+    logger.info(
+        f"Background queue worker started (pid={worker_pid}, scope={scope_key!r})"
+    )
     drained_pending_match = False  # True when at least one naukri/pipeline file was processed since last reprocess
     try:
         while True:
@@ -3375,24 +3395,38 @@ async def _bg_queue_worker():
                 # host_id (or unset, for very old rows we created before this
                 # fix). This prevents a legacy worker on another deployment
                 # (sharing the same Mongo) from sniping our rows.
+                # iter129 — Optionally scope to a single file_type so each
+                # worker only sees its own queue (parallel drain pattern).
                 now_iso = datetime.now(timezone.utc).isoformat()
-                job = await db.bulk_upload_queue.find_one_and_update(
+                base_or = [
+                    {"status": "queued_local", "host_id": HOST_ID},
                     {
-                        "$or": [
-                            {"status": "queued_local", "host_id": HOST_ID},
-                            {
-                                "status": {"$in": ["queued", "pending"]},
-                                "owner": {"$in": [None, "e1_recruitment_app"]},
-                                "$or": [{"host_id": HOST_ID}, {"host_id": {"$exists": False}}, {"host_id": None}],
-                            },
-                        ],
+                        "status": {"$in": ["queued", "pending"]},
+                        "owner": {"$in": [None, "e1_recruitment_app"]},
+                        "$or": [{"host_id": HOST_ID}, {"host_id": {"$exists": False}}, {"host_id": None}],
                     },
+                ]
+                claim_filter = {"$or": base_or}
+                if file_type_scope:
+                    # iter129 — Honour both new `file_type` field and the
+                    # legacy `upload_type` field used by very old queue
+                    # rows. Without this fallback, a typed worker would
+                    # silently ignore any legacy-schema row of its type.
+                    claim_filter["$and"] = [
+                        {"$or": [
+                            {"file_type": file_type_scope},
+                            {"upload_type": file_type_scope},
+                        ]},
+                    ]
+                job = await db.bulk_upload_queue.find_one_and_update(
+                    claim_filter,
                     {"$set": {
                         "status": "processing",
                         "owner": "e1_recruitment_app",
                         "host_id": HOST_ID,
                         "updated_at": now_iso,
                         "worker_pid": worker_pid,
+                        "worker_scope": scope_key,
                         "claimed_at": now_iso,
                     }},
                     sort=[("created_at", 1)],
@@ -3403,7 +3437,7 @@ async def _bg_queue_worker():
                     # (fire-and-forget so the worker immediately returns to the
                     # claim loop and can pick up new uploads while reprocess runs).
                     if drained_pending_match:
-                        asyncio.create_task(_trigger_deferred_reprocess(reason="queue_drained"))
+                        asyncio.create_task(_trigger_deferred_reprocess(reason=f"queue_drained:{scope_key}"))
                         drained_pending_match = False
                     await asyncio.sleep(3)
                     continue
@@ -3562,9 +3596,9 @@ async def _bg_queue_worker():
                 await asyncio.sleep(5)
 
     except asyncio.CancelledError:
-        logger.info("Background queue worker stopped")
+        logger.info(f"Background queue worker stopped (scope={scope_key!r})")
     finally:
-        _worker_running = False
+        _worker_running.discard(scope_key)
 
 
 # ============ BULK UPLOAD ENDPOINTS ============
@@ -4329,9 +4363,13 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"[startup] rejection-flag backfill skipped: {e}")
 
-    # Start persistent background queue worker
-    asyncio.create_task(_bg_queue_worker())
-    logger.info("DB-driven background queue worker launched")
+    # iter129 — Per-file-type concurrent queue workers. Each file_type
+    # (naukri, pipeline, score) gets its own worker so a slow pipeline
+    # batch can never starve the naukri queue (the user-reported
+    # "naukri stuck at queued_local" bug — pure FIFO bottleneck).
+    for _scope in ("naukri", "pipeline", "score"):
+        asyncio.create_task(_bg_queue_worker(file_type_scope=_scope))
+    logger.info("DB-driven background queue workers launched (per file_type)")
 
     # Start messaging background workers
     from bg_workers import init_workers, start_all_workers

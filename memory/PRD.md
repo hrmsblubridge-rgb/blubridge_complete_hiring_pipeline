@@ -1,3 +1,97 @@
+## iter129 — Per-File-Type Concurrent Queue Workers (Feb 16, 2026)
+
+### Symptom
+User-reported: Bulk Upload Naukri files sat at `status=queued_local`
+indefinitely while Pipeline uploads processed normally. Specifically
+`Overall_candidates_01June.xlsx` queued at 09:07:51 never advanced;
+meanwhile `export_3_01062026.csv` was processing at 80%.
+
+### Root cause — NOT a worker crash
+Live queue inspection revealed:
+- Current production host `srv-...-577bb54cfc-bhrzt` had its worker
+  alive (`worker_pid=39, claimed_at=09:17:44`, processing
+  `export_6_01062026.csv`).
+- Queue used **ONE FIFO worker** scoped to `sort=[("created_at", 1)]`.
+- **4 Pipeline files were queued 7 minutes BEFORE the Naukri file** at
+  09:00:45–49. With strict FIFO, the Naukri file waited behind every
+  pipeline file in line. The user observed pipeline files completing
+  while their naukri file never advanced — pure cross-type
+  head-of-line blocking, not a broken worker.
+
+Secondary observation: 70+ historical `queued_local` rows from 6 dead
+Render pods are permanently orphaned because the worker's filter
+requires `host_id == HOST_ID`. Not the user's primary issue but worth
+flagging for future cleanup.
+
+### Fix
+`_bg_queue_worker` (server.py) now accepts a `file_type_scope`
+kwarg. When given, the claim filter is constrained to rows where
+`file_type` (or legacy `upload_type`) matches the scope. `startup_event`
+spawns one worker per known type:
+
+```python
+for _scope in ("naukri", "pipeline", "score"):
+    asyncio.create_task(_bg_queue_worker(file_type_scope=_scope))
+```
+
+The legacy `_worker_running` boolean was replaced with a set so each
+scope can have its own live worker without colliding with the
+single-flight guard. Logs now include the scope:
+`Background queue worker started (pid=N, scope='naukri')`.
+
+Defensive: the typed claim filter accepts BOTH the new `file_type`
+field AND the legacy `upload_type` field via `$and: [{$or: [...]}]`,
+so any pre-iter46 row stored under the legacy schema is still
+reachable by its typed worker.
+
+### Verification
+- **Restart logs** show the 3 expected workers launched:
+  ```
+  Background queue worker started (pid=548, scope='naukri')
+  Background queue worker started (pid=548, scope='pipeline')
+  Background queue worker started (pid=548, scope='score')
+  ```
+- `tests/test_iter129_per_filetype_workers.py` — 7/7 PASS:
+  * Source-code guards: `file_type_scope` kwarg exists, `_worker_running`
+    is a set, claim filter honors scope, startup spawns one per type,
+    logs surface the scope.
+  * Functional: naukri-scoped filter matches naukri rows but NOT
+    pipeline rows (proves cross-type isolation).
+  * Functional: legacy `upload_type='naukri'` rows still claimable.
+- All 38 tests across iter125d+e+f / iter126 / iter128 / iter129 green
+  — no regressions.
+
+### Production-safety
+- ✅ No live applicant data touched.
+- ✅ No queue records modified; only the claim mechanism changed.
+- ✅ Backward-compatible: `_bg_queue_worker()` without arg still
+  honours legacy single-FIFO behaviour for any future caller.
+- ✅ No schema migration required — the `file_type` field has been on
+  queue rows since iter46.
+- ✅ Failure isolation: if the naukri worker crashes (uncaught
+  exception in its tick), pipeline + score workers continue serving
+  their queues independently.
+
+### Files modified
+- `/app/backend/server.py`
+  * `_worker_running` (bool → set)
+  * `_bg_queue_worker` (new `file_type_scope` kwarg + scoped claim filter)
+  * `startup_event` (spawns 3 typed workers)
+
+### Files added
+- `/app/backend/tests/test_iter129_per_filetype_workers.py` (7 tests)
+
+### Why Pipeline worked while Naukri did NOT (user's question)
+Pure FIFO timing illusion. The Pipeline file at the head of the queue
+was being actively drained; Naukri queued 7 min later sat behind 4
+Pipeline files. With iter129's per-type concurrency, the same upload
+scenario would have started Naukri processing in parallel within
+seconds.
+
+---
+
+
+
 ## iter128 — Cycle-Token Idempotency for Rejection Dispatcher (Feb 16, 2026)
 
 ### Context
