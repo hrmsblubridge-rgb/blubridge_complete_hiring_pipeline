@@ -347,7 +347,8 @@ async def test_public_hiring_form_returns_inactive_payload(db):
         res = await bb_modules.get_public_form(str(form_id))
         assert res.get("inactive") is True
         assert res["title"] == "Applications Currently Closed"
-        assert "currently unavailable" in res["message"]
+        assert "no longer being accepted" in res["message"]
+        assert "careers page" in res["message"]
 
     finally:
         await db.bb_hiring_forms.delete_many({"_iter130_test": marker})

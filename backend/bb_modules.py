@@ -4801,12 +4801,15 @@ async def get_public_form(form_id: str):
             "inactive": True,
             "title": "Applications Currently Closed",
             "message": (
-                "Thank you for your interest in joining our company.\n\n"
-                "Unfortunately, applications for this position are "
-                "currently unavailable because this hiring opportunity "
-                "has been taken down or paused by the company.\n\n"
-                "We apologize for any inconvenience and encourage you "
-                "to revisit our careers page for future openings."
+                "Thank you for your interest in joining our team.\n\n"
+                "At this time, applications for this position are no "
+                "longer being accepted, as the role has been closed or "
+                "temporarily paused.\n\n"
+                "We appreciate your interest in our company and "
+                "encourage you to visit our careers page regularly for "
+                "future opportunities that match your skills and "
+                "experience.\n\n"
+                "Thank you for considering a career with us."
             ),
         }
     # Backfill slug if missing (legacy doc)
