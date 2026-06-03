@@ -383,6 +383,19 @@ function EmployeeModal({ rounds, onClose, onChanged }) {
 
     const submit = async () => {
         if (!form.name.trim()) return toast.error('Name required');
+        // iter137 — block submit on any out-of-range round score.
+        for (const p of pairs) {
+            if (!p.round_name || p.score === '') continue;
+            const r = rounds.find(x => x.round_name === p.round_name);
+            const t = r ? Number(r.total_score) : null;
+            const s = Number(p.score);
+            if (!Number.isFinite(s) || s < 0) {
+                return toast.error(`Score for "${p.round_name}" cannot be below 0`);
+            }
+            if (t && t > 0 && s > t) {
+                return toast.error(`Score for "${p.round_name}" cannot exceed ${t}`);
+            }
+        }
         const round_scores = {};
         for (const p of pairs) {
             if (p.round_name && p.score !== '') round_scores[p.round_name] = parseFloat(p.score);
@@ -409,7 +422,7 @@ function EmployeeModal({ rounds, onClose, onChanged }) {
                             <label className="text-xs text-zinc-500 uppercase tracking-wider">{c.label}</label>
                             <input value={form[c.key] || ''} onChange={e => setForm({ ...form, [c.key]: e.target.value })}
                                 data-testid={`ts-emp-${c.key}`}
-                                placeholder={c.key === 'joining_date' ? 'dd-mm-yyyy' : ''}
+                                type={c.key === 'joining_date' ? 'date' : 'text'}
                                 className="w-full mt-1 bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm" />
                         </div>
                     ))}
@@ -421,18 +434,38 @@ function EmployeeModal({ rounds, onClose, onChanged }) {
                         <button onClick={addPair} data-testid="ts-emp-add-pair" className="text-xs px-2 py-1 bg-cyan-800 hover:bg-cyan-700 flex items-center gap-1"><Plus size={12} />Add Round</button>
                     </div>
                     <div className="space-y-2">
-                        {pairs.map((p, i) => (
-                            <div key={i} className="flex gap-2 items-center">
-                                <select value={p.round_name} onChange={e => updatePair(i, 'round_name', e.target.value)}
-                                    data-testid={`ts-emp-pair-round-${i}`} className="flex-1 bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm">
-                                    <option value="">— select round —</option>
-                                    {availableRounds(p.round_name).map(r => <option key={r.id} value={r.round_name}>{r.round_name} (Total: {r.total_score})</option>)}
-                                </select>
-                                <input value={p.score} onChange={e => updatePair(i, 'score', e.target.value)} placeholder="Score" type="number" step="0.01"
-                                    data-testid={`ts-emp-pair-score-${i}`} className="w-28 bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm" />
-                                {pairs.length > 1 && <button onClick={() => removePair(i)} className="text-red-400 hover:text-red-300"><X size={16} /></button>}
-                            </div>
-                        ))}
+                        {pairs.map((p, i) => {
+                            // iter137 — per-pair score validation.
+                            const selectedRound = rounds.find(r => r.round_name === p.round_name);
+                            const total = selectedRound ? Number(selectedRound.total_score) : null;
+                            const scoreNum = p.score === '' ? null : Number(p.score);
+                            let err = '';
+                            if (scoreNum !== null && Number.isFinite(scoreNum)) {
+                                if (scoreNum < 0) err = 'Score cannot be below 0';
+                                else if (total && total > 0 && scoreNum > total) err = `Score cannot exceed total (${total})`;
+                            }
+                            return (
+                                <div key={i} className="flex flex-col gap-1">
+                                    <div className="flex gap-2 items-center">
+                                        <select value={p.round_name} onChange={e => updatePair(i, 'round_name', e.target.value)}
+                                            data-testid={`ts-emp-pair-round-${i}`} className="flex-1 bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm">
+                                            <option value="">— select round —</option>
+                                            {availableRounds(p.round_name).map(r => <option key={r.id} value={r.round_name}>{r.round_name} (Total: {r.total_score})</option>)}
+                                        </select>
+                                        <input value={p.score} onChange={e => updatePair(i, 'score', e.target.value)}
+                                            placeholder="Score" type="number" step="0.01"
+                                            min={0}
+                                            max={total && total > 0 ? total : undefined}
+                                            data-testid={`ts-emp-pair-score-${i}`}
+                                            className={`w-28 bg-zinc-800 border px-2 py-2 text-sm ${err ? 'border-red-500' : 'border-zinc-700'}`} />
+                                        {pairs.length > 1 && <button onClick={() => removePair(i)} className="text-red-400 hover:text-red-300"><X size={16} /></button>}
+                                    </div>
+                                    {err && (
+                                        <p data-testid={`ts-emp-pair-error-${i}`} className="text-xs text-red-400 pl-1">{err}</p>
+                                    )}
+                                </div>
+                            );
+                        })}
                     </div>
                 </div>
 
