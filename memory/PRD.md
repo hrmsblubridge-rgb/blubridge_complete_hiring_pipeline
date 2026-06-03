@@ -1,3 +1,65 @@
+## iter132 — Self-Adjusting Card Layouts (Feb 16, 2026)
+
+### Symptom
+User-attached screenshot: on the Create Job Openings page, when an
+opening had many requirement chips ("Bachelors or Masters in Computer
+Science", etc.) the chips collapsed into narrow vertical pillars and
+the right-side action button column got visually crammed.
+
+### Root cause
+Two missing Tailwind utilities on the chip + row layouts:
+
+1. **Chip containers** used `flex gap-1` (no `flex-wrap`), so when chips
+   overflowed they squished horizontally; AND individual chips lacked
+   `whitespace-nowrap`, so each chip's text wrapped INSIDE the chip,
+   making it narrow and tall (the "vertical pillar" effect).
+2. **Card rows** used `flex items-start justify-between` without
+   `flex-wrap`, `min-w-0`, or `break-words`. With a long title or
+   many chips the left column couldn't shrink properly and the right
+   button column lost breathing room.
+
+### Fix (purely Tailwind utility additions — no logic changes)
+Across every card-style list row:
+- Outer row: `flex flex-wrap items-start justify-between gap-3`
+  (buttons can drop below the content on extreme narrow widths).
+- Left column: `min-w-0 flex-1` so long titles wrap inside the column.
+- Title `<h3>`: `break-words` for graceful soft-breaking of giant titles.
+- Action button group: `shrink-0 flex-wrap justify-end ml-auto`.
+- Chip rows: `flex flex-wrap gap-1 mt-1` (added `flex-wrap`).
+- Individual chips: `whitespace-nowrap` so each chip stays on one
+  line even when the row wraps.
+
+### Files modified
+- `/app/frontend/src/pages/JobOpenings.js` — list-row card
+- `/app/frontend/src/pages/HiringForms.js` — list-row card
+- `/app/frontend/src/pages/ManageJobRoles.js` — list-row card
+- `/app/frontend/src/pages/SetHolidays.js` — list-row card
+- `/app/frontend/src/pages/CollegeSchedules.js` — chip
+  `whitespace-nowrap` inside the table cell
+
+### Production-safety
+- ✅ Pure CSS class additions; no DOM structure or logic changes.
+- ✅ Frontend lint clean across all modified files.
+- ✅ Visual-only fix — no backend, no DB, no test runtime impact.
+- ✅ Backward-compatible: cards with few chips look identical to
+  before; only the overflow cases benefit.
+
+### Coverage audit
+Surveyed every page using the `border-zinc-800 p-5` /
+`border-zinc-800 px-5 py-4 flex` card pattern (the standard list-row
+shape across the app). Only the 5 files above had the broken pattern.
+Other pages either:
+- Already use `flex flex-wrap` correctly (the form-creation modals
+  inside `JobOpenings.js` use `flex flex-wrap gap-1.5` for chip lists).
+- Use a `<table>` layout (e.g. `CollegeSchedules.js` list view) which
+  doesn't need the row-flex fix — only its inner chips needed
+  `whitespace-nowrap`.
+- Are headers / pagination / modal title bars — not affected.
+
+---
+
+
+
 ## iter131 — Visibility, Dependency Enforcement & Default Instruction Fallback (Feb 16, 2026)
 
 ### Issue 1 corrections (Activate/Deactivate lifecycle gaps)

@@ -132,25 +132,26 @@ export default function HiringForms() {
                     <div className="space-y-3" data-testid="forms-list">
                         {forms.map(f => (
                             <div key={f.id} className="bg-zinc-900 border border-zinc-800 p-5" data-testid={`form-${f.id}`}>
-                                <div className="flex items-start justify-between">
-                                    <div>
-                                        <div className="flex items-center gap-2">
+                                {/* iter132 — Self-adjusting row (see JobOpenings comment). */}
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div className="min-w-0 flex-1">
+                                        <div className="flex items-center gap-2 flex-wrap">
                                             <StatusDot status={f.status} testId={`form-${f.id}-status-dot`} />
-                                            <h3 className="font-medium">{f.name}</h3>
+                                            <h3 className="font-medium break-words">{f.name}</h3>
                                         </div>
-                                        <p className="text-xs text-zinc-500 mt-1">Type: {f.form_type_name} | Role: {f.job_role}</p>
+                                        <p className="text-xs text-zinc-500 mt-1 break-words">Type: {f.form_type_name} | Role: {f.job_role}</p>
                                         {f.conditions && Object.keys(f.conditions).length > 0 && (
                                             <div className="flex flex-wrap gap-2 mt-2">
-                                                {f.conditions.age_min != null && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded">Age: {f.conditions.age_min}-{f.conditions.age_max}</span>}
-                                                {f.conditions.grad_year_min != null && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded">Grad: {f.conditions.grad_year_min}-{f.conditions.grad_year_max}</span>}
-                                                {f.conditions.locations?.length > 0 && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded">Locations: {f.conditions.locations.join(', ')}</span>}
-                                                {f.conditions.location_change !== 'NA' && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded">Loc Change: {f.conditions.location_change}</span>}
-                                                {f.conditions.attend_in_person !== 'NA' && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded">In Person: {f.conditions.attend_in_person}</span>}
-                                                {f.conditions.college_limit !== 'Both' && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded">College: {f.conditions.college_limit}</span>}
+                                                {f.conditions.age_min != null && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">Age: {f.conditions.age_min}-{f.conditions.age_max}</span>}
+                                                {f.conditions.grad_year_min != null && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">Grad: {f.conditions.grad_year_min}-{f.conditions.grad_year_max}</span>}
+                                                {f.conditions.locations?.length > 0 && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">Locations: {f.conditions.locations.join(', ')}</span>}
+                                                {f.conditions.location_change !== 'NA' && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">Loc Change: {f.conditions.location_change}</span>}
+                                                {f.conditions.attend_in_person !== 'NA' && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">In Person: {f.conditions.attend_in_person}</span>}
+                                                {f.conditions.college_limit !== 'Both' && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">College: {f.conditions.college_limit}</span>}
                                             </div>
                                         )}
                                     </div>
-                                    <div className="flex gap-2 shrink-0">
+                                    <div className="flex gap-2 shrink-0 flex-wrap justify-end ml-auto">
                                         <LifecycleControl entity="hiring-forms" id={f.id} name={f.name} status={f.status} onChanged={fetchAll} testIdPrefix={`form-${f.id}-lifecycle`} />
                                         <a href={`/register/${f.slug || f.id}`} target="_blank" rel="noreferrer" data-testid={`link-${f.id}`} className="p-2 text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800" title="Open Registration Link"><LinkIcon size={16} /></a>
                                         <button

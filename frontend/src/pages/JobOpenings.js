@@ -106,21 +106,27 @@ export default function JobOpenings() {
                  <div className="space-y-3" data-testid="openings-list">
                     {openings.map(o => (
                         <div key={o.id} className="bg-zinc-900 border border-zinc-800 p-5" data-testid={`opening-${o.id}`}>
-                            <div className="flex items-start justify-between">
-                                <div className="space-y-1">
-                                    <div className="flex items-center gap-2">
+                            {/* iter132 — Self-adjusting row: flex-wrap so the
+                                action buttons can drop below when the title
+                                + chips push the layout past viewport width.
+                                Left column gets `min-w-0 flex-1` so long
+                                titles wrap inside the column instead of
+                                squeezing the buttons; buttons keep shrink-0. */}
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                                <div className="space-y-1 min-w-0 flex-1">
+                                    <div className="flex items-center gap-2 flex-wrap">
                                         <StatusDot status={o.status} testId={`opening-${o.id}-status-dot`} />
-                                        <h3 className="font-medium">{o.title}</h3>
+                                        <h3 className="font-medium break-words">{o.title}</h3>
                                     </div>
-                                    <div className="flex flex-wrap gap-2 text-xs text-zinc-500">
+                                    <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-zinc-500">
                                         {o.job_role && <span>Role: {o.job_role}</span>}
                                         {o.vacancies && <span>Vacancies: {o.vacancies}</span>}
                                         {o.salary_range && <span>Salary: {o.salary_range}</span>}
                                     </div>
-                                    {o.years_of_graduation?.length > 0 && <div className="flex gap-1 mt-1">{o.years_of_graduation.map((y, i) => <span key={i} className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded">{y}</span>)}</div>}
-                                    {o.education?.length > 0 && <div className="flex gap-1 mt-1">{o.education.map((e, i) => <span key={i} className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded">{e}</span>)}</div>}
+                                    {o.years_of_graduation?.length > 0 && <div className="flex flex-wrap gap-1 mt-1">{o.years_of_graduation.map((y, i) => <span key={i} className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">{y}</span>)}</div>}
+                                    {o.education?.length > 0 && <div className="flex flex-wrap gap-1 mt-1">{o.education.map((e, i) => <span key={i} className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">{e}</span>)}</div>}
                                 </div>
-                                <div className="flex gap-2 shrink-0">
+                                <div className="flex gap-2 shrink-0 flex-wrap justify-end ml-auto">
                                     <LifecycleControl entity="job-openings" id={o.id} name={o.title} status={o.status} onChanged={fetchAll} testIdPrefix={`opening-${o.id}-lifecycle`} />
                                     <a href={`/jobs/view/${o.slug || o.id}`} target="_blank" rel="noreferrer"
                                         data-testid={`opening-link-${o.id}`}

@@ -53,11 +53,16 @@ export default function SetHolidays() {
                  holidays.length === 0 ? <div className="text-center py-20 text-zinc-600" data-testid="empty-state"><CalendarBlank size={48} className="mx-auto mb-4 text-zinc-700" /><p>No holidays set.</p></div> :
                  <div className="space-y-3" data-testid="holidays-list">
                     {holidays.map(h => (
-                        <div key={h.id} className="bg-zinc-900 border border-zinc-800 px-5 py-4 flex items-center justify-between" data-testid={`holiday-${h.id}`}>
-                            <div><span className="font-medium">{h.name}</span><span className="ml-3 text-sm text-zinc-500">{h.date}</span>
-                                <span className={`ml-3 px-2 py-0.5 text-[10px] uppercase tracking-wide font-semibold rounded ${h.holiday_type === 'Non-Recurring' ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-emerald-100 text-emerald-800 border border-emerald-300'}`} data-testid={`holiday-type-${h.id}`}>{h.holiday_type || 'Recurring'}</span>
+                        <div key={h.id} className="bg-zinc-900 border border-zinc-800 px-5 py-4 flex flex-wrap items-center justify-between gap-3" data-testid={`holiday-${h.id}`}>
+                            {/* iter132 — flex-wrap layout: long holiday names
+                                or type chips wrap inside the row without
+                                squeezing the edit/delete buttons. */}
+                            <div className="min-w-0 flex-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                                <span className="font-medium break-words">{h.name}</span>
+                                <span className="text-sm text-zinc-500 whitespace-nowrap">{h.date}</span>
+                                <span className={`px-2 py-0.5 text-[10px] uppercase tracking-wide font-semibold rounded whitespace-nowrap ${h.holiday_type === 'Non-Recurring' ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-emerald-100 text-emerald-800 border border-emerald-300'}`} data-testid={`holiday-type-${h.id}`}>{h.holiday_type || 'Recurring'}</span>
                             </div>
-                            <div className="flex gap-2">
+                            <div className="flex gap-2 shrink-0 ml-auto">
                                 <button onClick={() => openEdit(h)} className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800"><PencilSimple size={16} /></button>
                                 <button onClick={() => handleDelete(h.id)} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800"><Trash size={16} /></button>
                             </div>

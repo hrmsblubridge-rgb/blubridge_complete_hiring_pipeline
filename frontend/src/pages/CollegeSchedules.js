@@ -184,7 +184,7 @@ export default function CollegeSchedules() {
                                         {Array.isArray(s.job_roles) && s.job_roles.length > 0 ? (
                                             <div className="flex flex-wrap gap-1">
                                                 {s.job_roles.map((r, i) => (
-                                                    <span key={`${r}-${i}`} className="inline-block bg-cyan-900/40 border border-cyan-700/50 text-cyan-200 px-1.5 py-0.5 text-[11px] rounded">{r}</span>
+                                                    <span key={`${r}-${i}`} className="inline-block bg-cyan-900/40 border border-cyan-700/50 text-cyan-200 px-1.5 py-0.5 text-[11px] rounded whitespace-nowrap">{r}</span>
                                                 ))}
                                             </div>
                                         ) : (s.job_role || '-')}
