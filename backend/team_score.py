@@ -330,7 +330,10 @@ async def deactivate_employee(emp_id: str, request: Request):
 
 async def _collect_export_rows(filter_q: dict):
     rounds = await _db.ts_rounds.find({}).sort("round_name", 1).to_list(None)
-    round_headers = [(r["round_name"], r.get("total_score", 0)) for r in rounds]
+    # iter134 — total_score may now be NULL (rounds created on import
+    # without a header total). Carry the raw value through so the
+    # header column renders "Name(NULL)" instead of guessing 0.
+    round_headers = [(r["round_name"], r.get("total_score")) for r in rounds]
     emps = await _db.ts_employees.find(filter_q).to_list(None)
     # Active first, separator row, then inactive — per spec.
     actives = [e for e in emps if (e.get("employee_status") or "active").lower() == "active"]
@@ -339,8 +342,38 @@ async def _collect_export_rows(filter_q: dict):
     inactives.sort(key=lambda e: (e.get("name") or "").lower())
     base_cols = ["Name", "Email ID", "LinkedIn ID", "Role", "Joining Date",
                  "College", "NIRF Rank", "Degree", "Passing Year"]
-    headers = base_cols + [f"{rn}({int(ts) if float(ts).is_integer() else ts})"
-                           for rn, ts in round_headers]
+
+    def _fmt_total(ts):
+        if ts in (None, ""):
+            return "NULL"
+        try:
+            f = float(ts)
+            return str(int(f)) if f.is_integer() else str(f)
+        except (TypeError, ValueError):
+            return str(ts)
+
+    headers = base_cols + [f"{rn}({_fmt_total(ts)})" for rn, ts in round_headers]
+
+    def _fmt_cell(score, total):
+        """iter134 — Export cells now mirror the Team Score table:
+        `score/total (pct%)`, `score/NULL` (no pct) when total missing,
+        and "-" when employee has no score."""
+        if score in (None, ""):
+            return "-"
+        try:
+            s = float(score)
+        except (TypeError, ValueError):
+            return str(score)
+        s_str = str(int(s)) if s.is_integer() else str(s)
+        if total in (None, "") or (isinstance(total, (int, float)) and float(total) <= 0):
+            return f"{s_str}/NULL"
+        try:
+            t = float(total)
+            pct = (s / t) * 100
+            t_str = str(int(t)) if t.is_integer() else str(t)
+            return f"{s_str}/{t_str} ({pct:.2f}%)"
+        except (TypeError, ValueError, ZeroDivisionError):
+            return f"{s_str}/NULL"
 
     def emp_row(e):
         scores = e.get("round_scores") or {}
@@ -355,9 +388,8 @@ async def _collect_export_rows(filter_q: dict):
             e.get("degree") or "",
             e.get("passing_year") or "",
         ]
-        for rn, _ in round_headers:
-            v = scores.get(rn)
-            row.append("" if v in (None, "") else v)
+        for rn, ts in round_headers:
+            row.append(_fmt_cell(scores.get(rn), ts))
         return row
 
     rows = [emp_row(e) for e in actives]
