@@ -112,10 +112,13 @@ export default function TeamScore() {
         } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
     };
 
+    // iter136b — Cell format mirrors the Export file: `score/total (pct%)`.
+    // No total → just the raw score. Empty → "-".
     const pct = (score, total) => {
         if (score === undefined || score === null || score === '') return '-';
-        if (!total || total <= 0) return `${score}`;
-        return `${score} - ${((score / total) * 100).toFixed(2)}%`;
+        if (!total || Number(total) <= 0) return `${score}`;
+        const s = Number(score), t = Number(total);
+        return `${score}/${total} (${((s / t) * 100).toFixed(2)}%)`;
     };
 
     // iter135 — Joining-date display helper. Stored as "yyyy-mm-dd";
