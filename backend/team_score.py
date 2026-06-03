@@ -18,7 +18,7 @@ import io
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, date, timezone
 from typing import Optional
 
 from bson import ObjectId
@@ -56,6 +56,63 @@ def _strip_oid(doc: dict) -> dict:
     if "_id" in doc:
         doc["id"] = str(doc.pop("_id"))
     return doc
+
+
+# iter135 — Joining-date helpers.
+# DB canonical: "yyyy-mm-dd". Import: accept "dd-mm-yyyy" or "yyyy-mm-dd"
+# (with "-", "/", "." separators) and Excel datetime/date objects.
+# Display/Export: "dd-mm-yyyy".
+
+_DATE_RE_YMD = re.compile(r"^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$")
+_DATE_RE_DMY = re.compile(r"^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$")
+
+
+def _normalize_joining_date(value) -> str:
+    """Return canonical 'yyyy-mm-dd' string, or '' if value can't be parsed.
+    Pass-through for already-canonical strings; handles dd-mm-yyyy variants
+    and Python datetime/date instances (Excel reads dates as datetime)."""
+    if value in (None, ""):
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, date):
+        return value.strftime("%Y-%m-%d")
+    s = str(value).strip()
+    if not s:
+        return ""
+    # Strip an accidental time suffix (e.g. "2026-06-01T00:00:00").
+    if "T" in s:
+        s = s.split("T", 1)[0]
+    if " " in s:
+        s = s.split(" ", 1)[0]
+    m = _DATE_RE_YMD.match(s)
+    if m:
+        y, mo, d = m.group(1), int(m.group(2)), int(m.group(3))
+        return f"{y}-{mo:02d}-{d:02d}"
+    m = _DATE_RE_DMY.match(s)
+    if m:
+        d, mo, y = int(m.group(1)), int(m.group(2)), m.group(3)
+        return f"{y}-{mo:02d}-{d:02d}"
+    return s  # unknown format — store verbatim (don't drop user data)
+
+
+def _format_joining_date_display(value) -> str:
+    """Convert stored 'yyyy-mm-dd' to display 'dd-mm-yyyy'.
+    Strips any accidental time suffix. Returns '' for empty input."""
+    if value in (None, ""):
+        return ""
+    s = str(value).strip()
+    if "T" in s:
+        s = s.split("T", 1)[0]
+    if " " in s:
+        s = s.split(" ", 1)[0]
+    m = _DATE_RE_YMD.match(s)
+    if m:
+        return f"{int(m.group(3)):02d}-{int(m.group(2)):02d}-{m.group(1)}"
+    m = _DATE_RE_DMY.match(s)
+    if m:
+        return f"{int(m.group(1)):02d}-{int(m.group(2)):02d}-{m.group(3)}"
+    return s
 
 
 # ─────────────────────── Pydantic models ─────────────────────────────────
@@ -250,7 +307,7 @@ async def create_employee(body: EmployeeIn, request: Request):
         "email": (body.email or "").strip(),
         "linkedin_id": (body.linkedin_id or "").strip(),
         "role": (body.role or "").strip(),
-        "joining_date": (body.joining_date or "").strip(),
+        "joining_date": _normalize_joining_date(body.joining_date),
         "college": (body.college or "").strip(),
         "nirf_rank": (body.nirf_rank or "").strip(),
         "degree": (body.degree or "").strip(),
@@ -281,7 +338,7 @@ async def update_employee(emp_id: str, body: EmployeeIn, request: Request):
             "email": (body.email or "").strip(),
             "linkedin_id": (body.linkedin_id or "").strip(),
             "role": (body.role or "").strip(),
-            "joining_date": (body.joining_date or "").strip(),
+            "joining_date": _normalize_joining_date(body.joining_date),
             "college": (body.college or "").strip(),
             "nirf_rank": (body.nirf_rank or "").strip(),
             "degree": (body.degree or "").strip(),
@@ -344,19 +401,27 @@ async def _collect_export_rows(filter_q: dict):
                  "College", "NIRF Rank", "Degree", "Passing Year"]
 
     def _fmt_total(ts):
+        # iter135 — Skip the trailing "(...)" suffix when total is missing
+        # so round-trip import preserves the round name verbatim.
         if ts in (None, ""):
-            return "NULL"
+            return None
         try:
             f = float(ts)
+            if f <= 0:
+                return None
             return str(int(f)) if f.is_integer() else str(f)
         except (TypeError, ValueError):
             return str(ts)
 
-    headers = base_cols + [f"{rn}({_fmt_total(ts)})" for rn, ts in round_headers]
+    def _header_for(rn, ts):
+        t = _fmt_total(ts)
+        return rn if t is None else f"{rn}({t})"
+
+    headers = base_cols + [_header_for(rn, ts) for rn, ts in round_headers]
 
     def _fmt_cell(score, total):
         """iter134 — Export cells now mirror the Team Score table:
-        `score/total (pct%)`, `score/NULL` (no pct) when total missing,
+        `score/total (pct%)`, raw score when total missing,
         and "-" when employee has no score."""
         if score in (None, ""):
             return "-"
@@ -366,14 +431,14 @@ async def _collect_export_rows(filter_q: dict):
             return str(score)
         s_str = str(int(s)) if s.is_integer() else str(s)
         if total in (None, "") or (isinstance(total, (int, float)) and float(total) <= 0):
-            return f"{s_str}/NULL"
+            return s_str
         try:
             t = float(total)
             pct = (s / t) * 100
             t_str = str(int(t)) if t.is_integer() else str(t)
             return f"{s_str}/{t_str} ({pct:.2f}%)"
         except (TypeError, ValueError, ZeroDivisionError):
-            return f"{s_str}/NULL"
+            return s_str
 
     def emp_row(e):
         scores = e.get("round_scores") or {}
@@ -382,7 +447,7 @@ async def _collect_export_rows(filter_q: dict):
             e.get("email") or "",
             e.get("linkedin_id") or "",
             e.get("role") or "",
-            e.get("joining_date") or "",
+            _format_joining_date_display(e.get("joining_date") or ""),
             e.get("college") or "",
             e.get("nirf_rank") or "",
             e.get("degree") or "",
@@ -445,7 +510,10 @@ async def export_team_scores(
 
 # ─────────────────────── Import ──────────────────────────────────────────
 
-_ROUND_COL_RE = re.compile(r"^\s*([^()]+?)\s*\(\s*([-\d.]+)\s*\)\s*$")
+# iter135 — Round columns are NOT parsed any more. After the standard
+# employee columns, every remaining header is treated as the complete
+# Team Round Name exactly as it appears in the file (no bracket
+# processing, no total-score extraction).
 _BASE_COL_MAP = {
     "name": "name", "employee name": "name", "full name": "name",
     "email": "email", "email id": "email", "email_id": "email",
@@ -457,14 +525,6 @@ _BASE_COL_MAP = {
     "degree": "degree", "qualification": "degree",
     "passing year": "passing_year", "passing_year": "passing_year", "year of passing": "passing_year",
 }
-
-
-def _parse_round_header(h: str):
-    """If h is 'A(20)' style → ('A', 20.0). Else None."""
-    m = _ROUND_COL_RE.match(str(h or ""))
-    if not m:
-        return None
-    return (m.group(1).strip(), float(m.group(2)))
 
 
 def _row_has_inactive_marker(row) -> bool:
@@ -499,31 +559,38 @@ async def import_team_scores(request: Request, file: UploadFile = File(...)):
     headers = [str(h or "").strip() for h in rows[0]]
     body = rows[1:]
 
-    # Map columns: base fields + round-header columns.
-    base_idx = {}
-    round_idx = []  # list of (col_index, round_name, total_score)
+    # Map columns: base fields are recognised via _BASE_COL_MAP;
+    # everything else is a TEAM ROUND NAME taken verbatim (no parsing).
+    base_idx: dict = {}
+    round_idx: list = []  # list of (col_index, round_name_verbatim)
     for i, h in enumerate(headers):
         key = (h or "").strip().lower()
+        if not h:
+            continue
         if key in _BASE_COL_MAP:
             base_idx[_BASE_COL_MAP[key]] = i
             continue
-        parsed = _parse_round_header(h)
-        if parsed:
-            round_idx.append((i, parsed[0], parsed[1]))
+        # iter135 — treat ENTIRE header as the round name. No bracket
+        # parsing, no splitting, no total-score extraction.
+        round_idx.append((i, h.strip()))
 
     if "name" not in base_idx:
         raise HTTPException(status_code=400, detail="`Name` column missing")
 
-    # Ensure every detected round exists in ts_rounds (auto-create).
+    # Ensure every detected round exists in ts_rounds (auto-create with
+    # NULL total_score — user explicitly does NOT want totals derived
+    # from column headers).
     created_rounds = []
-    for _, rn, ts in round_idx:
+    for _, rn in round_idx:
         existing = await _db.ts_rounds.find_one(
             {"round_name": {"$regex": f"^{re.escape(rn)}$", "$options": "i"}}
         )
         if not existing:
             await _db.ts_rounds.insert_one({
-                "round_name": rn, "total_score": float(ts),
-                "created_at": _now(), "updated_at": _now(),
+                "round_name": rn,
+                "total_score": None,  # NULL — no parsing of column header
+                "created_at": _now(),
+                "updated_at": _now(),
             })
             created_rounds.append(rn)
 
@@ -551,7 +618,7 @@ async def import_team_scores(request: Request, file: UploadFile = File(...)):
         if not nm:
             continue
         scores = {}
-        for i, rn, _ in round_idx:
+        for i, rn in round_idx:
             v = r[i]
             if v in (None, ""):
                 continue
@@ -559,13 +626,18 @@ async def import_team_scores(request: Request, file: UploadFile = File(...)):
                 scores[rn] = float(v)
             except (TypeError, ValueError):
                 continue
+        # iter135 — joining_date is normalized to canonical yyyy-mm-dd.
+        joining_raw = ""
+        ji = base_idx.get("joining_date")
+        if ji is not None:
+            joining_raw = r[ji]
         doc = {
             "employee_status": status,
             "name": nm,
             "email": _at("email"),
             "linkedin_id": _at("linkedin_id"),
             "role": _at("role"),
-            "joining_date": _at("joining_date"),
+            "joining_date": _normalize_joining_date(joining_raw),
             "college": _at("college"),
             "nirf_rank": _at("nirf_rank"),
             "degree": _at("degree"),

@@ -160,13 +160,18 @@ async def test_export_active_inactive_separation(db, mock_req):
 
 @pytest.mark.asyncio
 async def test_import_creates_missing_rounds_and_splits_status(db, mock_req):
+    """iter135 — Import treats EVERY column after the standard employee
+    columns as the literal Team Round Name (no parsing). The
+    `Iter133_IMP_xxx(50)` header below is preserved verbatim as the
+    round name; no total-score extraction occurs."""
     import team_score
-    new_round = f"Iter133_IMP_{uuid.uuid4().hex[:6]}"
+    new_round = f"Iter133_IMP_{uuid.uuid4().hex[:6]}(50)"  # literal name
+    plain_round = f"Iter133_PLAIN_{uuid.uuid4().hex[:6]}"   # no brackets
     csv_content = (
-        f"Name,Email,Role,{new_round}(50)\n"
-        f"ImpActive,impa@x.io,Eng,40\n"
-        f"INACTIVE EMPLOYEES,,,\n"
-        f"ImpInactive,impi@x.io,Eng,30\n"
+        f"Name,Email,Role,Joining Date,{new_round},{plain_round}\n"
+        f"ImpActive,impa@x.io,Eng,01-06-2026,40,5\n"
+        f"INACTIVE EMPLOYEES,,,,,\n"
+        f"ImpInactive,impi@x.io,Eng,2025-12-15,30,3\n"
     )
     # Build a fake UploadFile.
     class _Fake:
@@ -180,18 +185,29 @@ async def test_import_creates_missing_rounds_and_splits_status(db, mock_req):
         assert res["success"] is True
         assert res["inserted"] >= 2
         assert res["separators"] >= 1
+        # Both round headers — including the one with "(50)" — are
+        # preserved verbatim and auto-created in ts_rounds.
         assert new_round in res["rounds_created"]
-        # Active employee → status='active'; below separator → 'inactive'.
+        assert plain_round in res["rounds_created"]
         a = await db.ts_employees.find_one({"email": "impa@x.io"})
         i = await db.ts_employees.find_one({"email": "impi@x.io"})
         assert a and a["employee_status"] == "active"
         assert i and i["employee_status"] == "inactive"
-        # Raw scores stored, not percentages.
+        # Raw scores stored under the verbatim round name.
         assert a["round_scores"][new_round] == 40.0
+        assert a["round_scores"][plain_round] == 5.0
         assert i["round_scores"][new_round] == 30.0
+        # Joining date normalized to yyyy-mm-dd regardless of input format.
+        assert a["joining_date"] == "2026-06-01"
+        assert i["joining_date"] == "2025-12-15"
+        # The "(50)" did NOT get parsed as a total_score — round was
+        # auto-created with NULL total.
+        r_doc = await db.ts_rounds.find_one({"round_name": new_round})
+        assert r_doc is not None
+        assert r_doc.get("total_score") in (None, 0, 0.0)
     finally:
         await db.ts_employees.delete_many({"email": {"$in": ["impa@x.io", "impi@x.io"]}})
-        await db.ts_rounds.delete_many({"round_name": new_round})
+        await db.ts_rounds.delete_many({"round_name": {"$in": [new_round, plain_round]}})
 
 
 # ─────────────────────── Isolation contract ─────────────────────────────

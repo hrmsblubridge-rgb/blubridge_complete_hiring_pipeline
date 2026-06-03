@@ -1,3 +1,106 @@
+## iter135 — Team Score: verbatim round headers, dropdown filters, dd-mm-yyyy dates (Feb 17, 2026)
+
+### Five user-reported defects (all fixed)
+
+**1. Import was parsing `RoundName(TotalScore)` headers**
+Old `_parse_round_header` regex split `BP(20)` into `('BP', 20)`. The user
+wants the FULL column header to be the round name verbatim — no bracket
+processing. Removed `_ROUND_COL_RE` + `_parse_round_header`. After the
+standard employee columns, every remaining header is now stored as the
+literal round name; auto-created `ts_rounds` row gets `total_score=None`.
+
+Verified: `BP(20)`, `C++(15)`, `Mensa`, `Mensa.org`, `Round-A`, `Round_B`
+all round-trip as themselves.
+
+**2. New rounds not auto-created for some names**
+Same root cause — names like `Mensa` and `Mensa.org` slipped through the
+old regex. Now every non-base column auto-creates a `ts_rounds` doc
+when missing.
+
+**3. Name / Email / Role filters were free-text inputs**
+Frontend `TeamScore.js` converted all three into `<select>` dropdowns
+populated from `filterOpts.{name,email,role}` (already returned by
+`GET /api/team-score/filters`, which uses `db.ts_employees.distinct(...)`
+— zero hiring-collection reads).
+
+**4. Joining Date displayed with timestamp/timezone**
+Added `fmtJoiningDate()` helper in `TeamScore.js`. Stored value is the
+canonical `yyyy-mm-dd`; rendered as `dd-mm-yyyy`. Strips any accidental
+`Txx:xx:xx` suffix defensively. Empty value → "-".
+
+**5. Joining Date storage / import normalisation**
+Backend helpers `_normalize_joining_date()` + `_format_joining_date_display()`
+introduced. Accepts `dd-mm-yyyy`, `dd/mm/yyyy`, `yyyy-mm-dd`, ISO
+timestamps, and Excel datetime/date objects (xlsx). Stores canonical
+`yyyy-mm-dd`. Wired into `create_employee`, `update_employee`, and the
+import row builder. Export `_collect_export_rows` renders
+`joining_date` as `dd-mm-yyyy` via the display helper.
+
+Bonus cleanup in `_collect_export_rows`: when `total_score` is NULL/0
+the export header drops the trailing `(N)` suffix entirely, so a
+round imported as `Mensa` exports as `Mensa` (no `Mensa(NULL)`) —
+clean round-trip.
+
+### Files modified
+- `/app/backend/team_score.py` — import rewrite + date helpers + export
+  joining-date + NULL-total header omission.
+- `/app/frontend/src/pages/TeamScore.js` — 3 filters → `<select>`;
+  `fmtJoiningDate()` helper; joining-date cell formatting; modal
+  placeholder hint.
+- `/app/backend/tests/test_iter133_team_score.py` — updated
+  `test_import_creates_missing_rounds_and_splits_status` to assert
+  verbatim round-header behaviour and date normalisation.
+
+### Files added
+- `/app/backend/tests/test_iter135_team_score_import_filters_dates.py`
+  — 8 tests covering all five fixes + isolation guard.
+
+### Verification — 14/14 tests pass (6 iter133 + 8 iter135)
+- `test_import_round_headers_are_verbatim_and_auto_created` — verifies
+  user's exact examples: `BP(20)`, `C++(15)`, `Mensa`, `Mensa.org`,
+  `Round-A`, `Round_B` all stored verbatim with `total_score=None`.
+- `test_import_does_not_parse_bracket_pattern_as_total` — explicit
+  source-code guard: `_parse_round_header` / `_ROUND_COL_RE` must be
+  GONE. `BP(20)` round must NOT split into separate `BP` + total=20.
+- `test_normalize_joining_date_helpers` — pure unit tests on the
+  helpers.
+- `test_import_normalizes_both_date_formats` — mixed dd-mm-yyyy and
+  yyyy-mm-dd in the same import → all stored as yyyy-mm-dd.
+- `test_export_renders_joining_date_as_dd_mm_yyyy` — exported cell is
+  `01-06-2026`; no `T00:00`, no `:00:00`.
+- `test_create_employee_normalizes_dd_mm_yyyy` — POST `15-12-2025` →
+  DB stores `2025-12-15`.
+- `test_frontend_filters_use_select_dropdowns` — source-code guard:
+  Name/Email/Role test-ids are wrapped in `<select>` and bind to
+  `filterOpts.{field}`.
+- `test_isolation_contract_still_holds` — re-asserts that
+  `team_score.py` references zero hiring collections after iter135
+  changes.
+
+### Live smoke-test (Playwright on the preview URL)
+- Confirmed `ts-filter-name`, `ts-filter-email`, `ts-filter-role`
+  render as `<select>` (`tagName === 'SELECT'`).
+- Existing imported employee renders `Joining Date = 05-01-2026`
+  (dd-mm-yyyy) — no time component.
+- Verbatim round columns visible in the table header:
+  `BP(20)`, `C++(15)`, `DL MATH(40)`, `DL TEST 2(50)`,
+  `INT & FLOAT POINT 1(25)`, `MATH B.A(10)`, …
+
+### Production-safety
+- ✅ Zero hiring-collection reads/writes (isolation contract enforced
+  by `test_isolation_contract_still_holds`).
+- ✅ Backward-compatible storage: `ts_rounds` rows created before
+  iter135 keep their populated `total_score`; new auto-created rows
+  default to `None`. Export header omits `(N)` only when total is
+  NULL/0, so legacy rounds export the same as before.
+- ✅ `_normalize_joining_date` falls back to the raw string when
+  it can't recognise the pattern — never drops user data.
+- ✅ Frontend lint clean; backend ruff lint clean.
+
+---
+
+
+
 ## iter133b — Team Score test alignment + smoke test (Feb 17, 2026)
 
 ### Verification

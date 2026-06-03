@@ -97,6 +97,18 @@ export default function TeamScore() {
         return `${score} - ${((score / total) * 100).toFixed(2)}%`;
     };
 
+    // iter135 — Joining-date display helper. Stored as "yyyy-mm-dd";
+    // shown to user as "dd-mm-yyyy". Empty / unknown → "-".
+    const fmtJoiningDate = (s) => {
+        if (!s) return '-';
+        const v = String(s).split('T')[0].split(' ')[0];
+        const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(v);
+        if (m) return `${m[3].padStart(2, '0')}-${m[2].padStart(2, '0')}-${m[1]}`;
+        const m2 = /^(\d{1,2})-(\d{1,2})-(\d{4})$/.exec(v);
+        if (m2) return `${m2[1].padStart(2, '0')}-${m2[2].padStart(2, '0')}-${m2[3]}`;
+        return v;
+    };
+
     return (
         <div className="min-h-screen bg-zinc-950 text-white">
             <div className="border-b border-zinc-800 p-6 flex items-center gap-3">
@@ -112,12 +124,21 @@ export default function TeamScore() {
                         <option value="">Status (all)</option>
                         {(filterOpts.employee_status || []).map(v => <option key={v} value={v}>{v}</option>)}
                     </select>
-                    <input value={filters.name} onChange={e => setFilters({ ...filters, name: e.target.value })}
-                        data-testid="ts-filter-name" placeholder="Name" className="bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm" />
-                    <input value={filters.email} onChange={e => setFilters({ ...filters, email: e.target.value })}
-                        data-testid="ts-filter-email" placeholder="Email" className="bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm" />
-                    <input value={filters.role} onChange={e => setFilters({ ...filters, role: e.target.value })}
-                        data-testid="ts-filter-role" placeholder="Role" className="bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm" />
+                    <select value={filters.name} onChange={e => setFilters({ ...filters, name: e.target.value })}
+                        data-testid="ts-filter-name" className="bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm">
+                        <option value="">Name (all)</option>
+                        {(filterOpts.name || []).map(v => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                    <select value={filters.email} onChange={e => setFilters({ ...filters, email: e.target.value })}
+                        data-testid="ts-filter-email" className="bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm">
+                        <option value="">Email (all)</option>
+                        {(filterOpts.email || []).map(v => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                    <select value={filters.role} onChange={e => setFilters({ ...filters, role: e.target.value })}
+                        data-testid="ts-filter-role" className="bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm">
+                        <option value="">Role (all)</option>
+                        {(filterOpts.role || []).map(v => <option key={v} value={v}>{v}</option>)}
+                    </select>
                     <select value={filters.nirf_rank} onChange={e => setFilters({ ...filters, nirf_rank: e.target.value })}
                         data-testid="ts-filter-nirf" className="bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm">
                         <option value="">NIRF Rank (all)</option>
@@ -168,7 +189,11 @@ export default function TeamScore() {
                                                 <Square size={16} weight="fill" />
                                             </button>
                                         </td>
-                                        {BASE_COLS.map(c => <td key={c.key} className="px-3 py-3 whitespace-nowrap">{e[c.key] || '-'}</td>)}
+                                        {BASE_COLS.map(c => (
+                                            <td key={c.key} className="px-3 py-3 whitespace-nowrap">
+                                                {c.key === 'joining_date' ? fmtJoiningDate(e[c.key]) : (e[c.key] || '-')}
+                                            </td>
+                                        ))}
                                         {sortedRounds.map(r => {
                                             const v = e.round_scores?.[r.round_name];
                                             return <td key={r.id} className="px-3 py-3 whitespace-nowrap" data-testid={`ts-${e.id}-${r.round_name}`}>{pct(v, r.total_score)}</td>;
@@ -299,7 +324,9 @@ function EmployeeModal({ rounds, onClose, onChanged }) {
                         <div key={c.key}>
                             <label className="text-xs text-zinc-500 uppercase tracking-wider">{c.label}</label>
                             <input value={form[c.key] || ''} onChange={e => setForm({ ...form, [c.key]: e.target.value })}
-                                data-testid={`ts-emp-${c.key}`} className="w-full mt-1 bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm" />
+                                data-testid={`ts-emp-${c.key}`}
+                                placeholder={c.key === 'joining_date' ? 'dd-mm-yyyy' : ''}
+                                className="w-full mt-1 bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm" />
                         </div>
                     ))}
                 </div>
