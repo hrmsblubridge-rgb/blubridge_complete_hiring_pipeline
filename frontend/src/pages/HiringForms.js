@@ -35,8 +35,8 @@ export default function HiringForms() {
             const [tRes, fRes, rRes, oRes] = await Promise.all([
                 axios.get(`${API}/api/bb/form-types`, { withCredentials: true }),
                 axios.get(`${API}/api/bb/hiring-forms`, { withCredentials: true }),
-                axios.get(`${API}/api/bb/job-roles`, { withCredentials: true }),
-                axios.get(`${API}/api/bb/job-openings`, { withCredentials: true }),
+                axios.get(`${API}/api/bb/job-roles?active_only=true`, { withCredentials: true }),
+                axios.get(`${API}/api/bb/job-openings?active_only=true`, { withCredentials: true }),
             ]);
             setFormTypes(tRes.data.form_types || []);
             setForms(fRes.data.forms || []);

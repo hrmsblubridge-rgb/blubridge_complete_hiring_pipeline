@@ -116,7 +116,7 @@ export default function Applicants() {
                 // dropped from this filter; now every catalogued role shows
                 // up, including newly uploaded ones (sync runs on every
                 // dataset upload).
-                const res = await axios.get(`${API}/api/bb/job-roles`, { withCredentials: true });
+                const res = await axios.get(`${API}/api/bb/job-roles?active_only=true`, { withCredentials: true });
                 const roles = (res.data.roles || []).map(r => ({ job_role: r.name }));
                 setJobRoles(roles);
             } catch {}

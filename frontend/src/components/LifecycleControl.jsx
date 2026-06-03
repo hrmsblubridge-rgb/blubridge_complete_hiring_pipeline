@@ -27,6 +27,7 @@ export default function LifecycleControl({ entity, id, name, status, onChanged, 
     const [open, setOpen] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [preview, setPreview] = useState(null);
+    const [errorMsg, setErrorMsg] = useState('');
 
     const isActive = (status || 'active') === 'active';
     const tid = testIdPrefix || `lifecycle-${entity}-${id}`;
@@ -46,11 +47,13 @@ export default function LifecycleControl({ entity, id, name, status, onChanged, 
     const handleOpen = async () => {
         setOpen(true);
         setPreview(null);
+        setErrorMsg('');
         await fetchPreview();
     };
 
     const handleAction = async () => {
         setSubmitting(true);
+        setErrorMsg('');
         const action = isActive ? 'deactivate' : 'activate';
         try {
             const res = await axios.post(
@@ -69,7 +72,19 @@ export default function LifecycleControl({ entity, id, name, status, onChanged, 
             setOpen(false);
             onChanged && onChanged();
         } catch (err) {
-            toast.error(err.response?.data?.detail || 'Failed');
+            // iter131 — Dependency-block popups: when the backend returns
+            // 409, the detail message is the spec-mandated copy
+            // ("Cannot activate. The associated Job Role is currently
+            // inactive. Please activate the Job Role first." etc.). Show
+            // it inline INSIDE the modal so the user sees the exact
+            // reason without losing context.
+            const status = err.response?.status;
+            const detail = err.response?.data?.detail || 'Failed';
+            if (status === 409) {
+                setErrorMsg(detail);
+            } else {
+                toast.error(detail);
+            }
         } finally {
             setSubmitting(false);
         }
@@ -136,6 +151,17 @@ export default function LifecycleControl({ entity, id, name, status, onChanged, 
                                 Reactivating will NOT auto-restore them.
                             </div>
                         ) : null}
+
+                        {/* iter131 — Dependency-block popup (inline). Surfaces
+                            the spec-mandated "Cannot activate. The associated
+                            Job Role / Job Opening is currently inactive." copy
+                            from the 409 backend response. */}
+                        {errorMsg && (
+                            <div className="bg-red-950/40 border border-red-800/70 px-3 py-2 text-red-300 text-sm"
+                                 data-testid={`${tid}-dependency-error`}>
+                                {errorMsg}
+                            </div>
+                        )}
 
                         <div className="flex justify-end gap-3">
                             <button onClick={() => setOpen(false)}

@@ -52,7 +52,7 @@ export default function InterviewReports() {
     const [sort, setSort] = useState(null);
 
     useEffect(() => {
-        axios.get(`${API}/api/bb/job-roles`, { withCredentials: true }).then(r => setBbRoles(r.data.roles || [])).catch(() => {});
+        axios.get(`${API}/api/bb/job-roles?active_only=true`, { withCredentials: true }).then(r => setBbRoles(r.data.roles || [])).catch(() => {});
     }, []);
 
     const fetchData = useCallback(async (pg = 1, sz = 100, sortState = null) => {

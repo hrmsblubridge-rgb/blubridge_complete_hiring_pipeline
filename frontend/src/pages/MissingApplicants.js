@@ -50,7 +50,7 @@ export default function MissingApplicants() {
     useEffect(() => {
         (async () => {
             try {
-                const r = await axios.get(`${API}/api/bb/job-roles`, { withCredentials: true });
+                const r = await axios.get(`${API}/api/bb/job-roles?active_only=true`, { withCredentials: true });
                 setBbRoles(r.data.roles || []);
             } catch (_e) { /* dropdown stays empty on auth failure */ }
         })();

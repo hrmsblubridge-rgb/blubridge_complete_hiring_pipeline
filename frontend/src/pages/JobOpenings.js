@@ -31,7 +31,7 @@ export default function JobOpenings() {
         try {
             const [oRes, rRes] = await Promise.all([
                 axios.get(`${API}/api/bb/job-openings`, { withCredentials: true }),
-                axios.get(`${API}/api/bb/job-roles`, { withCredentials: true }),
+                axios.get(`${API}/api/bb/job-roles?active_only=true`, { withCredentials: true }),
             ]);
             setOpenings(oRes.data.openings || []);
             setJobRoles(rRes.data.roles || []);

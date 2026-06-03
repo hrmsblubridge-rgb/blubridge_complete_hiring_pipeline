@@ -118,7 +118,7 @@ export default function AttendedApplicants() {
                 // Roles.js for the full rationale). Replaces the
                 // pipeline_data-filtered `/api/job-roles` which dropped
                 // valid roles that lived only in registered_candidates.
-                const res = await axios.get(`${API}/api/bb/job-roles`, { withCredentials: true });
+                const res = await axios.get(`${API}/api/bb/job-roles?active_only=true`, { withCredentials: true });
                 const roles = (res.data.roles || []).map(r => ({ job_role: r.name }));
                 setJobRoles(roles);
             } catch {}

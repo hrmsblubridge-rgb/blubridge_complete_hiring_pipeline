@@ -678,18 +678,16 @@ class JobRoleBody(BaseModel):
     name: str
 
 @bb_router.get("/job-roles")
-async def list_job_roles(request: Request):
+async def list_job_roles(request: Request, active_only: bool = Query(False)):
     """List job roles for dropdowns / management UI.
 
-    iter99 — Read-time canonicalization:
-      1. Every canonical `job_role` from `job_keyword_mapping` is included
-         (these are the targets recruiters mapped raw keywords to).
-      2. Every `bb_job_roles` row whose normalized name is NOT a mapped
-         keyword and NOT already a canonical target is included (truly
-         independent manual creates).
-      3. Case-insensitive dedupe by normalized name — the canonical row
-         wins so the displayed casing matches the mapping target.
-    The returned shape is unchanged: {roles: [{id, name, source?, ...}]}.
+    iter99 — Read-time canonicalization (see body).
+
+    iter131 — `active_only=true` filters the result to roles whose
+    `status` is "active" (the default, used by every selection picker /
+    filter / dropdown). The admin Manage Job Roles page passes
+    `active_only=false` (the default) to show inactive rows too so the
+    user can toggle them back.
     """
     await _require_auth(request)
 
@@ -744,6 +742,9 @@ async def list_job_roles(request: Request):
         out.append(r)
 
     out.sort(key=lambda x: (x.get("name") or "").lower())
+    # iter131 — active_only filter for selection pickers/dropdowns.
+    if active_only:
+        out = [r for r in out if (r.get("status") or "active") == "active"]
     return {"roles": out}
 
 @bb_router.post("/job-roles")
@@ -1094,6 +1095,22 @@ async def activate_job_opening(opening_id: str, request: Request):
     doc = await _db.bb_job_openings.find_one({"_id": _oid(opening_id)})
     if not doc:
         raise HTTPException(status_code=404, detail="Job opening not found")
+    # iter131 — Dependency enforcement: cannot activate an opening whose
+    # Job Role is currently inactive. Spec: "attempting to activate it
+    # must be blocked".
+    role_name = (doc.get("job_role") or "").strip()
+    if role_name:
+        role_doc = await _db.bb_job_roles.find_one(
+            {"name": {"$regex": f"^{re.escape(role_name)}$", "$options": "i"}}
+        )
+        if role_doc and (role_doc.get("status") or "active") == "inactive":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Cannot activate. The associated Job Role is "
+                    "currently inactive. Please activate the Job Role first."
+                ),
+            )
     return await _set_status_with_cascade(
         collection_name="bb_job_openings", doc=doc, status="active",
     )
@@ -1117,6 +1134,54 @@ async def activate_hiring_form(form_id: str, request: Request):
     doc = await _db.bb_hiring_forms.find_one({"_id": _oid(form_id)})
     if not doc:
         raise HTTPException(status_code=404, detail="Hiring form not found")
+    # iter131 — Dependency enforcement (spec Cases 1–4): a form can only
+    # be activated when BOTH its Job Role AND its linked Job Opening
+    # are active. Errors enumerate exactly which dependency blocked the
+    # activation so the UI can surface the right popup verbatim.
+    role_inactive = False
+    role_name = (doc.get("job_role") or "").strip()
+    if role_name:
+        role_doc = await _db.bb_job_roles.find_one(
+            {"name": {"$regex": f"^{re.escape(role_name)}$", "$options": "i"}}
+        )
+        if role_doc and (role_doc.get("status") or "active") == "inactive":
+            role_inactive = True
+
+    opening_inactive = False
+    opening_id = (doc.get("job_opening_id") or "").strip()
+    if opening_id:
+        try:
+            opening_doc = await _db.bb_job_openings.find_one({"_id": _oid(opening_id)})
+            if opening_doc and (opening_doc.get("status") or "active") == "inactive":
+                opening_inactive = True
+        except Exception:
+            pass
+
+    if role_inactive and opening_inactive:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot activate. The associated Job Role and Job "
+                "Opening are currently inactive. Please activate them first."
+            ),
+        )
+    if role_inactive:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot activate. The associated Job Role is currently "
+                "inactive. Please activate the Job Role first."
+            ),
+        )
+    if opening_inactive:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot activate. The associated Job Opening is "
+                "currently inactive. Please activate the Job Opening first."
+            ),
+        )
+
     return await _set_status_with_cascade(
         collection_name="bb_hiring_forms", doc=doc, status="active",
     )
@@ -1195,9 +1260,12 @@ class HiringFormUpdate(BaseModel):
     instruction_content: Optional[str] = None
 
 @bb_router.get("/hiring-forms")
-async def list_hiring_forms(request: Request):
+async def list_hiring_forms(request: Request, active_only: bool = Query(False)):
     await _require_auth(request)
-    forms = await _db.bb_hiring_forms.find({}).sort("created_at", -1).to_list(None)
+    # iter131 — active_only filter for any future selection picker that
+    # needs to enumerate only enabled forms.
+    q = {"status": {"$ne": "inactive"}} if active_only else {}
+    forms = await _db.bb_hiring_forms.find(q).sort("created_at", -1).to_list(None)
     for f in forms:
         f["id"] = str(f.pop("_id"))
         # iter130 — Surface lifecycle so the UI can render the
@@ -2073,9 +2141,12 @@ async def _unique_job_opening_slug(base: str, *, exclude_id=None) -> str:
 
 
 @bb_router.get("/job-openings")
-async def list_job_openings(request: Request):
+async def list_job_openings(request: Request, active_only: bool = Query(False)):
     await _require_auth(request)
-    openings = await _db.bb_job_openings.find({}).sort("created_at", -1).to_list(None)
+    # iter131 — `active_only=true` for selection dropdowns; admin pages
+    # default to False to surface inactive rows too.
+    q = {"status": {"$ne": "inactive"}} if active_only else {}
+    openings = await _db.bb_job_openings.find(q).sort("created_at", -1).to_list(None)
     # iter100 — Lazy slug back-fill. Rows created before the slug feature
     # have no `slug` field; assign + persist one on first read so future
     # public URLs are clean. We never mutate any other field here.

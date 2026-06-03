@@ -62,14 +62,18 @@ export default function PublicRegistration() {
             // For AI/ML role we still show the "What You Need to Know" interstitial,
             // then the result page. For all other forms go straight to result.
             const isShortlisted = r.data?.status === 'SHORTLISTED' || r.data?.is_shortlisted;
-            const isAimlRole = form?.job_role?.toLowerCase().includes('ai') && form?.job_role?.toLowerCase().includes('ml');
-            // Both the custom instructions page AND the AI/ML interstitial are now
-            // gated by the same `show_instruction_page` admin toggle. When set to No,
-            // neither interstitial appears — registrants go straight to result.
+            // iter131 — Default Instruction Page fallback. When admin
+            // sets Show Information Page = Yes but leaves the custom
+            // content empty, fall back to the AI/ML "What You Need to
+            // Know" template REGARDLESS of role (previously this was
+            // gated on the job_role containing "ai" + "ml", so any
+            // other role silently skipped to /result). Only shortlisted
+            // applicants see the interstitial — a rejected applicant
+            // shouldn't see "what to expect on day one".
             if (form?.show_instruction_page) {
                 if ((form.instruction_content || '').trim()) {
                     setStep('instructions');
-                } else if (isShortlisted && isAimlRole) {
+                } else if (isShortlisted) {
                     setStep('aiml');
                 } else {
                     setStep('result');

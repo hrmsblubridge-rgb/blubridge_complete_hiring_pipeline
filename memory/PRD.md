@@ -1,3 +1,115 @@
+## iter131 — Visibility, Dependency Enforcement & Default Instruction Fallback (Feb 16, 2026)
+
+### Issue 1 corrections (Activate/Deactivate lifecycle gaps)
+
+**Root causes**:
+1. List endpoints (`/job-roles`, `/job-openings`, `/hiring-forms`)
+   returned ALL rows regardless of status, so inactive entries leaked
+   into every selection dropdown / filter / picker.
+2. Activate endpoints had no dependency check — an admin could
+   reactivate a Job Opening while its Role was still inactive, or a
+   Hiring Form while its Role / Opening were still inactive.
+
+**Backend fix** (`bb_modules.py`):
+- All three list endpoints now accept `active_only: bool = Query(False)`.
+  `active_only=true` filters to `status != 'inactive'` (default false
+  preserves admin-management visibility).
+- `activate_job_opening` — pre-flight checks if `job_role` is inactive
+  → raises 409 with the spec-mandated copy *"Cannot activate. The
+  associated Job Role is currently inactive. Please activate the Job
+  Role first."*
+- `activate_hiring_form` — pre-flight checks BOTH `job_role` and
+  linked `job_opening_id`. Distinct 409 messages for all four spec
+  cases (Role-only inactive / Opening-only inactive / both inactive /
+  both active = succeed).
+
+**Frontend fix**:
+- `LifecycleControl` catches 409 responses and renders the detail
+  inline in a red banner inside the open modal (instead of a toast),
+  so the spec-mandated message appears in the same popup where the
+  admin clicked Activate.
+- All dropdown/filter callsites switched to `?active_only=true`:
+  * `JobOpenings.js` — Job Role dropdown
+  * `HiringForms.js` — Job Role + Job Opening dropdowns
+  * `AttendedRoles.js`, `Roles.js`, `InterviewReports.js`,
+    `MissingApplicants.js` — analytics & reporting filters
+- Admin list pages (`ManageJobRoles`, `JobOpenings`, `HiringForms`)
+  intentionally OMIT the flag — they continue showing all rows
+  (active + inactive) so admins can toggle inactive items back.
+
+### Issue 2 correction (default Instruction Page fallback)
+
+**Root cause**: `PublicRegistration.js` post-register branching gated
+the empty-content fallback to AI/ML roles only:
+```js
+} else if (isShortlisted && isAimlRole) {  // ← AI/ML gate
+    setStep('aiml');
+}
+```
+For any non-AI/ML form with `show_instruction_page=True` but empty
+`instruction_content`, the user silently fell through to `setStep('result')`
+— no Information Page rendered at all.
+
+**Frontend fix**: Removed the `isAimlRole` gate. The AI/ML "What You
+Need to Know" interstitial is now the default Instruction Page
+template and is shown to any shortlisted applicant whose form has
+`show_instruction_page=True` AND empty `instruction_content`. Rejected
+applicants still skip straight to `result` (the interstitial talks
+about Day-1 expectations — irrelevant for rejections).
+
+Spec validation scenarios (all behavioral):
+- **S1**: `show=Yes, content=<custom>` → custom shown ✓ (existing path,
+  unchanged).
+- **S2**: `show=Yes, content=''` + shortlisted → AI/ML interstitial
+  template shown ✓ (was previously hidden for non-AI/ML).
+- **S3**: `show=No` → no interstitial ✓ (unchanged).
+
+### Verification — 20/20 iter130+131 tests pass (10/10 new)
+
+`tests/test_iter131_visibility_and_dependencies.py`:
+1. `test_job_roles_active_only_excludes_inactive` — visibility filter
+2. `test_job_openings_active_only_excludes_inactive`
+3. `test_hiring_forms_active_only_excludes_inactive`
+4. `test_cannot_activate_opening_when_role_inactive` — 409 + message
+5. `test_cannot_activate_form_when_role_inactive` — Case 1
+6. `test_cannot_activate_form_when_opening_inactive` — Case 2
+7. `test_cannot_activate_form_when_both_inactive` — Case 3
+8. `test_can_activate_form_when_both_active` — Case 4
+9. `test_frontend_default_instruction_fallback_removed_role_gate`
+10. `test_frontend_dropdowns_use_active_only` — audit guard across all
+    6 frontend files
+
+All 58 tests across iter125-131 green (zero regression).
+
+### Files modified
+- `/app/backend/bb_modules.py`
+  * `list_job_roles` / `list_job_openings` / `list_hiring_forms` —
+    `active_only` query param
+  * `activate_job_opening` — role-inactive 409 guard
+  * `activate_hiring_form` — role+opening 4-case 409 guard
+- `/app/frontend/src/components/LifecycleControl.jsx` —
+  `errorMsg` state + inline dependency-error banner on 409
+- `/app/frontend/src/pages/PublicRegistration.js` —
+  default Instruction Page fallback no longer gated on AI/ML role
+- `/app/frontend/src/pages/{JobOpenings,HiringForms,AttendedRoles,InterviewReports,Roles,MissingApplicants}.js`
+  — `?active_only=true` on every selection-list fetch
+
+### Files added
+- `/app/backend/tests/test_iter131_visibility_and_dependencies.py`
+
+### Production-safety
+- ✅ Zero applicant data touched.
+- ✅ Backward-compatible defaults: `active_only` defaults to `False`
+  so any caller that doesn't yet pass the flag continues to see all
+  rows (no breakage during partial rollout).
+- ✅ Frontend lint clean across all 6 modified files.
+- ✅ Activation guards return 409 (Conflict), not 500 — the UI
+  distinguishes "you can fix this" vs. "server error" cleanly.
+
+---
+
+
+
 ## iter130 — Activate / Deactivate Lifecycle (Feb 16, 2026)
 
 ### Scope
