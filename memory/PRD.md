@@ -1,3 +1,102 @@
+## iter133 — Team Score Module (Feb 16, 2026)
+
+### Spec
+Standalone Team Score module, fully isolated from the hiring pipeline.
+Stores internal employee scores per dynamic round; provides
+import/export with auto-round-creation and active/inactive
+separation.
+
+### Collections (NEW, isolated)
+- `ts_rounds` — `{round_name, total_score, created_at, updated_at}`
+- `ts_employees` — full employee profile + `round_scores: {RoundName:
+  raw_score}` + `employee_status: active|inactive`
+
+### Files added
+- `/app/backend/team_score.py` (~440 LOC) — APIRouter + all endpoints.
+- `/app/frontend/src/pages/TeamScore.js` — page + 3 modals (rounds
+  CRUD, employee create, status toggle).
+- `/app/backend/tests/test_iter133_team_score.py` (6 tests).
+
+### Files modified (navigation only)
+- `/app/backend/server.py` — calls
+  `team_score.attach(app, db, auth)` at startup
+- `/app/frontend/src/App.js` — `/team-score` route
+- `/app/frontend/src/components/AppShell.js` — sidebar entry
+- `/app/frontend/src/pages/Home.js` — tile on the landing grid
+
+### API endpoints
+```
+GET    /api/team-score/rounds
+POST   /api/team-score/rounds
+PUT    /api/team-score/rounds/{id}
+DELETE /api/team-score/rounds/{id}
+
+GET    /api/team-score/employees                ?status&name&email&role&nirf_rank
+POST   /api/team-score/employees
+PUT    /api/team-score/employees/{id}
+DELETE /api/team-score/employees/{id}
+POST   /api/team-score/employees/{id}/activate
+POST   /api/team-score/employees/{id}/deactivate
+
+GET    /api/team-score/filters                  (distinct values)
+GET    /api/team-score/export                   ?fmt=csv|xlsx + filters
+POST   /api/team-score/import                   (multipart file)
+```
+
+### Key behaviours
+- **Percentages**: NEVER stored. Backend stores raw scores only; the
+  UI computes `(score / round_total) * 100` to 2 decimals.
+- **Round columns sort alphabetically** in the table header.
+- **Add Employee modal**: dynamic addable Round/Score pairs (same UX
+  as Update Applicants Scores); the round dropdown excludes already-
+  selected rounds.
+- **Status toggle**: per-row green/red square; modal confirms before
+  flipping.
+- **Export**: CSV + XLSX. Active rows first → `INACTIVE EMPLOYEES`
+  separator row → inactive rows. Round headers use
+  `RoundName(TotalScore)` format. Cells contain RAW scores, never
+  percentages.
+- **Import**: detects round columns via the `RoundName(TotalScore)`
+  header regex. Auto-creates any missing round in `ts_rounds`. Looks
+  for `INACTIVE EMPLOYEES` rows (case-insensitive, any column) to
+  partition rows into active/inactive. Upserts by `(name, email)`.
+
+### Isolation contract
+Source-code guard test (`test_no_reads_to_hiring_collections`) verifies
+that `team_score.py` source contains ZERO references (outside of
+docstrings/comments) to any of:
+- `pipeline_data`, `naukri_applies`, `bb_applicant_updates`,
+  `bb_rounds`, `bb_job_roles`, `job_titles_master`,
+  `registered_candidates`, `bb_job_openings`, `bb_hiring_forms`
+
+Only `ts_rounds` and `ts_employees` are touched.
+
+### Verification — 6/6 backend tests pass
+1. `test_create_and_list_round` — round CRUD
+2. `test_delete_round_purges_from_employees` — round deletion also
+   removes the matching key from every employee's `round_scores`
+3. `test_employee_lifecycle` — create + activate/deactivate cycle
+4. `test_export_active_inactive_separation` — separator row inserted;
+   raw values exported (no percentages)
+5. `test_import_creates_missing_rounds_and_splits_status` — new
+   `C(50)` column auto-creates the round; `INACTIVE EMPLOYEES`
+   separator correctly switches subsequent rows to inactive
+6. `test_no_reads_to_hiring_collections` — source-code isolation guard
+
+All 48 tests across iter126–133 still green.
+
+### Production-safety
+- ✅ Zero hiring data touched. Two new collections only.
+- ✅ Backend module is attached at startup but doesn't run any
+  scheduled worker — purely on-demand API.
+- ✅ Frontend route is auth-gated via existing ProtectedRoute.
+- ✅ Frontend lint clean across all modified files.
+- ✅ Backend ruff lint clean on `team_score.py`.
+
+---
+
+
+
 ## iter132 — Self-Adjusting Card Layouts (Feb 16, 2026)
 
 ### Symptom

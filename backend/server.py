@@ -4156,6 +4156,24 @@ except Exception:
     traceback.print_exc()
     raise
 
+# iter133 — Team Score module (isolated; new collections ts_rounds + ts_employees)
+try:
+    from team_score import attach as _attach_team_score
+
+    async def _ts_require_auth(request):
+        # Reuse the existing admin auth gate; tolerates the session
+        # cookie path used everywhere else in the app.
+        try:
+            return await get_current_user(request)
+        except Exception:
+            from fastapi import HTTPException as _HE
+            raise _HE(status_code=401, detail="Authentication required")
+    _attach_team_score(app, db, _ts_require_auth)
+except Exception:
+    import traceback
+    traceback.print_exc()
+    raise
+
 
 @app.get("/api/messaging/status")
 async def messaging_status(user: str = Depends(get_current_user)):

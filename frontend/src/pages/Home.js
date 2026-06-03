@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { ChartBar, FileText, CalendarCheck, PencilLine, Briefcase, FolderOpen, CalendarBlank, ShieldCheck, GraduationCap, MagnifyingGlass, Table, ArrowRight, WhatsappLogo, EnvelopeSimple, Flask, UserMinus } from '@phosphor-icons/react';
+import { ChartBar, FileText, CalendarCheck, PencilLine, Briefcase, FolderOpen, CalendarBlank, ShieldCheck, GraduationCap, MagnifyingGlass, Table, ArrowRight, WhatsappLogo, EnvelopeSimple, Flask, UserMinus, Users } from '@phosphor-icons/react';
 
 const NAV_ITEMS = [
     { label: 'Analytics Dashboard', desc: 'Upload datasets, view summaries and applicants', icon: ChartBar, path: '/dashboard', tone: 'blue' },
@@ -18,6 +18,7 @@ const NAV_ITEMS = [
     { label: 'Create Job Openings', desc: 'Publish job openings for recruitment', icon: FolderOpen, path: '/job-openings', tone: 'rose' },
     { label: 'College Drives', desc: 'Configure interview schedules per college and role', icon: GraduationCap, path: '/college-schedules', tone: 'pink' },
     { label: 'Set Holidays', desc: 'Configure holidays to block interview scheduling', icon: CalendarBlank, path: '/set-holidays', tone: 'orange' },
+    { label: 'Team Score', desc: 'Track internal team member scores per round — isolated from hiring pipeline', icon: Users, path: '/team-score', tone: 'indigo' },
     { label: 'Verify Applicant OTP', desc: 'Verify applicant attendance via phone and OTP', icon: ShieldCheck, path: '/verify-otp', tone: 'teal' },
 ];
 

@@ -1,0 +1,359 @@
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
+import { toast } from 'sonner';
+import {
+    ArrowLeft, Plus, PencilSimple, Trash, X, Square,
+    DownloadSimple, UploadSimple, ArrowsClockwise, FunnelSimple,
+} from '@phosphor-icons/react';
+
+const API = process.env.REACT_APP_BACKEND_URL;
+const TS = `${API}/api/team-score`;
+
+const BASE_COLS = [
+    { key: 'name', label: 'Name' },
+    { key: 'email', label: 'Email ID' },
+    { key: 'linkedin_id', label: 'LinkedIn ID' },
+    { key: 'role', label: 'Role' },
+    { key: 'joining_date', label: 'Joining Date' },
+    { key: 'college', label: 'College' },
+    { key: 'nirf_rank', label: 'NIRF Rank' },
+    { key: 'degree', label: 'Degree' },
+    { key: 'passing_year', label: 'Passing Year' },
+];
+
+export default function TeamScore() {
+    const navigate = useNavigate();
+    const [rounds, setRounds] = useState([]);
+    const [employees, setEmployees] = useState([]);
+    const [filterOpts, setFilterOpts] = useState({});
+    const [filters, setFilters] = useState({ employee_status: '', name: '', email: '', role: '', nirf_rank: '' });
+    const [showRoundsModal, setShowRoundsModal] = useState(false);
+    const [showEmpModal, setShowEmpModal] = useState(false);
+    const [statusModal, setStatusModal] = useState(null);  // { emp }
+    const [loading, setLoading] = useState(false);
+    const importRef = useRef();
+
+    const sortedRounds = useMemo(() => [...rounds].sort((a, b) => a.round_name.localeCompare(b.round_name)), [rounds]);
+
+    const fetchAll = useCallback(async () => {
+        setLoading(true);
+        try {
+            const q = new URLSearchParams();
+            Object.entries(filters).forEach(([k, v]) => { if (v) q.append(k, v); });
+            const [rR, rE, rF] = await Promise.all([
+                axios.get(`${TS}/rounds`, { withCredentials: true }),
+                axios.get(`${TS}/employees?${q.toString()}`, { withCredentials: true }),
+                axios.get(`${TS}/filters`, { withCredentials: true }),
+            ]);
+            setRounds(rR.data.rounds || []);
+            setEmployees(rE.data.employees || []);
+            setFilterOpts(rF.data || {});
+        } catch (e) { toast.error(e.response?.data?.detail || 'Failed to load'); }
+        setLoading(false);
+    }, [filters]);
+
+    useEffect(() => { fetchAll(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+    const handleFilter = () => fetchAll();
+    const handleReset = () => { setFilters({ employee_status: '', name: '', email: '', role: '', nirf_rank: '' }); setTimeout(fetchAll, 0); };
+
+    const handleExport = async (fmt) => {
+        const q = new URLSearchParams({ fmt });
+        Object.entries(filters).forEach(([k, v]) => { if (v) q.append(k, v); });
+        const res = await axios.get(`${TS}/export?${q.toString()}`, { withCredentials: true, responseType: 'blob' });
+        const url = URL.createObjectURL(res.data);
+        const a = document.createElement('a');
+        a.href = url; a.download = `team_scores.${fmt}`; a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    const handleImport = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const fd = new FormData();
+        fd.append('file', file);
+        try {
+            const r = await axios.post(`${TS}/import`, fd, { withCredentials: true });
+            toast.success(`Imported: +${r.data.inserted} / updated ${r.data.updated}` + (r.data.rounds_created?.length ? `; new rounds: ${r.data.rounds_created.join(', ')}` : ''));
+            fetchAll();
+        } catch (err) { toast.error(err.response?.data?.detail || 'Import failed'); }
+        e.target.value = '';
+    };
+
+    const toggleStatus = async (emp) => {
+        const action = (emp.employee_status || 'active') === 'active' ? 'deactivate' : 'activate';
+        try {
+            await axios.post(`${TS}/employees/${emp.id}/${action}`, {}, { withCredentials: true });
+            toast.success(action === 'activate' ? 'Reactivated' : 'Deactivated');
+            setStatusModal(null);
+            fetchAll();
+        } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+    };
+
+    const pct = (score, total) => {
+        if (score === undefined || score === null || score === '') return '-';
+        if (!total || total <= 0) return `${score}`;
+        return `${score} - ${((score / total) * 100).toFixed(2)}%`;
+    };
+
+    return (
+        <div className="min-h-screen bg-zinc-950 text-white">
+            <div className="border-b border-zinc-800 p-6 flex items-center gap-3">
+                <button onClick={() => navigate(-1)} data-testid="ts-back" className="p-2 hover:bg-zinc-800"><ArrowLeft size={18} /></button>
+                <h1 className="text-2xl font-light">Team Score</h1>
+            </div>
+
+            <div className="p-6 space-y-6">
+                {/* Filters */}
+                <div className="bg-zinc-900 border border-zinc-800 p-4 grid grid-cols-1 md:grid-cols-6 gap-3" data-testid="ts-filters">
+                    <select value={filters.employee_status} onChange={e => setFilters({ ...filters, employee_status: e.target.value })}
+                        data-testid="ts-filter-status" className="bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm">
+                        <option value="">Status (all)</option>
+                        {(filterOpts.employee_status || []).map(v => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                    <input value={filters.name} onChange={e => setFilters({ ...filters, name: e.target.value })}
+                        data-testid="ts-filter-name" placeholder="Name" className="bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm" />
+                    <input value={filters.email} onChange={e => setFilters({ ...filters, email: e.target.value })}
+                        data-testid="ts-filter-email" placeholder="Email" className="bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm" />
+                    <input value={filters.role} onChange={e => setFilters({ ...filters, role: e.target.value })}
+                        data-testid="ts-filter-role" placeholder="Role" className="bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm" />
+                    <select value={filters.nirf_rank} onChange={e => setFilters({ ...filters, nirf_rank: e.target.value })}
+                        data-testid="ts-filter-nirf" className="bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm">
+                        <option value="">NIRF Rank (all)</option>
+                        {(filterOpts.nirf_rank || []).map(v => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                    <div className="flex gap-2 flex-wrap">
+                        <button onClick={handleFilter} data-testid="ts-filter-apply" className="px-3 py-2 bg-cyan-700 hover:bg-cyan-600 text-sm flex items-center gap-1"><FunnelSimple size={14} />Filter</button>
+                        <button onClick={handleReset} data-testid="ts-filter-reset" className="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 text-sm flex items-center gap-1"><ArrowsClockwise size={14} />Reset</button>
+                    </div>
+                </div>
+
+                {/* Action bar */}
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex gap-2 flex-wrap">
+                        <input ref={importRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleImport} className="hidden" data-testid="ts-import-input" />
+                        <button onClick={() => importRef.current?.click()} data-testid="ts-import-btn" className="px-3 py-2 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-sm flex items-center gap-1"><UploadSimple size={14} />Import</button>
+                        <button onClick={() => handleExport('csv')} data-testid="ts-export-csv" className="px-3 py-2 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-sm flex items-center gap-1"><DownloadSimple size={14} />Export CSV</button>
+                        <button onClick={() => handleExport('xlsx')} data-testid="ts-export-xlsx" className="px-3 py-2 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 text-sm flex items-center gap-1"><DownloadSimple size={14} />Export XLSX</button>
+                    </div>
+                    <div className="flex gap-2 flex-wrap">
+                        <button onClick={() => setShowEmpModal(true)} data-testid="ts-add-emp" className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm flex items-center gap-1"><Plus size={14} />Add New Employee Team Score</button>
+                        <button onClick={() => setShowRoundsModal(true)} data-testid="ts-add-round" className="px-4 py-2 bg-cyan-700 hover:bg-cyan-600 text-sm flex items-center gap-1"><Plus size={14} />Add New Team Round</button>
+                    </div>
+                </div>
+
+                {/* Table */}
+                <div className="bg-zinc-900 border border-zinc-800 overflow-x-auto">
+                    <table className="w-full text-sm">
+                        <thead>
+                            <tr className="border-b border-zinc-800 text-xs uppercase tracking-wider text-zinc-500">
+                                <th className="px-3 py-3 text-left">Status</th>
+                                {BASE_COLS.map(c => <th key={c.key} className="px-3 py-3 text-left whitespace-nowrap">{c.label}</th>)}
+                                {sortedRounds.map(r => <th key={r.id} className="px-3 py-3 text-left whitespace-nowrap">{r.round_name}({r.total_score})</th>)}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {loading && <tr><td colSpan={BASE_COLS.length + sortedRounds.length + 1} className="text-center py-6 text-zinc-500">Loading...</td></tr>}
+                            {!loading && employees.length === 0 && <tr><td colSpan={BASE_COLS.length + sortedRounds.length + 1} className="text-center py-8 text-zinc-500">No employees yet — add your first one →</td></tr>}
+                            {!loading && employees.map(e => {
+                                const active = (e.employee_status || 'active') === 'active';
+                                return (
+                                    <tr key={e.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30" data-testid={`ts-row-${e.id}`}>
+                                        <td className="px-3 py-3">
+                                            <button onClick={() => setStatusModal({ emp: e })}
+                                                data-testid={`ts-status-${e.id}`}
+                                                title={active ? 'Active' : 'Inactive'}
+                                                className={`p-1 transition-colors ${active ? 'text-emerald-400 hover:bg-emerald-900/30' : 'text-red-400 hover:bg-red-900/30'}`}>
+                                                <Square size={16} weight="fill" />
+                                            </button>
+                                        </td>
+                                        {BASE_COLS.map(c => <td key={c.key} className="px-3 py-3 whitespace-nowrap">{e[c.key] || '-'}</td>)}
+                                        {sortedRounds.map(r => {
+                                            const v = e.round_scores?.[r.round_name];
+                                            return <td key={r.id} className="px-3 py-3 whitespace-nowrap" data-testid={`ts-${e.id}-${r.round_name}`}>{pct(v, r.total_score)}</td>;
+                                        })}
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            {showRoundsModal && <RoundsModal rounds={sortedRounds} onClose={() => setShowRoundsModal(false)} onChanged={fetchAll} />}
+            {showEmpModal && <EmployeeModal rounds={sortedRounds} onClose={() => setShowEmpModal(false)} onChanged={fetchAll} />}
+            {statusModal && <StatusModal emp={statusModal.emp} onConfirm={() => toggleStatus(statusModal.emp)} onClose={() => setStatusModal(null)} />}
+        </div>
+    );
+}
+
+// ─────────────────────── Rounds Modal ──────────────────────────────────
+
+function RoundsModal({ rounds, onClose, onChanged }) {
+    const [name, setName] = useState('');
+    const [total, setTotal] = useState('');
+    const [editing, setEditing] = useState(null);
+
+    const submit = async () => {
+        if (!name.trim()) return toast.error('Round name required');
+        try {
+            if (editing) {
+                await axios.put(`${TS}/rounds/${editing.id}`, { round_name: name, total_score: parseFloat(total) || 0 }, { withCredentials: true });
+                toast.success('Updated');
+            } else {
+                await axios.post(`${TS}/rounds`, { round_name: name, total_score: parseFloat(total) || 0 }, { withCredentials: true });
+                toast.success('Added');
+            }
+            setName(''); setTotal(''); setEditing(null);
+            onChanged();
+        } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+    };
+
+    const remove = async (r) => {
+        if (!window.confirm(`Delete round "${r.round_name}"?`)) return;
+        try {
+            await axios.delete(`${TS}/rounds/${r.id}`, { withCredentials: true });
+            toast.success('Deleted');
+            onChanged();
+        } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" data-testid="ts-rounds-modal">
+            <div className="bg-zinc-900 border border-zinc-700 w-full max-w-lg p-6 space-y-5">
+                <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold">{editing ? 'Edit Team Round' : 'Add New Team Round'}</h2>
+                    <button onClick={onClose} className="text-zinc-500 hover:text-white"><X size={20} /></button>
+                </div>
+
+                <div className="space-y-3">
+                    <input value={name} onChange={e => setName(e.target.value)} placeholder="Round Name (e.g. A)" data-testid="ts-round-name" className="w-full bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm" />
+                    <input value={total} onChange={e => setTotal(e.target.value)} placeholder="Total Score" type="number" step="0.01" data-testid="ts-round-total" className="w-full bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm" />
+                    <div className="flex justify-end gap-2">
+                        {editing && <button onClick={() => { setEditing(null); setName(''); setTotal(''); }} className="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 text-sm">Cancel</button>}
+                        <button onClick={submit} data-testid="ts-round-submit" className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm">{editing ? 'Update' : 'Add'}</button>
+                    </div>
+                </div>
+
+                {rounds.length > 0 && (
+                    <div className="border-t border-zinc-800 pt-4">
+                        <p className="text-xs text-zinc-500 uppercase tracking-wider mb-2">Existing Rounds</p>
+                        <div className="flex flex-wrap gap-2">
+                            {rounds.map(r => (
+                                <div key={r.id} className="flex items-center gap-2 bg-zinc-800 border border-zinc-700 px-3 py-1.5 text-xs" data-testid={`ts-round-card-${r.id}`}>
+                                    <span className="whitespace-nowrap">{r.round_name} ({r.total_score})</span>
+                                    <button onClick={() => { setEditing(r); setName(r.round_name); setTotal(String(r.total_score)); }}
+                                        data-testid={`ts-round-edit-${r.id}`} className="text-zinc-400 hover:text-white"><PencilSimple size={12} /></button>
+                                    <button onClick={() => remove(r)} data-testid={`ts-round-del-${r.id}`} className="text-zinc-400 hover:text-red-400"><Trash size={12} /></button>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+// ─────────────────────── Employee Modal ──────────────────────────────────
+
+function EmployeeModal({ rounds, onClose, onChanged }) {
+    const [form, setForm] = useState({
+        name: '', email: '', linkedin_id: '', role: '', joining_date: '',
+        college: '', nirf_rank: '', degree: '', passing_year: '',
+    });
+    const [pairs, setPairs] = useState([{ round_name: '', score: '' }]);
+
+    const usedRounds = pairs.map(p => p.round_name).filter(Boolean);
+    const availableRounds = (round_for_idx) => rounds.filter(r => !usedRounds.includes(r.round_name) || r.round_name === round_for_idx);
+
+    const addPair = () => setPairs([...pairs, { round_name: '', score: '' }]);
+    const updatePair = (i, field, v) => { const c = [...pairs]; c[i][field] = v; setPairs(c); };
+    const removePair = (i) => setPairs(pairs.filter((_, idx) => idx !== i));
+
+    const submit = async () => {
+        if (!form.name.trim()) return toast.error('Name required');
+        const round_scores = {};
+        for (const p of pairs) {
+            if (p.round_name && p.score !== '') round_scores[p.round_name] = parseFloat(p.score);
+        }
+        try {
+            await axios.post(`${TS}/employees`, { ...form, round_scores }, { withCredentials: true });
+            toast.success('Employee added');
+            onClose();
+            onChanged();
+        } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto" data-testid="ts-emp-modal">
+            <div className="bg-zinc-900 border border-zinc-700 w-full max-w-2xl p-6 space-y-4 my-8">
+                <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold">Add New Employee Team Score</h2>
+                    <button onClick={onClose} className="text-zinc-500 hover:text-white"><X size={20} /></button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {BASE_COLS.map(c => (
+                        <div key={c.key}>
+                            <label className="text-xs text-zinc-500 uppercase tracking-wider">{c.label}</label>
+                            <input value={form[c.key] || ''} onChange={e => setForm({ ...form, [c.key]: e.target.value })}
+                                data-testid={`ts-emp-${c.key}`} className="w-full mt-1 bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm" />
+                        </div>
+                    ))}
+                </div>
+
+                <div className="border-t border-zinc-800 pt-4">
+                    <div className="flex items-center justify-between mb-2">
+                        <p className="text-xs text-zinc-500 uppercase tracking-wider">Round Scores</p>
+                        <button onClick={addPair} data-testid="ts-emp-add-pair" className="text-xs px-2 py-1 bg-cyan-800 hover:bg-cyan-700 flex items-center gap-1"><Plus size={12} />Add Round</button>
+                    </div>
+                    <div className="space-y-2">
+                        {pairs.map((p, i) => (
+                            <div key={i} className="flex gap-2 items-center">
+                                <select value={p.round_name} onChange={e => updatePair(i, 'round_name', e.target.value)}
+                                    data-testid={`ts-emp-pair-round-${i}`} className="flex-1 bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm">
+                                    <option value="">— select round —</option>
+                                    {availableRounds(p.round_name).map(r => <option key={r.id} value={r.round_name}>{r.round_name} (Total: {r.total_score})</option>)}
+                                </select>
+                                <input value={p.score} onChange={e => updatePair(i, 'score', e.target.value)} placeholder="Score" type="number" step="0.01"
+                                    data-testid={`ts-emp-pair-score-${i}`} className="w-28 bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm" />
+                                {pairs.length > 1 && <button onClick={() => removePair(i)} className="text-red-400 hover:text-red-300"><X size={16} /></button>}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-3">
+                    <button onClick={onClose} className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-sm">Cancel</button>
+                    <button onClick={submit} data-testid="ts-emp-submit" className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm">Add</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ─────────────────────── Status Modal ──────────────────────────────────
+
+function StatusModal({ emp, onConfirm, onClose }) {
+    const active = (emp.employee_status || 'active') === 'active';
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" data-testid="ts-status-modal">
+            <div className="bg-zinc-900 border border-zinc-700 w-full max-w-sm mx-4 p-6 space-y-4">
+                <h2 className="text-lg font-semibold">{emp.name}</h2>
+                <p className="text-sm">
+                    <span className="text-zinc-500 mr-2">Current Status:</span>
+                    <span className={active ? 'text-emerald-400' : 'text-red-400'}>{active ? 'Active' : 'Inactive'}</span>
+                </p>
+                <div className="flex justify-end gap-2">
+                    <button onClick={onClose} className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-sm">Cancel</button>
+                    <button onClick={onConfirm} data-testid="ts-status-confirm"
+                        className={`px-4 py-2 text-sm text-white ${active ? 'bg-red-700 hover:bg-red-600' : 'bg-emerald-700 hover:bg-emerald-600'}`}>
+                        {active ? 'Deactivate' : 'Reactivate'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
