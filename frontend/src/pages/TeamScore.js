@@ -34,7 +34,27 @@ export default function TeamScore() {
     const [loading, setLoading] = useState(false);
     const importRef = useRef();
 
+    // iter136 — pagination.
+    const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 150, 200, 250, 500];
+    const [pageSize, setPageSize] = useState(50);
+    const [page, setPage] = useState(1);
+    const [pageInput, setPageInput] = useState('');
+
     const sortedRounds = useMemo(() => [...rounds].sort((a, b) => a.round_name.localeCompare(b.round_name)), [rounds]);
+
+    // iter136 — pagination math.
+    const totalRecords = employees.length;
+    const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
+    const currentPage = Math.min(Math.max(1, page), totalPages);
+    const pagedEmployees = useMemo(() => {
+        const start = (currentPage - 1) * pageSize;
+        return employees.slice(start, start + pageSize);
+    }, [employees, currentPage, pageSize]);
+
+    const goToPage = (p) => {
+        const target = Math.min(Math.max(1, Math.floor(Number(p) || 1)), totalPages);
+        setPage(target);
+    };
 
     const fetchAll = useCallback(async () => {
         setLoading(true);
@@ -49,6 +69,7 @@ export default function TeamScore() {
             setRounds(rR.data.rounds || []);
             setEmployees(rE.data.employees || []);
             setFilterOpts(rF.data || {});
+            setPage(1);  // iter136 — reset to first page on any reload
         } catch (e) { toast.error(e.response?.data?.detail || 'Failed to load'); }
         setLoading(false);
     }, [filters]);
@@ -164,24 +185,35 @@ export default function TeamScore() {
                     </div>
                 </div>
 
-                {/* Table */}
-                <div className="bg-zinc-900 border border-zinc-800 overflow-x-auto">
-                    <table className="w-full text-sm">
+                {/* Table — iter136: sticky header (vertical) + sticky first 3
+                    columns (Status, Name, Email ID) horizontally. */}
+                <div className="bg-zinc-900 border border-zinc-800 overflow-auto max-h-[calc(100vh-360px)]" data-testid="ts-table-wrap">
+                    <table className="text-sm border-separate border-spacing-0">
                         <thead>
-                            <tr className="border-b border-zinc-800 text-xs uppercase tracking-wider text-zinc-500">
-                                <th className="px-3 py-3 text-left">Status</th>
-                                {BASE_COLS.map(c => <th key={c.key} className="px-3 py-3 text-left whitespace-nowrap">{c.label}</th>)}
-                                {sortedRounds.map(r => <th key={r.id} className="px-3 py-3 text-left whitespace-nowrap">{r.round_name}({r.total_score})</th>)}
+                            <tr className="text-xs uppercase tracking-wider text-zinc-500">
+                                <th data-testid="ts-th-status" className="px-3 py-3 text-left whitespace-nowrap bg-zinc-900 border-b border-zinc-800 sticky top-0 left-0 z-30 w-[64px] min-w-[64px]">Status</th>
+                                <th data-testid="ts-th-name" className="px-3 py-3 text-left whitespace-nowrap bg-zinc-900 border-b border-zinc-800 sticky top-0 left-[64px] z-30 w-[180px] min-w-[180px] shadow-[inset_-1px_0_0_rgba(63,63,70,0.5)]">Name</th>
+                                <th data-testid="ts-th-email" className="px-3 py-3 text-left whitespace-nowrap bg-zinc-900 border-b border-zinc-800 sticky top-0 left-[244px] z-30 w-[240px] min-w-[240px] shadow-[inset_-1px_0_0_rgba(63,63,70,1)]">Email ID</th>
+                                {BASE_COLS.filter(c => c.key !== 'name' && c.key !== 'email').map(c =>
+                                    <th key={c.key} className="px-3 py-3 text-left whitespace-nowrap bg-zinc-900 border-b border-zinc-800 sticky top-0 z-20">{c.label}</th>
+                                )}
+                                {sortedRounds.map(r => {
+                                    const t = r.total_score;
+                                    const suffix = (t === null || t === undefined || t === '' || Number(t) <= 0) ? '' : `(${t})`;
+                                    return (
+                                        <th key={r.id} className="px-3 py-3 text-left whitespace-nowrap bg-zinc-900 border-b border-zinc-800 sticky top-0 z-20">{r.round_name}{suffix}</th>
+                                    );
+                                })}
                             </tr>
                         </thead>
                         <tbody>
-                            {loading && <tr><td colSpan={BASE_COLS.length + sortedRounds.length + 1} className="text-center py-6 text-zinc-500">Loading...</td></tr>}
-                            {!loading && employees.length === 0 && <tr><td colSpan={BASE_COLS.length + sortedRounds.length + 1} className="text-center py-8 text-zinc-500">No employees yet — add your first one →</td></tr>}
-                            {!loading && employees.map(e => {
+                            {loading && <tr><td colSpan={BASE_COLS.length + sortedRounds.length + 1} className="text-center py-6 text-zinc-500 bg-zinc-900">Loading...</td></tr>}
+                            {!loading && employees.length === 0 && <tr><td colSpan={BASE_COLS.length + sortedRounds.length + 1} className="text-center py-8 text-zinc-500 bg-zinc-900">No employees yet — add your first one →</td></tr>}
+                            {!loading && pagedEmployees.map(e => {
                                 const active = (e.employee_status || 'active') === 'active';
                                 return (
-                                    <tr key={e.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/30" data-testid={`ts-row-${e.id}`}>
-                                        <td className="px-3 py-3">
+                                    <tr key={e.id} className="group" data-testid={`ts-row-${e.id}`}>
+                                        <td className="px-3 py-3 bg-zinc-900 group-hover:bg-zinc-800 border-b border-zinc-800/50 sticky left-0 z-10 w-[64px] min-w-[64px] transition-colors">
                                             <button onClick={() => setStatusModal({ emp: e })}
                                                 data-testid={`ts-status-${e.id}`}
                                                 title={active ? 'Active' : 'Inactive'}
@@ -189,14 +221,16 @@ export default function TeamScore() {
                                                 <Square size={16} weight="fill" />
                                             </button>
                                         </td>
-                                        {BASE_COLS.map(c => (
-                                            <td key={c.key} className="px-3 py-3 whitespace-nowrap">
+                                        <td className="px-3 py-3 whitespace-nowrap bg-zinc-900 group-hover:bg-zinc-800 border-b border-zinc-800/50 sticky left-[64px] z-10 w-[180px] min-w-[180px] transition-colors shadow-[inset_-1px_0_0_rgba(63,63,70,0.5)]">{e.name || '-'}</td>
+                                        <td className="px-3 py-3 whitespace-nowrap bg-zinc-900 group-hover:bg-zinc-800 border-b border-zinc-800/50 sticky left-[244px] z-10 w-[240px] min-w-[240px] transition-colors shadow-[inset_-1px_0_0_rgba(63,63,70,1)]">{e.email || '-'}</td>
+                                        {BASE_COLS.filter(c => c.key !== 'name' && c.key !== 'email').map(c => (
+                                            <td key={c.key} className="px-3 py-3 whitespace-nowrap border-b border-zinc-800/50 group-hover:bg-zinc-800/30">
                                                 {c.key === 'joining_date' ? fmtJoiningDate(e[c.key]) : (e[c.key] || '-')}
                                             </td>
                                         ))}
                                         {sortedRounds.map(r => {
                                             const v = e.round_scores?.[r.round_name];
-                                            return <td key={r.id} className="px-3 py-3 whitespace-nowrap" data-testid={`ts-${e.id}-${r.round_name}`}>{pct(v, r.total_score)}</td>;
+                                            return <td key={r.id} className="px-3 py-3 whitespace-nowrap border-b border-zinc-800/50 group-hover:bg-zinc-800/30" data-testid={`ts-${e.id}-${r.round_name}`}>{pct(v, r.total_score)}</td>;
                                         })}
                                     </tr>
                                 );
@@ -204,6 +238,53 @@ export default function TeamScore() {
                         </tbody>
                     </table>
                 </div>
+
+                {/* iter136 — Pagination footer */}
+                {!loading && totalRecords > 0 && (
+                    <div className="flex flex-wrap items-center justify-between gap-3 text-sm" data-testid="ts-pagination">
+                        <div className="flex items-center gap-2 text-zinc-400">
+                            <span>Rows per page:</span>
+                            <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}
+                                data-testid="ts-page-size" className="bg-zinc-800 border border-zinc-700 px-2 py-1 text-sm">
+                                {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n}</option>)}
+                            </select>
+                            <span className="ml-3">
+                                Showing {(currentPage - 1) * pageSize + 1}–
+                                {Math.min(currentPage * pageSize, totalRecords)} of {totalRecords}
+                            </span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                            {currentPage > 1 && (
+                                <>
+                                    <button onClick={() => setPage(1)} data-testid="ts-page-first"
+                                        className="px-2 py-1 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700">&laquo;</button>
+                                    <button onClick={() => setPage(currentPage - 1)} data-testid="ts-page-prev"
+                                        className="px-2 py-1 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700">&lsaquo;</button>
+                                </>
+                            )}
+                            <span className="px-2 py-1 text-zinc-400" data-testid="ts-page-indicator">
+                                Page {currentPage} / {totalPages}
+                            </span>
+                            {currentPage < totalPages && (
+                                <>
+                                    <button onClick={() => setPage(currentPage + 1)} data-testid="ts-page-next"
+                                        className="px-2 py-1 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700">&rsaquo;</button>
+                                    <button onClick={() => setPage(totalPages)} data-testid="ts-page-last"
+                                        className="px-2 py-1 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700">&raquo;</button>
+                                </>
+                            )}
+                            <form onSubmit={e => { e.preventDefault(); goToPage(pageInput); setPageInput(''); }}
+                                className="flex items-center gap-1 ml-3">
+                                <input value={pageInput} onChange={e => setPageInput(e.target.value)}
+                                    placeholder="#" type="number" min="1" max={totalPages}
+                                    data-testid="ts-page-input"
+                                    className="w-16 bg-zinc-800 border border-zinc-700 px-2 py-1 text-sm" />
+                                <button type="submit" data-testid="ts-page-go"
+                                    className="px-2 py-1 bg-cyan-700 hover:bg-cyan-600 text-sm">Go</button>
+                            </form>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {showRoundsModal && <RoundsModal rounds={sortedRounds} onClose={() => setShowRoundsModal(false)} onChanged={fetchAll} />}

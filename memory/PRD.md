@@ -1,3 +1,82 @@
+## iter136 — Team Score table: sticky columns/header + pagination (Feb 17, 2026)
+
+### Spec
+1. Freeze first 3 columns (Status, Name, Email ID) when scrolling
+   horizontally; rest of the columns scroll under them.
+2. Freeze the header row when scrolling vertically.
+3. Pagination: rows-per-page dropdown (10/25/50/100/150/200/250/500),
+   « ‹ › » buttons that show/hide based on current page position,
+   page indicator, and a custom-page input + Go button.
+
+### Implementation (`/app/frontend/src/pages/TeamScore.js`)
+- Wrapped the `<table>` in a `overflow-auto max-h-[calc(100vh-360px)]`
+  container so both axes scroll inside the page chrome.
+- Switched the table to `border-separate border-spacing-0` so Tailwind
+  `sticky` works on `<th>` / `<td>` (sticky doesn't apply to
+  `border-collapse` cells in some browsers).
+- Status / Name / Email cells use cumulative `sticky left-…`:
+  * Status: `sticky left-0 w-[64px]`
+  * Name: `sticky left-[64px] w-[180px]` (with right-edge inset shadow)
+  * Email: `sticky left-[244px] w-[240px]` (with stronger right shadow
+    to delineate the frozen group from the scrollable columns)
+- Every `<th>` uses `sticky top-0`; the three frozen-corner headers
+  combine `sticky top-0 left-…` with `z-30` so they stay on top of
+  both the row sticky cells (z-10) and the rest of the header (z-20).
+- Body sticky cells use a `group` row + `bg-zinc-900
+  group-hover:bg-zinc-800` so hover state is consistent across the
+  frozen and scrollable halves.
+
+### Pagination
+- Client-side slicing of the existing `employees` array (the backend
+  list endpoint already returns the filtered set; no extra fetches).
+- `pageSize` state + `PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 150, 200,
+  250, 500]`; default 50.
+- `page` resets to 1 on (a) any data reload via `fetchAll`, (b)
+  page-size change, (c) explicit Go submission outside valid range
+  (clamped to `[1, totalPages]`).
+- Conditional rendering:
+  * `«` and `‹` shown only when `currentPage > 1`.
+  * `›` and `»` shown only when `currentPage < totalPages`.
+- Custom-page form: number input bounded by `min=1 max={totalPages}`;
+  Go button parses → clamps → `setPage()`.
+- Pagination footer hidden entirely when `totalRecords === 0`.
+
+### Files modified
+- `/app/frontend/src/pages/TeamScore.js`
+
+### Files added
+- `/app/backend/tests/test_iter136_team_score_sticky_and_pagination.py`
+  — 5 source-code guard tests covering sticky columns, sticky header,
+  container overflow, pagination controls (including all 8 page-size
+  options, conditional « ‹ › » visibility, indicator, input, Go),
+  and that the body iterates `pagedEmployees` rather than the full
+  `employees` list.
+
+### Verification — 19/19 Team Score tests pass
+- 6 iter133 + 8 iter135 + 5 iter136. Zero regressions across the
+  Team Score module.
+
+### Live verification
+Playwright on the preview deploy:
+- `getComputedStyle(NameHeader).position === 'sticky'`
+- `getComputedStyle(NameHeader).left === '64px'`
+- Horizontal scroll of 800px in `[data-testid="ts-table-wrap"]`:
+  Status / Name / Email columns remain pinned to the left while the
+  data columns (Joining Date, College, NIRF Rank, Degree, Passing
+  Year, then round columns) slide away.
+- Pagination footer renders "Page 1 / 1" with « ‹ › » correctly
+  hidden on the single-page dataset.
+
+### Production-safety
+- ✅ Pure CSS / JSX changes; no backend touched.
+- ✅ Hiring-collection isolation guard still green.
+- ✅ Backend ruff lint clean; frontend ESLint clean.
+- ✅ No new dependencies.
+
+---
+
+
+
 ## iter135 — Team Score: verbatim round headers, dropdown filters, dd-mm-yyyy dates (Feb 17, 2026)
 
 ### Five user-reported defects (all fixed)
