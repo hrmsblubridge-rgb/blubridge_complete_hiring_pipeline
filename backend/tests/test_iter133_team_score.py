@@ -145,10 +145,11 @@ async def test_export_active_inactive_separation(db, mock_req):
         sep_idx = names.index("INACTIVE EMPLOYEES")
         assert names.index("Active1") < sep_idx
         assert "Inactive1" in names[sep_idx + 1:]
-        # Round score column for Active1 is the RAW value (10), not "10 - 50%"
+        # iter134 — Export cells mirror the Team Score table:
+        # `score/total (pct%)` (e.g. `10/20 (50.00%)`).
         idx_round = [i for i, h in enumerate(headers) if h.startswith(rn)][0]
         active_row = rows[names.index("Active1")]
-        assert active_row[idx_round] == 10.0 or active_row[idx_round] == 10
+        assert active_row[idx_round] == "10/20 (50.00%)"
     finally:
         await db.ts_employees.delete_many({"email": {"$in": ["a@x.io", "b@x.io"]}})
         await db.ts_rounds.delete_many({"round_name": rn})

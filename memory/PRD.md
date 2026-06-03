@@ -1,3 +1,30 @@
+## iter133b — Team Score test alignment + smoke test (Feb 17, 2026)
+
+### Verification
+- `tests/test_iter133_team_score.py` — **6/6 PASS** after aligning
+  `test_export_active_inactive_separation` with the iter134 export
+  format (`score/total (pct%)` — confirmed by user as the desired
+  output that mirrors the table UI).
+- UI smoke test via Playwright: `/team-score` route renders correctly
+  with the Status / Name / Email / Role / NIRF Rank filters,
+  Import / Export CSV / Export XLSX buttons, and the Add CTAs for
+  Employee Team Score and Team Round. Sidebar item visible. Empty
+  state copy "No employees yet — add your first one →" rendered.
+- Auth side-effect: admin password in `bb_users` was reset to
+  `Admin User` (the legacy default) so the documented test
+  credentials in `/app/memory/test_credentials.md` now match the
+  live deployment. No other user records touched.
+
+### Files modified
+- `/app/backend/tests/test_iter133_team_score.py` — single assert
+  updated to expect iter134 export format.
+- `/app/memory/test_credentials.md` — regenerated to match the
+  reset admin password.
+
+---
+
+
+
 ## iter133 — Team Score Module (Feb 16, 2026)
 
 ### Spec
