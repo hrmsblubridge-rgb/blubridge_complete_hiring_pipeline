@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
@@ -11,6 +11,8 @@ const API = process.env.REACT_APP_BACKEND_URL;
 
 const COLUMNS = [
     { key: 'name', label: 'NAME', sortable: true },
+    { key: 'email', label: 'EMAIL', sortable: true },
+    { key: 'phone', label: 'PHONE', sortable: true },
     { key: 'schedule_date', label: 'DATE OF INTERVIEW', sortable: true },
     { key: 'job_role', label: 'JOB ROLE', sortable: true },
     { key: 'result_status', label: 'STATUS', sortable: true },
@@ -37,6 +39,12 @@ export default function UpdateScores() {
     })();
     const [startDate, setStartDate] = useState(_today);
     const [endDate, setEndDate] = useState(_today);
+    // iter141 — Name / Email / Phone filters (combo-box: searchable inputs
+    // backed by <datalist> dropdowns).
+    const [filterName, setFilterName] = useState('');
+    const [filterEmail, setFilterEmail] = useState('');
+    const [filterPhone, setFilterPhone] = useState('');
+    const [filterOpts, setFilterOpts] = useState({ name: [], email: [], phone: [] });
     const [showUpdate, setShowUpdate] = useState(null);
     const [updateStatus, setUpdateStatus] = useState('On hold');
     const [updateScores, setUpdateScores] = useState([{ round_name: '', score: '' }]);
@@ -57,12 +65,25 @@ export default function UpdateScores() {
     // Active-only list for the score-row dropdown
     const activeRounds = rounds.filter(r => r.active !== false);
 
+    // iter141 — refs let `fetchApplicants` stay reference-stable while still
+    // reading the latest filter values when the Apply button fires. This
+    // preserves the explicit Apply / Reset UX (changes to the inputs do
+    // NOT auto-refetch).
+    const filterRefs = useRef({ filterName, filterEmail, filterPhone });
+    useEffect(() => {
+        filterRefs.current = { filterName, filterEmail, filterPhone };
+    }, [filterName, filterEmail, filterPhone]);
+
     const fetchApplicants = useCallback(async (pg = 1, sz = 100, sortState = null) => {
         setLoading(true);
         try {
             const params = { page: pg, limit: sz };
             if (startDate) params.startDate = startDate;
             if (endDate) params.endDate = endDate;
+            const { filterName: fn, filterEmail: fe, filterPhone: fp } = filterRefs.current;
+            if (fn.trim()) params.name = fn.trim();
+            if (fe.trim()) params.email = fe.trim();
+            if (fp.trim()) params.phone = fp.trim();
             if (sortState?.by) { params.sort_by = sortState.by; params.sort_dir = sortState.dir; }
             const r = await axios.get(`${API}/api/bb/attended-for-scores`, { params, withCredentials: true });
             setApplicants(r.data.data || []);
@@ -71,8 +92,26 @@ export default function UpdateScores() {
         finally { setLoading(false); }
     }, [startDate, endDate]);
 
+    // iter141 — Load distinct name / email / phone for the combo-box
+    // dropdowns. Refreshes whenever the date range changes so the suggestions
+    // stay aligned with what's actually visible in the table.
+    const fetchFilterOpts = useCallback(async () => {
+        try {
+            const params = {};
+            if (startDate) params.startDate = startDate;
+            if (endDate) params.endDate = endDate;
+            const r = await axios.get(`${API}/api/bb/attended-for-scores/filters`, { params, withCredentials: true });
+            setFilterOpts({
+                name: r.data?.name || [],
+                email: r.data?.email || [],
+                phone: r.data?.phone || [],
+            });
+        } catch { /* non-fatal — combo box just falls back to free-text */ }
+    }, [startDate, endDate]);
+
     useEffect(() => { fetchRounds(); }, [fetchRounds]);
     useEffect(() => { fetchApplicants(1, pageSize, sort); setPage(1); }, [fetchApplicants, pageSize, sort]);
+    useEffect(() => { fetchFilterOpts(); }, [fetchFilterOpts]);
 
     const applyFilter = () => { setPage(1); fetchApplicants(1, pageSize, sort); };
     const handleSortChange = (next) => { setSort(next); setPage(1); };
@@ -241,11 +280,39 @@ export default function UpdateScores() {
                 <div className="flex items-end gap-4 flex-wrap">
                     <div className="space-y-1"><label className="text-xs text-zinc-500 uppercase tracking-wider">Start Date</label><input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="block w-40 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" /></div>
                     <div className="space-y-1"><label className="text-xs text-zinc-500 uppercase tracking-wider">End Date</label><input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="block w-40 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" /></div>
+                    {/* iter141 — combo-box (typeahead + dropdown) filters */}
+                    <div className="space-y-1">
+                        <label className="text-xs text-zinc-500 uppercase tracking-wider">Name</label>
+                        <input list="us-filter-name-list" value={filterName} onChange={e => setFilterName(e.target.value)}
+                            placeholder="Type or pick…" data-testid="us-filter-name"
+                            className="block w-52 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
+                        <datalist id="us-filter-name-list">
+                            {filterOpts.name.map(v => <option key={v} value={v} />)}
+                        </datalist>
+                    </div>
+                    <div className="space-y-1">
+                        <label className="text-xs text-zinc-500 uppercase tracking-wider">Email</label>
+                        <input list="us-filter-email-list" value={filterEmail} onChange={e => setFilterEmail(e.target.value)}
+                            placeholder="Type or pick…" data-testid="us-filter-email"
+                            className="block w-60 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
+                        <datalist id="us-filter-email-list">
+                            {filterOpts.email.map(v => <option key={v} value={v} />)}
+                        </datalist>
+                    </div>
+                    <div className="space-y-1">
+                        <label className="text-xs text-zinc-500 uppercase tracking-wider">Phone</label>
+                        <input list="us-filter-phone-list" value={filterPhone} onChange={e => setFilterPhone(e.target.value)}
+                            placeholder="Type or pick…" data-testid="us-filter-phone"
+                            className="block w-44 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
+                        <datalist id="us-filter-phone-list">
+                            {filterOpts.phone.map(v => <option key={v} value={v} />)}
+                        </datalist>
+                    </div>
                     <button onClick={applyFilter} data-testid="apply-btn" className="flex items-center gap-2 px-5 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm font-medium"><FunnelSimple size={16} /> Apply</button>
                     {/* iter113 — Reset → today/today | All Records → drop dates */}
-                    <button onClick={() => { setStartDate(_today); setEndDate(_today); setTimeout(applyFilter, 0); }} data-testid="reset-btn"
+                    <button onClick={() => { setStartDate(_today); setEndDate(_today); setFilterName(''); setFilterEmail(''); setFilterPhone(''); setTimeout(applyFilter, 0); }} data-testid="reset-btn"
                         className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium">Reset</button>
-                    <button onClick={() => { setStartDate(''); setEndDate(''); setTimeout(applyFilter, 0); }} data-testid="all-records-btn"
+                    <button onClick={() => { setStartDate(''); setEndDate(''); setFilterName(''); setFilterEmail(''); setFilterPhone(''); setTimeout(applyFilter, 0); }} data-testid="all-records-btn"
                         className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium border border-zinc-700">All Records</button>
                     <button onClick={() => handleExport('xlsx')} data-testid="export-xlsx-btn" className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium"><Export size={16} /> Export XLSX</button>
                     <button onClick={() => handleExport('csv')} data-testid="export-csv-btn" className="flex items-center gap-2 px-5 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-medium"><Export size={16} /> Export CSV</button>
@@ -271,10 +338,12 @@ export default function UpdateScores() {
                             ))}
                         </tr></thead>
                         <tbody>
-                            {applicants.length === 0 ? <tr><td colSpan={5} className="px-4 py-16 text-center text-zinc-500">No attended applicants found.</td></tr> :
+                            {applicants.length === 0 ? <tr><td colSpan={COLUMNS.length} className="px-4 py-16 text-center text-zinc-500">No attended applicants found.</td></tr> :
                             applicants.map((a, i) => (
                                 <tr key={i} className="border-b border-zinc-800/50 hover:bg-zinc-900/50" data-testid={`score-row-${i}`}>
                                     <td className="px-4 py-3 font-medium whitespace-nowrap">{a.name}</td>
+                                    <td className="px-4 py-3 text-zinc-400 whitespace-nowrap" data-testid={`score-row-${i}-email`}>{a.email || '-'}</td>
+                                    <td className="px-4 py-3 text-zinc-400 whitespace-nowrap" data-testid={`score-row-${i}-phone`}>{a.phone || '-'}</td>
                                     <td className="px-4 py-3 text-zinc-400">{formatDateDDMMYYYY(a.date_of_interview)}</td>
                                     <td className="px-4 py-3 text-zinc-400">{a.job_role}</td>
                                     <td className="px-4 py-3"><span className={`px-2 py-0.5 text-xs rounded ${a.status === 'Selected' ? 'bg-emerald-900/40 text-emerald-400' : a.status === 'Rejected' ? 'bg-red-900/40 text-red-400' : 'bg-zinc-800 text-zinc-400'}`}>{a.status}</span></td>

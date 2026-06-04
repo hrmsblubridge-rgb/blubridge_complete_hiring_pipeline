@@ -3191,6 +3191,9 @@ async def get_attended_for_scores(
     request: Request,
     startDate: str = Query(None),
     endDate: str = Query(None),
+    name: Optional[str] = Query(None),
+    email: Optional[str] = Query(None),
+    phone: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(100, ge=1, le=500),
     sort_by: Optional[str] = Query(None),
@@ -3199,6 +3202,9 @@ async def get_attended_for_scores(
     """Update Applicants Scores — with pagination (May 2026).
     Returns {data, total, page, limit, totalPages, available_rounds}.
     `available_rounds` always reflects the full score_sheet set (global filter).
+    iter141 — Accepts optional `name`, `email`, `phone` query params for
+    case-insensitive partial match across the union (pipeline_data +
+    registered_candidates).
     """
     await _require_auth(request)
     match = {"otp_verified": {"$nin": [None, ""], "$exists": True},
@@ -3207,6 +3213,16 @@ async def get_attended_for_scores(
         match["schedule_date"] = {**match.get("schedule_date", {}), "$gte": startDate}
     if endDate:
         match["schedule_date"] = {**match.get("schedule_date", {}), "$lte": endDate}
+    # iter141 — text/contains filters applied on BOTH halves of the union
+    # via the shared `match` dict.
+    if name:
+        match["name"] = {"$regex": re.escape(name.strip()), "$options": "i"}
+    if email:
+        match["email"] = {"$regex": re.escape(email.strip()), "$options": "i"}
+    if phone:
+        digits = re.sub(r"\D", "", phone or "")
+        if digits:
+            match["phone"] = {"$regex": digits, "$options": "i"}
 
     # iter126 — UNION pipeline_data + registered_candidates (mirrors the
     # iter125e chip-baseline fix). Previously, narrow date ranges that
@@ -3389,6 +3405,62 @@ async def get_attended_for_scores(
         "limit": limit,
         "totalPages": total_pages,
         "available_rounds": available_rounds,
+    }
+
+
+# iter141 — Distinct values for the Update Applicants Scores filters.
+# Returns the union of pipeline_data + registered_candidates restricted
+# to attended (otp_verified non-empty) rows, mirroring the same baseline
+# used by /attended-for-scores so the dropdowns are guaranteed to match
+# the table contents.
+@bb_router.get("/attended-for-scores/filters")
+async def get_attended_score_filter_options(
+    request: Request,
+    startDate: str = Query(None),
+    endDate: str = Query(None),
+):
+    await _require_auth(request)
+    match = {"otp_verified": {"$nin": [None, ""], "$exists": True},
+             "schedule_date": {"$nin": [None, ""], "$exists": True}}
+    if startDate:
+        match["schedule_date"] = {**match.get("schedule_date", {}), "$gte": startDate}
+    if endDate:
+        match["schedule_date"] = {**match.get("schedule_date", {}), "$lte": endDate}
+
+    pipeline = [
+        {"$match": match},
+        {"$project": {"_id": 0, "name": 1, "email": 1, "phone": 1}},
+        {"$unionWith": {
+            "coll": "registered_candidates",
+            "pipeline": [
+                {"$match": match},
+                {"$project": {"_id": 0, "name": 1, "email": 1, "phone": 1}},
+            ],
+        }},
+    ]
+    rows = await _db.pipeline_data.aggregate(pipeline, allowDiskUse=True).to_list(None)
+
+    def _norm_phone(p):
+        if not p:
+            return ""
+        digits = re.sub(r"\D", "", str(p))
+        return digits[-10:] if len(digits) > 10 else digits
+
+    names, emails, phones = set(), set(), set()
+    for r in rows:
+        n = (r.get("name") or "").strip()
+        if n:
+            names.add(n)
+        e = (r.get("email") or "").strip()
+        if e:
+            emails.add(e.lower())
+        p = _norm_phone(r.get("phone"))
+        if p:
+            phones.add(p)
+    return {
+        "name": sorted(names),
+        "email": sorted(emails),
+        "phone": sorted(phones),
     }
 
 @bb_router.put("/applicant-score/{email:path}")
