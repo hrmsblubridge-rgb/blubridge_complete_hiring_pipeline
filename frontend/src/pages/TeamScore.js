@@ -374,36 +374,40 @@ function RoundsModal({ rounds, onClose, onChanged }) {
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" data-testid="ts-rounds-modal">
-            <div className="bg-zinc-900 border border-zinc-700 w-full max-w-lg p-6 space-y-5">
-                <div className="flex items-center justify-between">
+            <div className="bg-zinc-900 border border-zinc-700 w-full max-w-lg flex flex-col max-h-[90vh] min-h-0">
+                {/* Header — never scrolls. */}
+                <div className="flex items-center justify-between p-6 pb-4 shrink-0 border-b border-zinc-800">
                     <h2 className="text-lg font-semibold">{editing ? 'Edit Team Round' : 'Add New Team Round'}</h2>
                     <button onClick={onClose} className="text-zinc-500 hover:text-white"><X size={20} /></button>
                 </div>
 
-                <div className="space-y-3">
-                    <input value={name} onChange={e => setName(e.target.value)} placeholder="Round Name (e.g. A)" data-testid="ts-round-name" className="w-full bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm" />
-                    <input value={total} onChange={e => setTotal(e.target.value)} placeholder="Total Score" type="number" step="0.01" data-testid="ts-round-total" className="w-full bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm" />
-                    <div className="flex justify-end gap-2">
-                        {editing && <button onClick={() => { setEditing(null); setName(''); setTotal(''); }} className="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 text-sm">Cancel</button>}
-                        <button onClick={submit} data-testid="ts-round-submit" className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm">{editing ? 'Update' : 'Add'}</button>
-                    </div>
-                </div>
-
-                {rounds.length > 0 && (
-                    <div className="border-t border-zinc-800 pt-4">
-                        <p className="text-xs text-zinc-500 uppercase tracking-wider mb-2">Existing Rounds</p>
-                        <div className="flex flex-wrap gap-2">
-                            {rounds.map(r => (
-                                <div key={r.id} className="flex items-center gap-2 bg-zinc-800 border border-zinc-700 px-3 py-1.5 text-xs" data-testid={`ts-round-card-${r.id}`}>
-                                    <span className="whitespace-nowrap">{r.round_name} ({r.total_score})</span>
-                                    <button onClick={() => { setEditing(r); setName(r.round_name); setTotal(String(r.total_score)); }}
-                                        data-testid={`ts-round-edit-${r.id}`} className="text-zinc-400 hover:text-white"><PencilSimple size={12} /></button>
-                                    <button onClick={() => remove(r)} data-testid={`ts-round-del-${r.id}`} className="text-zinc-400 hover:text-red-400"><Trash size={12} /></button>
-                                </div>
-                            ))}
+                {/* Body — only this scrolls when content overflows. */}
+                <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-5">
+                    <div className="space-y-3">
+                        <input value={name} onChange={e => setName(e.target.value)} placeholder="Round Name (e.g. A)" data-testid="ts-round-name" className="w-full bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm" />
+                        <input value={total} onChange={e => setTotal(e.target.value)} placeholder="Total Score" type="number" step="0.01" data-testid="ts-round-total" className="w-full bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm" />
+                        <div className="flex justify-end gap-2">
+                            {editing && <button onClick={() => { setEditing(null); setName(''); setTotal(''); }} className="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 text-sm">Cancel</button>}
+                            <button onClick={submit} data-testid="ts-round-submit" className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm">{editing ? 'Update' : 'Add'}</button>
                         </div>
                     </div>
-                )}
+
+                    {rounds.length > 0 && (
+                        <div className="border-t border-zinc-800 pt-4">
+                            <p className="text-xs text-zinc-500 uppercase tracking-wider mb-2">Existing Rounds</p>
+                            <div className="flex flex-wrap gap-2">
+                                {rounds.map(r => (
+                                    <div key={r.id} className="flex items-center gap-2 bg-zinc-800 border border-zinc-700 px-3 py-1.5 text-xs" data-testid={`ts-round-card-${r.id}`}>
+                                        <span className="whitespace-nowrap">{r.round_name} ({r.total_score})</span>
+                                        <button onClick={() => { setEditing(r); setName(r.round_name); setTotal(String(r.total_score)); }}
+                                            data-testid={`ts-round-edit-${r.id}`} className="text-zinc-400 hover:text-white"><PencilSimple size={12} /></button>
+                                        <button onClick={() => remove(r)} data-testid={`ts-round-del-${r.id}`} className="text-zinc-400 hover:text-red-400"><Trash size={12} /></button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
             </div>
         </div>
     );
@@ -478,67 +482,73 @@ function EmployeeModal({ rounds, editing, onClose, onChanged }) {
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto" data-testid="ts-emp-modal">
-            <div className="bg-zinc-900 border border-zinc-700 w-full max-w-2xl p-6 space-y-4 my-8">
-                <div className="flex items-center justify-between">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" data-testid="ts-emp-modal">
+            <div className="bg-zinc-900 border border-zinc-700 w-full max-w-2xl flex flex-col max-h-[90vh] min-h-0">
+                {/* Header — pinned. */}
+                <div className="flex items-center justify-between p-6 pb-4 shrink-0 border-b border-zinc-800">
                     <h2 className="text-lg font-semibold">{isEdit ? 'Edit Employee Team Score' : 'Add New Employee Team Score'}</h2>
-                    <button onClick={onClose} className="text-zinc-500 hover:text-white"><X size={20} /></button>
+                    <button onClick={onClose} className="text-zinc-500 hover:text-white shrink-0"><X size={20} /></button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {BASE_COLS.map(c => (
-                        <div key={c.key}>
-                            <label className="text-xs text-zinc-500 uppercase tracking-wider">{c.label}</label>
-                            <input value={form[c.key] || ''} onChange={e => setForm({ ...form, [c.key]: e.target.value })}
-                                data-testid={`ts-emp-${c.key}`}
-                                type={c.key === 'joining_date' ? 'date' : 'text'}
-                                className="w-full mt-1 bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm" />
+                {/* Scrollable body — `min-h-0` is REQUIRED for a flex child
+                    to honour its parent's max-h and overflow correctly. */}
+                <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4" data-testid="ts-emp-modal-body">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {BASE_COLS.map(c => (
+                            <div key={c.key}>
+                                <label className="text-xs text-zinc-500 uppercase tracking-wider">{c.label}</label>
+                                <input value={form[c.key] || ''} onChange={e => setForm({ ...form, [c.key]: e.target.value })}
+                                    data-testid={`ts-emp-${c.key}`}
+                                    type={c.key === 'joining_date' ? 'date' : 'text'}
+                                    className="w-full mt-1 bg-zinc-800 border border-zinc-700 px-3 py-2 text-sm" />
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="border-t border-zinc-800 pt-4">
+                        <div className="flex items-center justify-between mb-2">
+                            <p className="text-xs text-zinc-500 uppercase tracking-wider">Round Scores</p>
+                            <button onClick={addPair} data-testid="ts-emp-add-pair" className="text-xs px-2 py-1 bg-cyan-800 hover:bg-cyan-700 flex items-center gap-1"><Plus size={12} />Add Round</button>
                         </div>
-                    ))}
-                </div>
-
-                <div className="border-t border-zinc-800 pt-4">
-                    <div className="flex items-center justify-between mb-2">
-                        <p className="text-xs text-zinc-500 uppercase tracking-wider">Round Scores</p>
-                        <button onClick={addPair} data-testid="ts-emp-add-pair" className="text-xs px-2 py-1 bg-cyan-800 hover:bg-cyan-700 flex items-center gap-1"><Plus size={12} />Add Round</button>
-                    </div>
-                    <div className="space-y-2">
-                        {pairs.map((p, i) => {
-                            // iter137 — per-pair score validation.
-                            const selectedRound = rounds.find(r => r.round_name === p.round_name);
-                            const total = selectedRound ? Number(selectedRound.total_score) : null;
-                            const scoreNum = p.score === '' ? null : Number(p.score);
-                            let err = '';
-                            if (scoreNum !== null && Number.isFinite(scoreNum)) {
-                                if (scoreNum < 0) err = 'Score cannot be below 0';
-                                else if (total && total > 0 && scoreNum > total) err = `Score cannot exceed total (${total})`;
-                            }
-                            return (
-                                <div key={i} className="flex flex-col gap-1">
-                                    <div className="flex gap-2 items-center">
-                                        <select value={p.round_name} onChange={e => updatePair(i, 'round_name', e.target.value)}
-                                            data-testid={`ts-emp-pair-round-${i}`} className="flex-1 bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm">
-                                            <option value="">— select round —</option>
-                                            {availableRounds(p.round_name).map(r => <option key={r.id} value={r.round_name}>{r.round_name} (Total: {r.total_score})</option>)}
-                                        </select>
-                                        <input value={p.score} onChange={e => updatePair(i, 'score', e.target.value)}
-                                            placeholder="Score" type="number" step="0.01"
-                                            min={0}
-                                            max={total && total > 0 ? total : undefined}
-                                            data-testid={`ts-emp-pair-score-${i}`}
-                                            className={`w-28 bg-zinc-800 border px-2 py-2 text-sm ${err ? 'border-red-500' : 'border-zinc-700'}`} />
-                                        {pairs.length > 1 && <button onClick={() => removePair(i)} className="text-red-400 hover:text-red-300"><X size={16} /></button>}
+                        <div className="space-y-2">
+                            {pairs.map((p, i) => {
+                                // iter137 — per-pair score validation.
+                                const selectedRound = rounds.find(r => r.round_name === p.round_name);
+                                const total = selectedRound ? Number(selectedRound.total_score) : null;
+                                const scoreNum = p.score === '' ? null : Number(p.score);
+                                let err = '';
+                                if (scoreNum !== null && Number.isFinite(scoreNum)) {
+                                    if (scoreNum < 0) err = 'Score cannot be below 0';
+                                    else if (total && total > 0 && scoreNum > total) err = `Score cannot exceed total (${total})`;
+                                }
+                                return (
+                                    <div key={i} className="flex flex-col gap-1">
+                                        <div className="flex gap-2 items-center">
+                                            <select value={p.round_name} onChange={e => updatePair(i, 'round_name', e.target.value)}
+                                                data-testid={`ts-emp-pair-round-${i}`} className="flex-1 min-w-0 bg-zinc-800 border border-zinc-700 px-2 py-2 text-sm">
+                                                <option value="">— select round —</option>
+                                                {availableRounds(p.round_name).map(r => <option key={r.id} value={r.round_name}>{r.round_name} (Total: {r.total_score})</option>)}
+                                            </select>
+                                            <input value={p.score} onChange={e => updatePair(i, 'score', e.target.value)}
+                                                placeholder="Score" type="number" step="0.01"
+                                                min={0}
+                                                max={total && total > 0 ? total : undefined}
+                                                data-testid={`ts-emp-pair-score-${i}`}
+                                                className={`w-28 shrink-0 bg-zinc-800 border px-2 py-2 text-sm ${err ? 'border-red-500' : 'border-zinc-700'}`} />
+                                            {pairs.length > 1 && <button onClick={() => removePair(i)} className="text-red-400 hover:text-red-300 shrink-0"><X size={16} /></button>}
+                                        </div>
+                                        {err && (
+                                            <p data-testid={`ts-emp-pair-error-${i}`} className="text-xs text-red-400 pl-1">{err}</p>
+                                        )}
                                     </div>
-                                    {err && (
-                                        <p data-testid={`ts-emp-pair-error-${i}`} className="text-xs text-red-400 pl-1">{err}</p>
-                                    )}
-                                </div>
-                            );
-                        })}
+                                );
+                            })}
+                        </div>
                     </div>
                 </div>
 
-                <div className="flex justify-end gap-2 pt-3">
+                {/* Footer — pinned, always visible regardless of pair count. */}
+                <div className="flex justify-end gap-2 p-6 pt-4 shrink-0 border-t border-zinc-800 bg-zinc-900">
                     <button onClick={onClose} className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-sm">Cancel</button>
                     <button onClick={submit} data-testid="ts-emp-submit" className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm">{isEdit ? 'Update' : 'Add'}</button>
                 </div>
