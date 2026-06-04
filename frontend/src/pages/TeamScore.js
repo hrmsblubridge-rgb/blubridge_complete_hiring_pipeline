@@ -57,10 +57,16 @@ export default function TeamScore() {
     };
 
     const fetchAll = useCallback(async () => {
+        // Read the latest filters via the ref so this callback can stay
+        // dependency-free (and thus reference-stable). That lets the
+        // mount-only useEffect below list `fetchAll` as a dependency
+        // without triggering a refetch every time filters change — the
+        // explicit Filter / Reset buttons drive subsequent reloads.
+        const currentFilters = filtersRef.current;
         setLoading(true);
         try {
             const q = new URLSearchParams();
-            Object.entries(filters).forEach(([k, v]) => { if (v) q.append(k, v); });
+            Object.entries(currentFilters).forEach(([k, v]) => { if (v) q.append(k, v); });
             const [rR, rE, rF] = await Promise.all([
                 axios.get(`${TS}/rounds`, { withCredentials: true }),
                 axios.get(`${TS}/employees?${q.toString()}`, { withCredentials: true }),
@@ -72,9 +78,15 @@ export default function TeamScore() {
             setPage(1);  // iter136 — reset to first page on any reload
         } catch (e) { toast.error(e.response?.data?.detail || 'Failed to load'); }
         setLoading(false);
-    }, [filters]);
+    }, []);
 
-    useEffect(() => { fetchAll(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+    // Keep a live ref so `fetchAll` (stable) can read the latest filters.
+    const filtersRef = useRef(filters);
+    useEffect(() => { filtersRef.current = filters; }, [filters]);
+
+    // Mount-only initial load. `fetchAll` is reference-stable, so this
+    // satisfies react-hooks/exhaustive-deps without re-running.
+    useEffect(() => { fetchAll(); }, [fetchAll]);
 
     const handleFilter = () => fetchAll();
     const handleReset = () => { setFilters({ employee_status: '', name: '', email: '', role: '', nirf_rank: '' }); setTimeout(fetchAll, 0); };
