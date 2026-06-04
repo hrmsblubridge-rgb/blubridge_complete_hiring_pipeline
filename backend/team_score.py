@@ -238,6 +238,54 @@ async def _ensure_round_exists(round_name: str, total_score: float = 0) -> str:
     return name
 
 
+# iter139 — Email-based deduplication for Team Score employees.
+# Email is the unique business key. On every insert / import / manual edit,
+# we COMPLETELY REPLACE any existing record(s) sharing the same email
+# (case-insensitive). Pre-existing duplicates are consolidated in the
+# same pass: a single email yields exactly ONE surviving doc — the new
+# incoming one. Empty emails skip dedup (insert normally).
+async def _replace_by_email(new_doc: dict, exclude_id=None) -> dict:
+    """Apply email-based full-replace.
+
+    - If `new_doc['email']` is empty → just insert (no dedup possible).
+    - If `exclude_id` is given (manual edit path), delete every OTHER
+      doc that shares the email so the target row remains the sole
+      survivor.
+    - Otherwise delete ALL docs that share the email and insert the new
+      one fresh.
+
+    Returns the persisted doc with `_id` populated.
+    """
+    email = (new_doc.get("email") or "").strip()
+    if not email:
+        # No email → behave as a plain insert (existing path used
+        # `(name, email)` upsert for emptyemail rows in import; we keep
+        # the same neutral behaviour here to avoid silent merges).
+        res = await _db.ts_employees.insert_one(new_doc)
+        new_doc["_id"] = res.inserted_id
+        return new_doc
+
+    # Case-insensitive match — escape regex metacharacters in the user-
+    # supplied email so e.g. "a+b@x.io" doesn't blow up the pattern.
+    email_filter = {
+        "email": {"$regex": f"^{re.escape(email)}$", "$options": "i"}
+    }
+    if exclude_id is not None:
+        # Manual edit path: target row stays; everything else with the
+        # same email is removed to consolidate.
+        await _db.ts_employees.delete_many(
+            {"$and": [email_filter, {"_id": {"$ne": exclude_id}}]}
+        )
+        return new_doc  # caller has already applied $set on the target
+
+    # Fresh insert / import path: wipe ALL rows with this email, insert
+    # the new doc as the lone survivor.
+    await _db.ts_employees.delete_many(email_filter)
+    res = await _db.ts_employees.insert_one(new_doc)
+    new_doc["_id"] = res.inserted_id
+    return new_doc
+
+
 def _build_filter_query(params: dict) -> dict:
     """Map UI filter params to a Mongo filter against ts_employees."""
     q = {}
@@ -316,10 +364,10 @@ async def create_employee(body: EmployeeIn, request: Request):
         "created_at": _now(),
         "updated_at": _now(),
     }
-    res = await _db.ts_employees.insert_one(doc)
-    doc["id"] = str(res.inserted_id)
-    doc.pop("_id", None)
-    return doc
+    # iter139 — email-based full replace (case-insensitive).
+    persisted = await _replace_by_email(doc)
+    persisted["id"] = str(persisted.pop("_id"))
+    return persisted
 
 
 @ts_router.put("/employees/{emp_id}")
@@ -346,6 +394,12 @@ async def update_employee(emp_id: str, body: EmployeeIn, request: Request):
             "round_scores": {k: float(v) for k, v in scores.items() if v not in (None, "")},
             "updated_at": _now(),
         }},
+    )
+    # iter139 — consolidate any OTHER rows sharing this email so the
+    # edited row remains the sole survivor (case-insensitive).
+    await _replace_by_email(
+        {"email": (body.email or "").strip()},
+        exclude_id=_oid(emp_id),
     )
     return {"success": True}
 
@@ -643,21 +697,26 @@ async def import_team_scores(request: Request, file: UploadFile = File(...)):
             "degree": _at("degree"),
             "passing_year": _at("passing_year"),
             "round_scores": scores,
+            "created_at": _now(),
             "updated_at": _now(),
         }
-        # Upsert by (name, email) — same combo means same person.
-        existing = await _db.ts_employees.find_one({
-            "name": nm,
-            "email": doc["email"],
-        })
-        if existing:
-            await _db.ts_employees.update_one(
-                {"_id": existing["_id"]}, {"$set": doc}
+        # iter139 — Email-based full replace (case-insensitive).
+        # If the email already exists (even across multiple legacy
+        # duplicate rows), every match is wiped and replaced by this
+        # incoming doc — latest record wins, no field merging.
+        # Empty-email rows still insert (cannot dedup without a key).
+        email_lc = (doc["email"] or "").strip().lower()
+        was_existing = False
+        if email_lc:
+            existing_count = await _db.ts_employees.count_documents(
+                {"email": {"$regex": f"^{re.escape(doc['email'])}$",
+                           "$options": "i"}}
             )
+            was_existing = existing_count > 0
+        await _replace_by_email(doc)
+        if was_existing:
             updated += 1
         else:
-            doc["created_at"] = _now()
-            await _db.ts_employees.insert_one(doc)
             inserted += 1
 
     return {
