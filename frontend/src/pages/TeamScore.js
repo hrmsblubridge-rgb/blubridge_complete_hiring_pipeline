@@ -30,6 +30,8 @@ export default function TeamScore() {
     const [filters, setFilters] = useState({ employee_status: '', name: '', email: '', role: '', nirf_rank: '' });
     const [showRoundsModal, setShowRoundsModal] = useState(false);
     const [showEmpModal, setShowEmpModal] = useState(false);
+    const [editingEmp, setEditingEmp] = useState(null);   // iter138 — edit-mode employee
+    const [deleteModal, setDeleteModal] = useState(null); // iter138 — { emp } for delete confirm
     const [statusModal, setStatusModal] = useState(null);  // { emp }
     const [loading, setLoading] = useState(false);
     const importRef = useRef();
@@ -123,6 +125,18 @@ export default function TeamScore() {
             fetchAll();
         } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
     };
+
+    // iter138 — delete a single employee record.
+    const deleteEmployee = async (emp) => {
+        try {
+            await axios.delete(`${TS}/employees/${emp.id}`, { withCredentials: true });
+            toast.success('Employee deleted');
+            setDeleteModal(null);
+            fetchAll();
+        } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+    };
+
+    const closeEmpModal = () => { setShowEmpModal(false); setEditingEmp(null); };
 
     // iter136b — Cell format mirrors the Export file: `score/total (pct%)`.
     // No total → just the raw score. Empty → "-".
@@ -219,11 +233,12 @@ export default function TeamScore() {
                                         <th key={r.id} className="px-3 py-3 text-left whitespace-nowrap bg-zinc-900 border-b border-zinc-800 sticky top-0 z-20">{r.round_name}{suffix}</th>
                                     );
                                 })}
+                                <th data-testid="ts-th-actions" className="px-3 py-3 text-left whitespace-nowrap bg-zinc-900 border-b border-zinc-800 sticky top-0 z-20">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {loading && <tr><td colSpan={BASE_COLS.length + sortedRounds.length + 1} className="text-center py-6 text-zinc-500 bg-zinc-900">Loading...</td></tr>}
-                            {!loading && employees.length === 0 && <tr><td colSpan={BASE_COLS.length + sortedRounds.length + 1} className="text-center py-8 text-zinc-500 bg-zinc-900">No employees yet — add your first one →</td></tr>}
+                            {loading && <tr><td colSpan={BASE_COLS.length + sortedRounds.length + 2} className="text-center py-6 text-zinc-500 bg-zinc-900">Loading...</td></tr>}
+                            {!loading && employees.length === 0 && <tr><td colSpan={BASE_COLS.length + sortedRounds.length + 2} className="text-center py-8 text-zinc-500 bg-zinc-900">No employees yet — add your first one →</td></tr>}
                             {!loading && pagedEmployees.map(e => {
                                 const active = (e.employee_status || 'active') === 'active';
                                 return (
@@ -247,6 +262,22 @@ export default function TeamScore() {
                                             const v = e.round_scores?.[r.round_name];
                                             return <td key={r.id} className="px-3 py-3 whitespace-nowrap border-b border-zinc-800/50 group-hover:bg-zinc-800/30" data-testid={`ts-${e.id}-${r.round_name}`}>{pct(v, r.total_score)}</td>;
                                         })}
+                                        <td className="px-3 py-3 whitespace-nowrap border-b border-zinc-800/50 group-hover:bg-zinc-800/30">
+                                            <div className="flex items-center gap-2">
+                                                <button onClick={() => { setEditingEmp(e); setShowEmpModal(true); }}
+                                                    data-testid={`ts-edit-${e.id}`}
+                                                    title="Edit employee"
+                                                    className="p-1.5 text-cyan-400 hover:bg-cyan-900/30 transition-colors">
+                                                    <PencilSimple size={16} />
+                                                </button>
+                                                <button onClick={() => setDeleteModal({ emp: e })}
+                                                    data-testid={`ts-delete-${e.id}`}
+                                                    title="Delete employee"
+                                                    className="p-1.5 text-red-400 hover:bg-red-900/30 transition-colors">
+                                                    <Trash size={16} />
+                                                </button>
+                                            </div>
+                                        </td>
                                     </tr>
                                 );
                             })}
@@ -303,8 +334,9 @@ export default function TeamScore() {
             </div>
 
             {showRoundsModal && <RoundsModal rounds={sortedRounds} onClose={() => setShowRoundsModal(false)} onChanged={fetchAll} />}
-            {showEmpModal && <EmployeeModal rounds={sortedRounds} onClose={() => setShowEmpModal(false)} onChanged={fetchAll} />}
+            {showEmpModal && <EmployeeModal rounds={sortedRounds} editing={editingEmp} onClose={closeEmpModal} onChanged={fetchAll} />}
             {statusModal && <StatusModal emp={statusModal.emp} onConfirm={() => toggleStatus(statusModal.emp)} onClose={() => setStatusModal(null)} />}
+            {deleteModal && <DeleteEmployeeModal emp={deleteModal.emp} onConfirm={() => deleteEmployee(deleteModal.emp)} onClose={() => setDeleteModal(null)} />}
         </div>
     );
 }
@@ -379,12 +411,32 @@ function RoundsModal({ rounds, onClose, onChanged }) {
 
 // ─────────────────────── Employee Modal ──────────────────────────────────
 
-function EmployeeModal({ rounds, onClose, onChanged }) {
-    const [form, setForm] = useState({
-        name: '', email: '', linkedin_id: '', role: '', joining_date: '',
-        college: '', nirf_rank: '', degree: '', passing_year: '',
+function EmployeeModal({ rounds, editing, onClose, onChanged }) {
+    // iter138 — `editing` is the employee being edited (null on Add).
+    const isEdit = !!editing;
+    const [form, setForm] = useState(() => {
+        if (editing) {
+            return {
+                name: editing.name || '', email: editing.email || '',
+                linkedin_id: editing.linkedin_id || '', role: editing.role || '',
+                joining_date: editing.joining_date || '',
+                college: editing.college || '', nirf_rank: editing.nirf_rank || '',
+                degree: editing.degree || '', passing_year: editing.passing_year || '',
+            };
+        }
+        return {
+            name: '', email: '', linkedin_id: '', role: '', joining_date: '',
+            college: '', nirf_rank: '', degree: '', passing_year: '',
+        };
     });
-    const [pairs, setPairs] = useState([{ round_name: '', score: '' }]);
+    const [pairs, setPairs] = useState(() => {
+        if (editing && editing.round_scores && Object.keys(editing.round_scores).length) {
+            return Object.entries(editing.round_scores).map(([rn, s]) => ({
+                round_name: rn, score: String(s),
+            }));
+        }
+        return [{ round_name: '', score: '' }];
+    });
 
     const usedRounds = pairs.map(p => p.round_name).filter(Boolean);
     const availableRounds = (round_for_idx) => rounds.filter(r => !usedRounds.includes(r.round_name) || r.round_name === round_for_idx);
@@ -413,8 +465,13 @@ function EmployeeModal({ rounds, onClose, onChanged }) {
             if (p.round_name && p.score !== '') round_scores[p.round_name] = parseFloat(p.score);
         }
         try {
-            await axios.post(`${TS}/employees`, { ...form, round_scores }, { withCredentials: true });
-            toast.success('Employee added');
+            if (isEdit) {
+                await axios.put(`${TS}/employees/${editing.id}`, { ...form, round_scores }, { withCredentials: true });
+                toast.success('Employee updated');
+            } else {
+                await axios.post(`${TS}/employees`, { ...form, round_scores }, { withCredentials: true });
+                toast.success('Employee added');
+            }
             onClose();
             onChanged();
         } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
@@ -424,7 +481,7 @@ function EmployeeModal({ rounds, onClose, onChanged }) {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto" data-testid="ts-emp-modal">
             <div className="bg-zinc-900 border border-zinc-700 w-full max-w-2xl p-6 space-y-4 my-8">
                 <div className="flex items-center justify-between">
-                    <h2 className="text-lg font-semibold">Add New Employee Team Score</h2>
+                    <h2 className="text-lg font-semibold">{isEdit ? 'Edit Employee Team Score' : 'Add New Employee Team Score'}</h2>
                     <button onClick={onClose} className="text-zinc-500 hover:text-white"><X size={20} /></button>
                 </div>
 
@@ -483,7 +540,35 @@ function EmployeeModal({ rounds, onClose, onChanged }) {
 
                 <div className="flex justify-end gap-2 pt-3">
                     <button onClick={onClose} className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-sm">Cancel</button>
-                    <button onClick={submit} data-testid="ts-emp-submit" className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm">Add</button>
+                    <button onClick={submit} data-testid="ts-emp-submit" className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-sm">{isEdit ? 'Update' : 'Add'}</button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ─────────────────────── Delete Employee Modal ──────────────────────────
+
+function DeleteEmployeeModal({ emp, onConfirm, onClose }) {
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" data-testid="ts-delete-modal">
+            <div className="bg-zinc-900 border border-zinc-700 w-full max-w-sm mx-4 p-6 space-y-4">
+                <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold">Delete Employee?</h2>
+                    <button onClick={onClose} className="text-zinc-500 hover:text-white"><X size={20} /></button>
+                </div>
+                <p className="text-sm text-zinc-300">
+                    This will permanently remove
+                    <span className="text-white font-medium mx-1">{emp.name}</span>
+                    {emp.email ? <span className="text-zinc-400">({emp.email})</span> : null}
+                    from the Team Score table. This action cannot be undone.
+                </p>
+                <div className="flex justify-end gap-2">
+                    <button onClick={onClose} className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-sm">Cancel</button>
+                    <button onClick={onConfirm} data-testid="ts-delete-confirm"
+                        className="px-4 py-2 bg-red-700 hover:bg-red-600 text-white text-sm">
+                        Delete
+                    </button>
                 </div>
             </div>
         </div>
