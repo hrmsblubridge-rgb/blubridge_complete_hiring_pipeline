@@ -3884,12 +3884,62 @@ async def score_round_result_statuses(request: Request):
     return {"statuses": list(SCORE_ROUND_STATUS_GROUPS.keys())}
 
 
+# iter144 — Distinct values for the new Name / Email / Phone combo-box
+# filters on the Score & Round page. Returns sorted, deduped values from
+# pipeline_data (the same source the table renders from), restricted to
+# the optional date range so the dropdown stays aligned with the table.
+@bb_router.get("/score-round/filter-options")
+async def score_round_filter_options(
+    request: Request,
+    startDate: Optional[str] = Query(None),
+    endDate: Optional[str] = Query(None),
+):
+    await _require_auth(request)
+    match: dict = {}
+    if startDate or endDate:
+        sd_q: dict = {}
+        if startDate:
+            sd_q["$gte"] = startDate.strip()
+        if endDate:
+            sd_q["$lte"] = endDate.strip()
+        match["schedule_date"] = sd_q
+    rows = await _db.pipeline_data.find(
+        match, {"_id": 0, "name": 1, "email": 1, "phone": 1}
+    ).to_list(None)
+
+    def _norm_phone(p):
+        if not p:
+            return ""
+        digits = re.sub(r"\D", "", str(p))
+        return digits[-10:] if len(digits) > 10 else digits
+
+    names, emails, phones = set(), set(), set()
+    for r in rows:
+        n = (r.get("name") or "").strip()
+        if n:
+            names.add(n)
+        e = (r.get("email") or "").strip()
+        if e:
+            emails.add(e.lower())
+        ph = _norm_phone(r.get("phone"))
+        if ph:
+            phones.add(ph)
+    return {
+        "name": sorted(names),
+        "email": sorted(emails),
+        "phone": sorted(phones),
+    }
+
+
 @bb_router.get("/score-round/table")
 async def score_round_table(
     request: Request,
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=500),
     q: Optional[str] = Query(None),
+    name: Optional[str] = Query(None),
+    email: Optional[str] = Query(None),
+    phone: Optional[str] = Query(None),
     startDate: Optional[str] = Query(None),
     endDate: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
@@ -3903,6 +3953,10 @@ async def score_round_table(
     strip and `bb_applicant_updates.status` join were removed — any value
     returned by the new `/score-round/result-statuses` endpoint is a valid
     `status` query param. Tab-counts removed.
+
+    iter144 — `name`, `email`, `phone` filters added as independent
+    case-insensitive substring matches. The legacy unified `q` param
+    still works for backward compat.
     """
     await _require_auth(request)
     match = {}
@@ -3915,6 +3969,15 @@ async def score_round_table(
                 {"email": {"$regex": esc, "$options": "i"}},
                 {"phone": {"$regex": esc, "$options": "i"}},
             ]
+    # iter144 — independent per-field filters (each ANDed with the rest).
+    if name and name.strip():
+        match["name"] = {"$regex": re.escape(name.strip()), "$options": "i"}
+    if email and email.strip():
+        match["email"] = {"$regex": re.escape(email.strip()), "$options": "i"}
+    if phone and phone.strip():
+        digits = re.sub(r"\D", "", phone or "")
+        if digits:
+            match["phone"] = {"$regex": digits, "$options": "i"}
     if startDate or endDate:
         sd_q = {}
         if startDate:

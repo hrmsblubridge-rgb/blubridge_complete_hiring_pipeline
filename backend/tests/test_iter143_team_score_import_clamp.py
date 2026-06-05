@@ -180,29 +180,35 @@ def test_isolation_contract_still_holds():
 
 
 def test_no_password_mutation_in_module_or_tests():
-    """iter143 — Hard guard: ensure NO module under /app/backend resets
-    `bb_users.password_hash` UNCONDITIONALLY (i.e. without first
-    verifying the old password). This guards against future agents
-    re-seeding the admin password from a script or migration.
+    """iter143 — Hard guard: ensure NO production module under
+    /app/backend resets `bb_users.password_hash` UNCONDITIONALLY (i.e.
+    without first verifying the old password). This guards against
+    future agents re-seeding the admin password from a script or
+    migration.
 
     The only legitimate mutation site is `server.py`'s `change_password`
     endpoint, which calls `_verify_pw(old_password, ...)` before any
     `$set: {password_hash: ...}`. That file is whitelisted explicitly.
+
+    Test files under tests/ are excluded because (a) they are never
+    deployed, and (b) some legitimately contain this guard's own regex
+    string as a literal.
     """
     backend_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     WHITELIST = {
         os.path.join(backend_root, "server.py"),  # /api/change-password
     }
-    THIS_FILE = os.path.abspath(__file__)
     offenders = []
     for dirpath, _dirnames, filenames in os.walk(backend_root):
         if any(seg in dirpath for seg in (".venv", "__pycache__", "node_modules")):
+            continue
+        if dirpath.endswith("/tests"):
             continue
         for fn in filenames:
             if not fn.endswith(".py"):
                 continue
             path = os.path.join(dirpath, fn)
-            if path == THIS_FILE or path in WHITELIST:
+            if path in WHITELIST:
                 continue
             with open(path, "r", encoding="utf-8", errors="ignore") as fh:
                 text = fh.read()

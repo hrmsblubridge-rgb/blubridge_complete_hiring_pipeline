@@ -359,6 +359,12 @@ export default function ScoreRound() {
     // --- Iter58 filters ---
     const [searchInput, setSearchInput] = useState('');
     const [search, setSearch] = useState('');
+    // iter144 — Separate Name / Email / Phone combo-box filters (search +
+    // dropdown via <input list=…><datalist/>).
+    const [nameInput, setNameInput] = useState('');
+    const [emailInput, setEmailInput] = useState('');
+    const [phoneInput, setPhoneInput] = useState('');
+    const [filterOpts, setFilterOpts] = useState({ name: [], email: [], phone: [] });
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
     const [statusFilter, setStatusFilter] = useState('Shortlisted'); // Iter65 — default per user
@@ -389,6 +395,10 @@ export default function ScoreRound() {
             if (appliedFilters.status) params.status = appliedFilters.status;
             if (appliedFilters.college) params.college = appliedFilters.college;
             if (appliedFilters.role) params.job_role = appliedFilters.role;
+            // iter144 — per-field combo-box filters
+            if (appliedFilters.name) params.name = appliedFilters.name;
+            if (appliedFilters.email) params.email = appliedFilters.email;
+            if (appliedFilters.phone) params.phone = appliedFilters.phone;
             const r = await axios.get(`${API}/api/bb/score-round/table`, {
                 params, withCredentials: true,
             });
@@ -405,6 +415,24 @@ export default function ScoreRound() {
     }, [page, limit, search, appliedFilters, statusOptions.length, fetchStatusOptions]);
     useEffect(() => { load(); }, [load]);
 
+    // iter144 — Load distinct name / email / phone for the combo-box dropdowns.
+    const fetchFilterOpts = useCallback(async () => {
+        try {
+            const params = {};
+            if (appliedFilters.startDate) params.startDate = appliedFilters.startDate;
+            if (appliedFilters.endDate) params.endDate = appliedFilters.endDate;
+            const r = await axios.get(`${API}/api/bb/score-round/filter-options`, {
+                params, withCredentials: true,
+            });
+            setFilterOpts({
+                name: r.data?.name || [],
+                email: r.data?.email || [],
+                phone: r.data?.phone || [],
+            });
+        } catch { /* non-fatal — combo box falls back to free-text */ }
+    }, [appliedFilters.startDate, appliedFilters.endDate]);
+    useEffect(() => { fetchFilterOpts(); }, [fetchFilterOpts]);
+
     const applyFilters = () => {
         setPage(1);
         setSearch(searchInput.trim());
@@ -414,12 +442,16 @@ export default function ScoreRound() {
             status: statusFilter || '',
             college: collegeFilter.trim(),
             role: roleFilter.trim(),
+            name: nameInput.trim(),
+            email: emailInput.trim(),
+            phone: phoneInput.trim(),
         });
     };
     const resetFilters = () => {
         setSearchInput(''); setSearch('');
         setStartDate(''); setEndDate('');
         setStatusFilter('Shortlisted'); setCollegeFilter(''); setRoleFilter('');
+        setNameInput(''); setEmailInput(''); setPhoneInput('');
         setAppliedFilters({ status: 'Shortlisted' });
         setPage(1);
     };
@@ -513,6 +545,40 @@ export default function ScoreRound() {
                             data-testid="search-input"
                             className="bg-transparent text-sm py-1.5 px-2 w-56 focus:outline-none placeholder-zinc-600" />
                     </div>
+                </div>
+                {/* iter144 — Separate combo-box filters (typeahead + dropdown). */}
+                <div className="flex flex-col">
+                    <label className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Name</label>
+                    <input list="sr-filter-name-list" value={nameInput}
+                        onChange={e => setNameInput(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && applyFilters()}
+                        placeholder="Type or pick…" data-testid="sr-filter-name"
+                        className="bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm w-48 focus:outline-none focus:border-cyan-700 placeholder-zinc-600" />
+                    <datalist id="sr-filter-name-list">
+                        {filterOpts.name.map(v => <option key={v} value={v} />)}
+                    </datalist>
+                </div>
+                <div className="flex flex-col">
+                    <label className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Email</label>
+                    <input list="sr-filter-email-list" value={emailInput}
+                        onChange={e => setEmailInput(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && applyFilters()}
+                        placeholder="Type or pick…" data-testid="sr-filter-email"
+                        className="bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm w-52 focus:outline-none focus:border-cyan-700 placeholder-zinc-600" />
+                    <datalist id="sr-filter-email-list">
+                        {filterOpts.email.map(v => <option key={v} value={v} />)}
+                    </datalist>
+                </div>
+                <div className="flex flex-col">
+                    <label className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Phone</label>
+                    <input list="sr-filter-phone-list" value={phoneInput}
+                        onChange={e => setPhoneInput(e.target.value)}
+                        onKeyDown={e => e.key === 'Enter' && applyFilters()}
+                        placeholder="Type or pick…" data-testid="sr-filter-phone"
+                        className="bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm w-40 focus:outline-none focus:border-cyan-700 placeholder-zinc-600" />
+                    <datalist id="sr-filter-phone-list">
+                        {filterOpts.phone.map(v => <option key={v} value={v} />)}
+                    </datalist>
                 </div>
                 <div className="flex flex-col">
                     <label className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">From Date</label>
