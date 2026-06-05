@@ -415,12 +415,24 @@ export default function ScoreRound() {
     }, [page, limit, search, appliedFilters, statusOptions.length, fetchStatusOptions]);
     useEffect(() => { load(); }, [load]);
 
-    // iter144 — Load distinct name / email / phone for the combo-box dropdowns.
+    // iter145 — Lazy-fetch the combo-box dropdown options ONLY when
+    // the recruiter focuses one of the inputs for the first time.
+    // Previously we fetched on every page mount + every date change,
+    // which scanned all 136k pipeline_data rows and froze the browser
+    // by injecting 100k+ <option> nodes into a <datalist>. With the
+    // backend now hard-capped at 500 entries AND this lazy fetch,
+    // navigating to /score-round is instant.
+    const optsLoadedRef = useRef(false);
     const fetchFilterOpts = useCallback(async () => {
+        if (optsLoadedRef.current) return;
+        optsLoadedRef.current = true;
         try {
             const params = {};
             if (appliedFilters.startDate) params.startDate = appliedFilters.startDate;
             if (appliedFilters.endDate) params.endDate = appliedFilters.endDate;
+            if (appliedFilters.status) params.status = appliedFilters.status;
+            if (appliedFilters.college) params.college = appliedFilters.college;
+            if (appliedFilters.role) params.job_role = appliedFilters.role;
             const r = await axios.get(`${API}/api/bb/score-round/filter-options`, {
                 params, withCredentials: true,
             });
@@ -429,9 +441,14 @@ export default function ScoreRound() {
                 email: r.data?.email || [],
                 phone: r.data?.phone || [],
             });
-        } catch { /* non-fatal — combo box falls back to free-text */ }
-    }, [appliedFilters.startDate, appliedFilters.endDate]);
-    useEffect(() => { fetchFilterOpts(); }, [fetchFilterOpts]);
+        } catch {
+            // Non-fatal — combo box still works as a free-text input.
+            // Allow a retry on next focus.
+            optsLoadedRef.current = false;
+        }
+    }, [appliedFilters.startDate, appliedFilters.endDate, appliedFilters.status, appliedFilters.college, appliedFilters.role]);
+    // Refresh-on-filter-change: invalidate the cache when filters change.
+    useEffect(() => { optsLoadedRef.current = false; }, [appliedFilters.startDate, appliedFilters.endDate, appliedFilters.status, appliedFilters.college, appliedFilters.role]);
 
     const applyFilters = () => {
         setPage(1);
@@ -551,6 +568,7 @@ export default function ScoreRound() {
                     <label className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Name</label>
                     <input list="sr-filter-name-list" value={nameInput}
                         onChange={e => setNameInput(e.target.value)}
+                        onFocus={fetchFilterOpts}
                         onKeyDown={e => e.key === 'Enter' && applyFilters()}
                         placeholder="Type or pick…" data-testid="sr-filter-name"
                         className="bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm w-48 focus:outline-none focus:border-cyan-700 placeholder-zinc-600" />
@@ -562,6 +580,7 @@ export default function ScoreRound() {
                     <label className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Email</label>
                     <input list="sr-filter-email-list" value={emailInput}
                         onChange={e => setEmailInput(e.target.value)}
+                        onFocus={fetchFilterOpts}
                         onKeyDown={e => e.key === 'Enter' && applyFilters()}
                         placeholder="Type or pick…" data-testid="sr-filter-email"
                         className="bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm w-52 focus:outline-none focus:border-cyan-700 placeholder-zinc-600" />
@@ -573,6 +592,7 @@ export default function ScoreRound() {
                     <label className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1">Phone</label>
                     <input list="sr-filter-phone-list" value={phoneInput}
                         onChange={e => setPhoneInput(e.target.value)}
+                        onFocus={fetchFilterOpts}
                         onKeyDown={e => e.key === 'Enter' && applyFilters()}
                         placeholder="Type or pick…" data-testid="sr-filter-phone"
                         className="bg-zinc-900 border border-zinc-800 px-2 py-1.5 text-sm w-40 focus:outline-none focus:border-cyan-700 placeholder-zinc-600" />

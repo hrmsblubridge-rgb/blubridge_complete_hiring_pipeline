@@ -49,7 +49,7 @@ def _validate_nonempty(v, field_name="field"):
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta
 from bson import ObjectId
-import hashlib, secrets, re, logging, uuid
+import hashlib, secrets, re, logging, uuid, asyncio
 from _fmt import to_24h_db
 
 bb_router = APIRouter(prefix="/api/bb")
@@ -3418,7 +3418,15 @@ async def get_attended_score_filter_options(
     request: Request,
     startDate: str = Query(None),
     endDate: str = Query(None),
+    limit: int = Query(500, ge=1, le=2000),
 ):
+    """iter141 / iter145 — Distinct values for the Update Applicants
+    Scores filters. Hardened to:
+      • do the distinct work via `$addToSet` in MongoDB,
+      • cap the dropdown at `limit` entries so the <datalist> stays usable,
+      • keep the same attended-rows baseline (pipeline_data ∪
+        registered_candidates with otp_verified set).
+    """
     await _require_auth(request)
     match = {"otp_verified": {"$nin": [None, ""], "$exists": True},
              "schedule_date": {"$nin": [None, ""], "$exists": True}}
@@ -3437,8 +3445,17 @@ async def get_attended_score_filter_options(
                 {"$project": {"_id": 0, "name": 1, "email": 1, "phone": 1}},
             ],
         }},
+        {"$group": {
+            "_id": None,
+            "name": {"$addToSet": "$name"},
+            "email": {"$addToSet": "$email"},
+            "phone": {"$addToSet": "$phone"},
+        }},
     ]
-    rows = await _db.pipeline_data.aggregate(pipeline, allowDiskUse=True).to_list(None)
+    res = await _db.pipeline_data.aggregate(pipeline, allowDiskUse=True).to_list(1)
+    if not res:
+        return {"name": [], "email": [], "phone": []}
+    row = res[0]
 
     def _norm_phone(p):
         if not p:
@@ -3446,22 +3463,10 @@ async def get_attended_score_filter_options(
         digits = re.sub(r"\D", "", str(p))
         return digits[-10:] if len(digits) > 10 else digits
 
-    names, emails, phones = set(), set(), set()
-    for r in rows:
-        n = (r.get("name") or "").strip()
-        if n:
-            names.add(n)
-        e = (r.get("email") or "").strip()
-        if e:
-            emails.add(e.lower())
-        p = _norm_phone(r.get("phone"))
-        if p:
-            phones.add(p)
-    return {
-        "name": sorted(names),
-        "email": sorted(emails),
-        "phone": sorted(phones),
-    }
+    names = sorted({(n or "").strip() for n in row.get("name") or [] if (n or "").strip()})[:limit]
+    emails = sorted({(e or "").strip().lower() for e in row.get("email") or [] if (e or "").strip()})[:limit]
+    phones = sorted({_norm_phone(p) for p in row.get("phone") or [] if _norm_phone(p)})[:limit]
+    return {"name": names, "email": emails, "phone": phones}
 
 @bb_router.put("/applicant-score/{email:path}")
 async def update_applicant_score(email: str, data: ApplicantScoreUpdate, request: Request):
@@ -3893,8 +3898,31 @@ async def score_round_filter_options(
     request: Request,
     startDate: Optional[str] = Query(None),
     endDate: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    college: Optional[str] = Query(None),
+    job_role: Optional[str] = Query(None),
+    limit: int = Query(500, ge=1, le=2000),
 ):
+    """iter145 — Hardened distinct-values endpoint for the combo-box
+    filters on the Score & Round page.
+
+    The iter144 implementation pulled the FULL `pipeline_data` collection
+    (136k+ rows in production) into Python on every call and shipped
+    100k+ `<option>` nodes to the browser — both server-side latency and
+    DOM weight froze the page when the user filtered or even just
+    navigated to the route. We now:
+
+      • do the distinct work INSIDE MongoDB via `$addToSet`,
+      • cap the response at `limit` lexicographically-first entries
+        (default 500 — beyond ~5k a <datalist> stops being usable),
+      • scope the options to the SAME filters the table is rendering
+        (date range, status, college, job role) so the dropdown stays
+        aligned with what the recruiter is actually looking at.
+    """
     await _require_auth(request)
+
+    # Build a `match` that mirrors /score-round/table so the dropdown
+    # values can never disagree with the table contents.
     match: dict = {}
     if startDate or endDate:
         sd_q: dict = {}
@@ -3903,9 +3931,39 @@ async def score_round_filter_options(
         if endDate:
             sd_q["$lte"] = endDate.strip()
         match["schedule_date"] = sd_q
-    rows = await _db.pipeline_data.find(
-        match, {"_id": 0, "name": 1, "email": 1, "phone": 1}
-    ).to_list(None)
+    if status and status.strip():
+        canon = status.strip()
+        variants = SCORE_ROUND_STATUS_GROUPS.get(canon, [canon])
+        match["result_status"] = {"$in": variants}
+    if college and college.strip():
+        match["college"] = {"$regex": re.escape(college.strip()), "$options": "i"}
+    if job_role and job_role.strip():
+        match["job_role"] = {"$regex": re.escape(job_role.strip()), "$options": "i"}
+
+    # Run the three field aggregations in parallel — each uses its own
+    # index (name_1, email_1_phone_1, phone_1_autocreated). Parallel
+    # gather roughly halves wall-clock latency vs the single big
+    # $addToSet that scanned all docs.
+    OVERFETCH = max(limit * 4, 2000)
+
+    async def _distinct_field(field: str):
+        cur = _db.pipeline_data.aggregate(
+            [
+                {"$match": {**match, field: {"$nin": [None, ""]}}},
+                {"$sort": {field: 1}},
+                {"$limit": OVERFETCH},
+                {"$group": {"_id": None, "v": {"$addToSet": f"${field}"}}},
+            ],
+            allowDiskUse=True,
+        )
+        res = await cur.to_list(1)
+        return res[0]["v"] if res else []
+
+    name_raw, email_raw, phone_raw = await asyncio.gather(
+        _distinct_field("name"),
+        _distinct_field("email"),
+        _distinct_field("phone"),
+    )
 
     def _norm_phone(p):
         if not p:
@@ -3913,22 +3971,10 @@ async def score_round_filter_options(
         digits = re.sub(r"\D", "", str(p))
         return digits[-10:] if len(digits) > 10 else digits
 
-    names, emails, phones = set(), set(), set()
-    for r in rows:
-        n = (r.get("name") or "").strip()
-        if n:
-            names.add(n)
-        e = (r.get("email") or "").strip()
-        if e:
-            emails.add(e.lower())
-        ph = _norm_phone(r.get("phone"))
-        if ph:
-            phones.add(ph)
-    return {
-        "name": sorted(names),
-        "email": sorted(emails),
-        "phone": sorted(phones),
-    }
+    names = sorted({(n or "").strip() for n in name_raw if (n or "").strip()})[:limit]
+    emails = sorted({(e or "").strip().lower() for e in email_raw if (e or "").strip()})[:limit]
+    phones = sorted({_norm_phone(p) for p in phone_raw if _norm_phone(p)})[:limit]
+    return {"name": names, "email": emails, "phone": phones}
 
 
 @bb_router.get("/score-round/table")

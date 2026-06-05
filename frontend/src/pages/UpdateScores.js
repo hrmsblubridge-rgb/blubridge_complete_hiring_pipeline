@@ -92,10 +92,15 @@ export default function UpdateScores() {
         finally { setLoading(false); }
     }, [startDate, endDate]);
 
-    // iter141 — Load distinct name / email / phone for the combo-box
-    // dropdowns. Refreshes whenever the date range changes so the suggestions
-    // stay aligned with what's actually visible in the table.
+    // iter145 — Lazy-fetch the combo-box dropdown options ONLY when the
+    // recruiter focuses one of the inputs for the first time. Backend
+    // is also hard-capped at 500 entries. Combined, this prevents the
+    // page from injecting 100k+ <option> nodes into a <datalist> on
+    // mount (the cause of browser blackouts on Score & Round).
+    const optsLoadedRef = useRef(false);
     const fetchFilterOpts = useCallback(async () => {
+        if (optsLoadedRef.current) return;
+        optsLoadedRef.current = true;
         try {
             const params = {};
             if (startDate) params.startDate = startDate;
@@ -106,12 +111,18 @@ export default function UpdateScores() {
                 email: r.data?.email || [],
                 phone: r.data?.phone || [],
             });
-        } catch { /* non-fatal — combo box just falls back to free-text */ }
+        } catch {
+            // Non-fatal — allow retry on next focus.
+            optsLoadedRef.current = false;
+        }
     }, [startDate, endDate]);
+    // Invalidate the cached dropdown when the date range changes.
+    useEffect(() => { optsLoadedRef.current = false; }, [startDate, endDate]);
 
     useEffect(() => { fetchRounds(); }, [fetchRounds]);
     useEffect(() => { fetchApplicants(1, pageSize, sort); setPage(1); }, [fetchApplicants, pageSize, sort]);
-    useEffect(() => { fetchFilterOpts(); }, [fetchFilterOpts]);
+    // iter145 — fetchFilterOpts now runs lazily on input focus instead
+    // of on mount.
 
     const applyFilter = () => { setPage(1); fetchApplicants(1, pageSize, sort); };
     const handleSortChange = (next) => { setSort(next); setPage(1); };
@@ -284,6 +295,7 @@ export default function UpdateScores() {
                     <div className="space-y-1">
                         <label className="text-xs text-zinc-500 uppercase tracking-wider">Name</label>
                         <input list="us-filter-name-list" value={filterName} onChange={e => setFilterName(e.target.value)}
+                            onFocus={fetchFilterOpts}
                             placeholder="Type or pick…" data-testid="us-filter-name"
                             className="block w-52 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
                         <datalist id="us-filter-name-list">
@@ -293,6 +305,7 @@ export default function UpdateScores() {
                     <div className="space-y-1">
                         <label className="text-xs text-zinc-500 uppercase tracking-wider">Email</label>
                         <input list="us-filter-email-list" value={filterEmail} onChange={e => setFilterEmail(e.target.value)}
+                            onFocus={fetchFilterOpts}
                             placeholder="Type or pick…" data-testid="us-filter-email"
                             className="block w-60 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
                         <datalist id="us-filter-email-list">
@@ -302,6 +315,7 @@ export default function UpdateScores() {
                     <div className="space-y-1">
                         <label className="text-xs text-zinc-500 uppercase tracking-wider">Phone</label>
                         <input list="us-filter-phone-list" value={filterPhone} onChange={e => setFilterPhone(e.target.value)}
+                            onFocus={fetchFilterOpts}
                             placeholder="Type or pick…" data-testid="us-filter-phone"
                             className="block w-44 bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm focus:outline-none focus:border-zinc-500" />
                         <datalist id="us-filter-phone-list">
