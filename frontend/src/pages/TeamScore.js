@@ -110,7 +110,12 @@ export default function TeamScore() {
         fd.append('file', file);
         try {
             const r = await axios.post(`${TS}/import`, fd, { withCredentials: true });
-            toast.success(`Imported: +${r.data.inserted} / updated ${r.data.updated}` + (r.data.rounds_created?.length ? `; new rounds: ${r.data.rounds_created.join(', ')}` : ''));
+            const clamped = r.data.scores_clamped || 0;
+            toast.success(
+                `Imported: +${r.data.inserted} / updated ${r.data.updated}`
+                + (r.data.rounds_created?.length ? `; new rounds: ${r.data.rounds_created.join(', ')}` : '')
+                + (clamped ? `; ${clamped} score${clamped === 1 ? '' : 's'} capped to round total` : '')
+            );
             fetchAll();
         } catch (err) { toast.error(err.response?.data?.detail || 'Import failed'); }
         e.target.value = '';

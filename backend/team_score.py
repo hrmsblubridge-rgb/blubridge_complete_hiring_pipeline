@@ -651,6 +651,19 @@ async def import_team_scores(request: Request, file: UploadFile = File(...)):
     # Walk rows, switching status at "INACTIVE EMPLOYEES" markers.
     status = "active"
     inserted, updated, separators = 0, 0, 0
+    # iter143 — Build a fresh {round_name → total_score} lookup AFTER the
+    # auto-create pass above so we can clamp out-of-range scores during
+    # row ingestion. NULL/0 totals → no clamp possible.
+    round_totals: dict = {}
+    for _, rn in round_idx:
+        doc = await _db.ts_rounds.find_one(
+            {"round_name": {"$regex": f"^{re.escape(rn)}$", "$options": "i"}}
+        )
+        if doc:
+            ts = doc.get("total_score")
+            round_totals[rn] = float(ts) if ts not in (None, "") else None
+    scores_clamped = 0  # how many cells we capped
+
     for r in body:
         # Pad row to header length.
         if len(r) < len(headers):
@@ -677,9 +690,17 @@ async def import_team_scores(request: Request, file: UploadFile = File(...)):
             if v in (None, ""):
                 continue
             try:
-                scores[rn] = float(v)
+                sv = float(v)
             except (TypeError, ValueError):
                 continue
+            # iter143 — Clamp out-of-range scores to the round's total.
+            # If the round has a NULL/0 total, leave the value alone
+            # (there's no ceiling to clamp against).
+            t = round_totals.get(rn)
+            if t is not None and t > 0 and sv > t:
+                sv = t
+                scores_clamped += 1
+            scores[rn] = sv
         # iter135 — joining_date is normalized to canonical yyyy-mm-dd.
         joining_raw = ""
         ji = base_idx.get("joining_date")
@@ -725,6 +746,7 @@ async def import_team_scores(request: Request, file: UploadFile = File(...)):
         "updated": updated,
         "separators": separators,
         "rounds_created": created_rounds,
+        "scores_clamped": scores_clamped,
     }
 
 
