@@ -1557,8 +1557,26 @@ async def get_summary(
     + `_nirf_category` indexes; no full-collection scans.
     """
     base_match: dict = {}
+    # iter142 — Expand the search regex so a hit on the canonical title
+    # also catches every raw keyword that maps to it via
+    # job_keyword_mapping. Without this, mapping "Sr. Engineer" →
+    # "Senior Engineer" and then searching "Senior" silently misses rows
+    # whose raw role is still "Sr. Engineer" (the substring "Senior"
+    # doesn't appear in the raw value).
     if search:
-        base_match["_normalized_job_role"] = {"$regex": re.escape(search), "$options": "i"}
+        s_norm = _normalize_text_for_matching(search)
+        expand_terms = {search}
+        for mp in await _get_job_keyword_mappings():
+            canon = (mp.get("job_role") or "").strip()
+            if not canon:
+                continue
+            if s_norm and s_norm in _normalize_text_for_matching(canon):
+                expand_terms.add(canon)
+                for kw in (mp.get("keywords") or []):
+                    if kw:
+                        expand_terms.add(kw)
+        regex = "|".join(re.escape(t) for t in expand_terms if t)
+        base_match["_normalized_job_role"] = {"$regex": regex, "$options": "i"}
 
     pipe_match = dict(base_match)
     naukri_match = dict(base_match)
@@ -1674,23 +1692,52 @@ async def get_summary(
     naukri_results = await db.naukri_applies.aggregate(naukri_pipeline, allowDiskUse=False).to_list(None)
     naukri_buckets = {(r["_id"]["role"], r["_id"]["cat"]): r for r in naukri_results}
 
-    # Combine
-    results = []
+    # iter142 — Roll up by READ-TIME canonical title using
+    # `job_keyword_mapping`, the SAME pattern used by /api/job-roles and
+    # /api/job-roles-dropdown. Previously the Summary page showed one row
+    # per raw `_normalized_job_role` value even after the recruiter created
+    # a keyword mapping like  Sr. Engineer → "Senior Engineer" — because
+    # `_normalized_job_role` is persisted at ingestion-time and isn't
+    # re-derived when the mapping table changes. Folding here applies the
+    # current mapping on every read so the funnel rows reflect live
+    # keyword groupings without needing a background re-derive job.
+    kw_to_canonical, _ = await _build_canonical_index()
+
+    def _canon(role: str) -> str:
+        canon = _canonicalize_job_role(role or "", kw_to_canonical)
+        return canon or role or "Unknown"
+
+    # Merge per-(canon_role, cat) by summing across all raw_role values
+    # that map to the same canonical title.
+    merged: dict = {}
+    metric_keys = (
+        "total_naukri", "total_registered", "total_unregistered",
+        "shortlisted", "rejected", "scheduled", "not_scheduled",
+        "attended", "not_attended",
+    )
     all_keys = set(pipe_buckets.keys()) | set(naukri_buckets.keys())
-    for (role, cat) in sorted(all_keys):
+    for (role, cat) in all_keys:
         p = pipe_buckets.get((role, cat), {})
         n = naukri_buckets.get((role, cat), {})
+        canon = _canon(role)
+        key = (canon, cat)
+        slot = merged.setdefault(key, {k: 0 for k in metric_keys})
+        slot["total_naukri"] += n.get("naukri_total", 0)
+        slot["total_registered"] += p.get("total_registered", 0)
+        slot["total_unregistered"] += n.get("naukri_unregistered", 0)
+        slot["shortlisted"] += p.get("shortlisted", 0)
+        slot["rejected"] += p.get("rejected", 0)
+        slot["scheduled"] += p.get("scheduled", 0)
+        slot["not_scheduled"] += p.get("not_scheduled", 0)
+        slot["attended"] += p.get("attended", 0)
+        slot["not_attended"] += p.get("not_attended", 0)
+
+    results = []
+    for (role, cat) in sorted(merged.keys()):
+        m = merged[(role, cat)]
         results.append({
             "job_role": f"{role} - {cat}",
-            "total_naukri": n.get("naukri_total", 0),
-            "total_registered": p.get("total_registered", 0),
-            "total_unregistered": n.get("naukri_unregistered", 0),
-            "shortlisted": p.get("shortlisted", 0),
-            "rejected": p.get("rejected", 0),
-            "scheduled": p.get("scheduled", 0),
-            "not_scheduled": p.get("not_scheduled", 0),
-            "attended": p.get("attended", 0),
-            "not_attended": p.get("not_attended", 0),
+            **m,
         })
 
     total_registered = sum(r["total_registered"] for r in results)
