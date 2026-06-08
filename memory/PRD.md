@@ -1,3 +1,37 @@
+## iter148 — Update Applicants Scores: permanent (hard) delete for rounds (Feb 8, 2026)
+
+### Problem
+The Manage Rounds drawer offered Activate / Deactivate (iter147) but no
+way to *fully remove* a round from the database. This left dummy / test /
+accidental noise rounds permanently stuck in the system.
+
+### Spec
+- Add a "Delete" (hard, DB-level) button alongside the Activate /
+  Deactivate controls. Available on BOTH active and inactive rows so it
+  doesn't matter what state the noise data is in.
+- Require explicit confirmation through the shared ConfirmDeleteModal
+  ("Permanently Delete Round?" + "Delete Permanently" confirm).
+- Backend safety guard already exists: `DELETE /api/bb/rounds/{id}?hard=true`
+  returns 409 if the round is referenced by any applicant score
+  (bb_modules.py:1482). The frontend surfaces this server-side error
+  through a toast so the recruiter learns to deactivate instead.
+
+### Implementation (`/app/frontend/src/pages/UpdateScores.js`)
+- New state: `hardDeleteRoundTarget` ({id, name} | null).
+- New handler: `hardDeleteRound(target)` → `axios.delete(/api/bb/rounds/{id}?hard=true)`
+  + toast "Round permanently deleted" on success, server-detail on
+  failure.
+- New button `data-testid="hard-delete-round-{id}"` on both active and
+  inactive rows — styled `bg-red-900 border-red-700` so it's clearly
+  more destructive than the regular red Deactivate button.
+- New modal `data-testid="hard-delete-round-us-modal"`.
+
+### Files modified
+- `/app/frontend/src/pages/UpdateScores.js`
+
+---
+
+
 ## iter147 — Update Applicants Scores: explicit Activate / Deactivate round controls (Feb 8, 2026)
 
 ### Problem

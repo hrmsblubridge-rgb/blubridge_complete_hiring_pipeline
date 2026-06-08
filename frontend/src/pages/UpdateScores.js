@@ -56,6 +56,8 @@ export default function UpdateScores() {
     const [showInactive, setShowInactive] = useState(false);
     // iter146 — secure delete confirmation target for round disable.
     const [deleteRoundTarget, setDeleteRoundTarget] = useState(null); // {id, name} | null
+    // iter148 — permanent (hard) delete confirmation target.
+    const [hardDeleteRoundTarget, setHardDeleteRoundTarget] = useState(null); // {id, name} | null
     const [sort, setSort] = useState(null);
 
     const fetchRounds = useCallback(async (includeInactive = false) => {
@@ -175,6 +177,14 @@ export default function UpdateScores() {
         try {
             await axios.post(`${API}/api/bb/rounds/${id}/restore`, {}, { withCredentials: true });
             toast.success('Round activated'); fetchRounds(showInactive);
+        } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+    };
+    // iter148 — Permanent (hard) delete. Backend blocks this with 409 if the
+    // round is referenced by any applicant score (data-safety guard).
+    const hardDeleteRound = async (target) => {
+        try {
+            await axios.delete(`${API}/api/bb/rounds/${target.id}?hard=true`, { withCredentials: true });
+            toast.success('Round permanently deleted'); setHardDeleteRoundTarget(null); fetchRounds(showInactive);
         } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
     };
     const toggleShowInactive = () => {
@@ -455,6 +465,12 @@ export default function UpdateScores() {
                                                     </button>
                                                 </>
                                             )}
+                                            {/* iter148 — Permanent delete (DB-level wipe). Available
+                                                on both Active and Inactive rounds. Backend will
+                                                block with a clear error if the round has score data. */}
+                                            <button onClick={() => setHardDeleteRoundTarget({ id: r.id, name: r.name })} data-testid={`hard-delete-round-${r.id}`} className="flex items-center gap-1 px-2.5 py-1 bg-red-900 hover:bg-red-800 border border-red-700 text-red-100 text-xs font-medium" title="Permanently delete this round (irreversible)">
+                                                <Trash size={12} /> Delete
+                                            </button>
                                         </div>
                                     </div>
                                 );
@@ -535,6 +551,16 @@ export default function UpdateScores() {
                 testId="delete-round-us"
                 onConfirm={() => deleteRound(deleteRoundTarget)}
                 onClose={() => setDeleteRoundTarget(null)}
+            />
+            <ConfirmDeleteModal
+                open={!!hardDeleteRoundTarget}
+                title="Permanently Delete Round?"
+                itemLabel={hardDeleteRoundTarget?.name}
+                description="This will REMOVE the round from the database entirely. If any applicant scores still reference this round, the delete will be blocked. Use this only for dummy/test/noise rounds."
+                confirmLabel="Delete Permanently"
+                testId="hard-delete-round-us"
+                onConfirm={() => hardDeleteRound(hardDeleteRoundTarget)}
+                onClose={() => setHardDeleteRoundTarget(null)}
             />
         </div>
     );
