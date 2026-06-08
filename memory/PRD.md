@@ -1,3 +1,60 @@
+## iter146 — Secure Delete Confirmation Popups (Feb 8, 2026)
+
+### Spec
+Replace all destructive delete actions in the 5 in-scope modules with a
+shared, secure ConfirmDeleteModal (no native `window.confirm`, no immediate
+`axios.delete`):
+1. Rounds (Score & Round → Manage Rounds modal)
+2. Team Rounds (Team Score → Manage Rounds modal)
+3. Job Roles (Manage Job Roles)
+4. Job Openings (Job Openings)
+5. Hiring Forms (Hiring Forms — both Hiring Forms AND Form Types rows)
+Extras for cohesion: Update Scores → round disable also uses the modal.
+
+User choices (confirmed): one shared reusable component; simple Cancel /
+Confirm buttons (no name-typing required).
+
+### Implementation
+- Reused existing `/app/frontend/src/components/ConfirmDeleteModal.jsx`
+  (z-60 backdrop, X / Cancel / red Delete; backdrop click closes).
+- Each page tracks `deleteTarget` state ({id, name/title}). Trash icon
+  now `setDeleteTarget(...)`. Modal's `onConfirm` runs the actual
+  `axios.delete` and `setDeleteTarget(null)` on success.
+
+### Files modified
+- `/app/frontend/src/pages/ScoreRound.js` — `ManageRoundsModal`
+  switched from `window.confirm` to ConfirmDeleteModal
+  (`data-testid="delete-round-modal"`). Also fixed pre-existing missing
+  `useRef` import.
+- `/app/frontend/src/pages/TeamScore.js` — `RoundsModal` switched from
+  `window.confirm` to ConfirmDeleteModal
+  (`data-testid="ts-delete-round-modal"`).
+- `/app/frontend/src/pages/UpdateScores.js` — Manage-Rounds drawer
+  round-disable switched from `window.confirm` to ConfirmDeleteModal
+  (`data-testid="delete-round-us-modal"`).
+- `/app/frontend/src/pages/HiringForms.js` — Form Types delete now also
+  uses ConfirmDeleteModal (`data-testid="delete-form-type-modal"`).
+- ManageJobRoles, JobOpenings, HiringForms (Hiring Forms list) already
+  wired to ConfirmDeleteModal — verified.
+
+### Test status
+- Static review by testing agent: all 7 modal mount points wired
+  correctly; correct DELETE endpoints; backdrop/Cancel/X all close
+  without firing DELETE; only red confirm executes deletion.
+- Live UI test: BLOCKED — documented admin credentials in
+  `/app/memory/test_credentials.md` (`Admin User` / `Admin User`) no
+  longer match the bcrypt hash in `bb_users` (credential drift from a
+  prior session). Per the strict rule, the password was NOT mutated.
+  User action required: provide the current valid admin password OR
+  authorize a one-time reset.
+
+### Notes
+- `CollegeSchedules.js` and `TesterCredentials.js` still use
+  `window.confirm` — explicitly out of scope for iter146.
+
+---
+
+
 ## iter136 — Team Score table: sticky columns/header + pagination (Feb 17, 2026)
 
 ### Spec
