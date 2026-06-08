@@ -168,13 +168,13 @@ export default function UpdateScores() {
         // Logical delete by default
         try {
             await axios.delete(`${API}/api/bb/rounds/${target.id}`, { withCredentials: true });
-            toast.success('Round disabled'); setDeleteRoundTarget(null); fetchRounds(showInactive);
+            toast.success('Round deactivated'); setDeleteRoundTarget(null); fetchRounds(showInactive);
         } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
     };
     const restoreRound = async (id) => {
         try {
             await axios.post(`${API}/api/bb/rounds/${id}/restore`, {}, { withCredentials: true });
-            toast.success('Round restored'); fetchRounds(showInactive);
+            toast.success('Round activated'); fetchRounds(showInactive);
         } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
     };
     const toggleShowInactive = () => {
@@ -444,13 +444,15 @@ export default function UpdateScores() {
                                         </div>
                                         <div className="flex gap-2">
                                             {inactive ? (
-                                                <button onClick={() => restoreRound(r.id)} data-testid={`restore-round-${r.id}`} className="p-1 text-zinc-400 hover:text-emerald-400" title="Restore">
-                                                    <ArrowCounterClockwise size={14} />
+                                                <button onClick={() => restoreRound(r.id)} data-testid={`activate-round-${r.id}`} className="flex items-center gap-1 px-2.5 py-1 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-medium" title="Activate this round">
+                                                    <ArrowCounterClockwise size={12} /> Activate
                                                 </button>
                                             ) : (
                                                 <>
-                                                    <button onClick={() => { setEditRoundId(r.id); setRoundName(r.name); }} data-testid={`edit-round-${r.id}`} className="p-1 text-zinc-500 hover:text-white" title="Edit"><PencilSimple size={14} /></button>
-                                                    <button onClick={() => setDeleteRoundTarget({ id: r.id, name: r.name })} data-testid={`delete-round-${r.id}`} className="p-1 text-zinc-500 hover:text-red-400" title="Disable (logical delete)"><Trash size={14} /></button>
+                                                    <button onClick={() => { setEditRoundId(r.id); setRoundName(r.name); }} data-testid={`edit-round-${r.id}`} className="p-1.5 text-zinc-500 hover:text-white" title="Edit"><PencilSimple size={14} /></button>
+                                                    <button onClick={() => setDeleteRoundTarget({ id: r.id, name: r.name })} data-testid={`deactivate-round-${r.id}`} className="flex items-center gap-1 px-2.5 py-1 bg-red-700 hover:bg-red-600 text-white text-xs font-medium" title="Deactivate this round">
+                                                        <Trash size={12} /> Deactivate
+                                                    </button>
                                                 </>
                                             )}
                                         </div>
@@ -526,10 +528,10 @@ export default function UpdateScores() {
             )}
             <ConfirmDeleteModal
                 open={!!deleteRoundTarget}
-                title="Disable Round?"
+                title="Deactivate Round?"
                 itemLabel={deleteRoundTarget?.name}
-                description="Historical scores will be preserved and the round can be restored later."
-                confirmLabel="Disable"
+                description="The round will be marked Inactive and hidden from active dropdowns. Historical scores are preserved — you can reactivate it anytime."
+                confirmLabel="Deactivate"
                 testId="delete-round-us"
                 onConfirm={() => deleteRound(deleteRoundTarget)}
                 onClose={() => setDeleteRoundTarget(null)}

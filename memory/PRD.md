@@ -1,3 +1,35 @@
+## iter147 — Update Applicants Scores: explicit Activate / Deactivate round controls (Feb 8, 2026)
+
+### Problem
+The Manage Rounds drawer on /update-scores already classified rounds as
+Active vs Inactive (and the backend endpoints existed), but the only UI
+affordance to switch a round between states was an unlabeled trash icon
+(deactivate) and a small circular-arrow icon (activate). Recruiters
+couldn't tell those were the activate/deactivate controls.
+
+### Spec
+Replace the unlabeled icons with clearly labeled, color-coded text buttons:
+- Active rounds: keep the Edit pencil; replace the trash icon with a red
+  "Deactivate" pill (icon + text). Clicking it still routes through the
+  shared ConfirmDeleteModal (iter146).
+- Inactive rounds: replace the circular-arrow icon with a green "Activate"
+  pill. Clicking it calls POST /api/bb/rounds/{id}/restore directly (no
+  modal — it's a non-destructive recovery action).
+
+### Implementation (`/app/frontend/src/pages/UpdateScores.js`)
+- Replaced icon-only buttons with labeled pill buttons:
+  - `data-testid="deactivate-round-{id}"` — red, calls `setDeleteRoundTarget(...)`.
+  - `data-testid="activate-round-{id}"` — emerald, calls `restoreRound(id)`.
+- ConfirmDeleteModal copy updated: title "Deactivate Round?", confirm
+  label "Deactivate", body now explicitly says "marked Inactive".
+- Toast strings updated: "Round deactivated" / "Round activated".
+
+### Files modified
+- `/app/frontend/src/pages/UpdateScores.js`
+
+---
+
+
 ## iter146 — Secure Delete Confirmation Popups (Feb 8, 2026)
 
 ### Spec
