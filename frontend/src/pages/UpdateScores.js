@@ -6,6 +6,7 @@ import { ArrowLeft, FunnelSimple, PencilSimple, X, Plus, Trash, FloppyDisk, Expo
 import Pagination from '../components/Pagination';
 import { formatDateDDMMYYYY } from '../utils/dateFormat';
 import SortableHeader from '../components/SortableHeader';
+import ConfirmDeleteModal from '../components/ConfirmDeleteModal';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -53,6 +54,8 @@ export default function UpdateScores() {
     const [roundName, setRoundName] = useState('');
     const [editRoundId, setEditRoundId] = useState(null);
     const [showInactive, setShowInactive] = useState(false);
+    // iter146 — secure delete confirmation target for round disable.
+    const [deleteRoundTarget, setDeleteRoundTarget] = useState(null); // {id, name} | null
     const [sort, setSort] = useState(null);
 
     const fetchRounds = useCallback(async (includeInactive = false) => {
@@ -161,12 +164,11 @@ export default function UpdateScores() {
             toast.success(editRoundId ? 'Updated' : 'Created'); setRoundName(''); setEditRoundId(null); fetchRounds(showInactive);
         } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
     };
-    const deleteRound = async (id) => {
+    const deleteRound = async (target) => {
         // Logical delete by default
-        if (!window.confirm('Disable this round? Historical scores will be preserved and the round can be restored later.')) return;
         try {
-            await axios.delete(`${API}/api/bb/rounds/${id}`, { withCredentials: true });
-            toast.success('Round disabled'); fetchRounds(showInactive);
+            await axios.delete(`${API}/api/bb/rounds/${target.id}`, { withCredentials: true });
+            toast.success('Round disabled'); setDeleteRoundTarget(null); fetchRounds(showInactive);
         } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
     };
     const restoreRound = async (id) => {
@@ -448,7 +450,7 @@ export default function UpdateScores() {
                                             ) : (
                                                 <>
                                                     <button onClick={() => { setEditRoundId(r.id); setRoundName(r.name); }} data-testid={`edit-round-${r.id}`} className="p-1 text-zinc-500 hover:text-white" title="Edit"><PencilSimple size={14} /></button>
-                                                    <button onClick={() => deleteRound(r.id)} data-testid={`delete-round-${r.id}`} className="p-1 text-zinc-500 hover:text-red-400" title="Disable (logical delete)"><Trash size={14} /></button>
+                                                    <button onClick={() => setDeleteRoundTarget({ id: r.id, name: r.name })} data-testid={`delete-round-${r.id}`} className="p-1 text-zinc-500 hover:text-red-400" title="Disable (logical delete)"><Trash size={14} /></button>
                                                 </>
                                             )}
                                         </div>
@@ -522,6 +524,16 @@ export default function UpdateScores() {
                     </div>
                 </div>
             )}
+            <ConfirmDeleteModal
+                open={!!deleteRoundTarget}
+                title="Disable Round?"
+                itemLabel={deleteRoundTarget?.name}
+                description="Historical scores will be preserved and the round can be restored later."
+                confirmLabel="Disable"
+                testId="delete-round-us"
+                onConfirm={() => deleteRound(deleteRoundTarget)}
+                onClose={() => setDeleteRoundTarget(null)}
+            />
         </div>
     );
 }

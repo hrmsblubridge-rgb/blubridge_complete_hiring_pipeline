@@ -4,6 +4,7 @@ import axios from 'axios';
 import { toast } from 'sonner';
 import { ArrowLeft, Plus, PencilSimple, Trash, X, FolderOpen, Link as LinkIcon, Copy } from '@phosphor-icons/react';
 import LifecycleControl, { StatusDot } from '../components/LifecycleControl';
+import ConfirmDeleteModal from '../components/ConfirmDeleteModal';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -13,6 +14,8 @@ export default function JobOpenings() {
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [editId, setEditId] = useState(null);
+    // iter146 — confirmation modal target for delete
+    const [deleteTarget, setDeleteTarget] = useState(null); // {id, title} | null
     const [formTitle, setFormTitle] = useState('');
     const [formRole, setFormRole] = useState('');
     const [formVacancies, setFormVacancies] = useState('');
@@ -90,7 +93,7 @@ export default function JobOpenings() {
     };
 
     const handleDelete = async (id) => {
-        try { await axios.delete(`${API}/api/bb/job-openings/${id}`, { withCredentials: true }); toast.success('Deleted'); fetchAll(); } catch { toast.error('Failed'); }
+        try { await axios.delete(`${API}/api/bb/job-openings/${id}`, { withCredentials: true }); toast.success('Deleted'); setDeleteTarget(null); fetchAll(); } catch { toast.error('Failed'); }
     };
 
     return (
@@ -147,7 +150,7 @@ export default function JobOpenings() {
                                         title="Copy Public Job Description URL"
                                         className="p-2 text-zinc-500 hover:text-emerald-400 hover:bg-zinc-800"><Copy size={16} /></button>
                                     <button onClick={() => openEdit(o)} data-testid={`opening-edit-${o.id}`} className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800"><PencilSimple size={16} /></button>
-                                    <button onClick={() => handleDelete(o.id)} data-testid={`opening-delete-${o.id}`} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800"><Trash size={16} /></button>
+                                    <button onClick={() => setDeleteTarget({ id: o.id, title: o.title })} data-testid={`opening-delete-${o.id}`} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800"><Trash size={16} /></button>
                                 </div>
                             </div>
                         </div>
@@ -208,6 +211,15 @@ export default function JobOpenings() {
                     </div>
                 </div>
             )}
+            <ConfirmDeleteModal
+                open={!!deleteTarget}
+                title="Delete Job Opening?"
+                itemLabel={deleteTarget?.title}
+                description="The opening will be removed from public listings and any applicants targeting it will lose context."
+                testId="delete-job-opening"
+                onConfirm={() => handleDelete(deleteTarget.id)}
+                onClose={() => setDeleteTarget(null)}
+            />
         </div>
     );
 }

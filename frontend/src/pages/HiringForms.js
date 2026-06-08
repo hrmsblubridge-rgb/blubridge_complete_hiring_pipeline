@@ -4,6 +4,7 @@ import axios from 'axios';
 import { toast } from 'sonner';
 import { ArrowLeft, Plus, PencilSimple, Trash, X, Link as LinkIcon, Copy } from '@phosphor-icons/react';
 import LifecycleControl, { StatusDot } from '../components/LifecycleControl';
+import ConfirmDeleteModal from '../components/ConfirmDeleteModal';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -28,6 +29,10 @@ export default function HiringForms() {
     const [jobOpenings, setJobOpenings] = useState([]);
     const [showInstructionPage, setShowInstructionPage] = useState(false);
     const [instructionContent, setInstructionContent] = useState('');
+    // iter146 — delete-confirmation target (forms only; form-types not in scope this iter).
+    const [deleteFormTarget, setDeleteFormTarget] = useState(null); // {id, name} | null
+    // iter146b — Hiring Forms page form-types deletion modal.
+    const [deleteTypeTarget, setDeleteTypeTarget] = useState(null); // {id, name} | null
 
     const fetchAll = useCallback(async () => {
         setLoading(true);
@@ -58,7 +63,7 @@ export default function HiringForms() {
         } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
     };
     const deleteType = async (id) => {
-        try { await axios.delete(`${API}/api/bb/form-types/${id}`, { withCredentials: true }); toast.success('Deleted'); fetchAll(); } catch { toast.error('Failed'); }
+        try { await axios.delete(`${API}/api/bb/form-types/${id}`, { withCredentials: true }); toast.success('Deleted'); setDeleteTypeTarget(null); fetchAll(); } catch { toast.error('Failed'); }
     };
 
     // Hiring Forms
@@ -96,7 +101,7 @@ export default function HiringForms() {
         } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
     };
     const deleteForm = async (id) => {
-        try { await axios.delete(`${API}/api/bb/hiring-forms/${id}`, { withCredentials: true }); toast.success('Deleted'); fetchAll(); } catch { toast.error('Failed'); }
+        try { await axios.delete(`${API}/api/bb/hiring-forms/${id}`, { withCredentials: true }); toast.success('Deleted'); setDeleteFormTarget(null); fetchAll(); } catch { toast.error('Failed'); }
     };
 
     return (
@@ -120,7 +125,7 @@ export default function HiringForms() {
                             <div key={t.id} className="bg-zinc-900 border border-zinc-800 px-4 py-3 flex items-center gap-3" data-testid={`form-type-${t.id}`}>
                                 <span className="text-sm font-medium">{t.name}</span>
                                 <button onClick={() => openEditType(t)} className="p-1 text-zinc-500 hover:text-white"><PencilSimple size={14} /></button>
-                                <button onClick={() => deleteType(t.id)} className="p-1 text-zinc-500 hover:text-red-400"><Trash size={14} /></button>
+                                <button onClick={() => setDeleteTypeTarget({ id: t.id, name: t.name })} data-testid={`form-type-delete-${t.id}`} className="p-1 text-zinc-500 hover:text-red-400"><Trash size={14} /></button>
                             </div>
                         ))}
                     </div>}
@@ -170,7 +175,7 @@ export default function HiringForms() {
                                             className="p-2 text-zinc-500 hover:text-emerald-400 hover:bg-zinc-800"
                                         ><Copy size={16} /></button>
                                         <button onClick={() => openEditForm(f)} className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800"><PencilSimple size={16} /></button>
-                                        <button onClick={() => deleteForm(f.id)} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800"><Trash size={16} /></button>
+                                        <button onClick={() => setDeleteFormTarget({ id: f.id, name: f.name })} data-testid={`form-delete-${f.id}`} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800"><Trash size={16} /></button>
                                     </div>
                                 </div>
                             </div>
@@ -302,6 +307,24 @@ export default function HiringForms() {
                     </div>
                 </div>
             )}
+            <ConfirmDeleteModal
+                open={!!deleteFormTarget}
+                title="Delete Hiring Form?"
+                itemLabel={deleteFormTarget?.name}
+                description="The form will be removed and any public links pointing to it will stop working."
+                testId="delete-hiring-form"
+                onConfirm={() => deleteForm(deleteFormTarget.id)}
+                onClose={() => setDeleteFormTarget(null)}
+            />
+            <ConfirmDeleteModal
+                open={!!deleteTypeTarget}
+                title="Delete Form Type?"
+                itemLabel={deleteTypeTarget?.name}
+                description="Existing forms referencing this type may lose their categorization."
+                testId="delete-form-type"
+                onConfirm={() => deleteType(deleteTypeTarget.id)}
+                onClose={() => setDeleteTypeTarget(null)}
+            />
         </div>
     );
 }

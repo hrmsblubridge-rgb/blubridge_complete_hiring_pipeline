@@ -6,7 +6,7 @@
  * Backed by GET /api/bb/score-round/table, POST /save-scores, PUT /save-dates,
  * plus existing /api/bb/rounds CRUD for round management.
  */
-import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
@@ -17,6 +17,7 @@ import {
 import {
     DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
 } from '../components/ui/dropdown-menu';
+import ConfirmDeleteModal from '../components/ConfirmDeleteModal';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -41,6 +42,8 @@ function ManageRoundsModal({ onClose, onChanged }) {
     const [editId, setEditId] = useState(null);
     const [editName, setEditName] = useState('');
     const [showInactive, setShowInactive] = useState(false);
+    // iter146 — secure delete confirmation target (replaces window.confirm).
+    const [deleteTarget, setDeleteTarget] = useState(null); // {id, name} | null
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -77,9 +80,9 @@ function ManageRoundsModal({ onClose, onChanged }) {
         } catch (e) { toast.error(e.response?.data?.detail || 'Update failed'); }
     };
     const remove = async (r) => {
-        if (!window.confirm(`Disable round "${r.name}"? Existing scores remain queryable; restore anytime.`)) return;
         try {
             await axios.delete(`${API}/api/bb/rounds/${r.id}`, { withCredentials: true });
+            setDeleteTarget(null);
             await load(); onChanged?.();
             toast.success('Round disabled');
         } catch (e) { toast.error(e.response?.data?.detail || 'Delete failed'); }
@@ -141,7 +144,7 @@ function ManageRoundsModal({ onClose, onChanged }) {
                                 ) : (
                                     <>
                                         <button onClick={() => { setEditId(r.id); setEditName(r.name); }} title="Edit" className="p-1 text-zinc-400 hover:text-white"><PencilSimple size={14} /></button>
-                                        <button onClick={() => remove(r)} title="Disable" className="p-1 text-zinc-400 hover:text-red-400"><Trash size={14} /></button>
+                                        <button onClick={() => setDeleteTarget({ id: r.id, name: r.name })} data-testid={`round-delete-${r.id}`} title="Disable" className="p-1 text-zinc-400 hover:text-red-400"><Trash size={14} /></button>
                                     </>
                                 )}
                             </div>
@@ -149,6 +152,16 @@ function ManageRoundsModal({ onClose, onChanged }) {
                     })}
                 </div>
             </div>
+            <ConfirmDeleteModal
+                open={!!deleteTarget}
+                title="Disable Round?"
+                itemLabel={deleteTarget?.name}
+                description="The round will be hidden from active lists. Existing scores remain queryable and you can restore it anytime."
+                confirmLabel="Disable"
+                testId="delete-round"
+                onConfirm={() => remove({ id: deleteTarget.id, name: deleteTarget.name })}
+                onClose={() => setDeleteTarget(null)}
+            />
         </div>
     );
 }

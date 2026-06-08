@@ -4,6 +4,7 @@ import axios from 'axios';
 import { toast } from 'sonner';
 import { ArrowLeft, Plus, PencilSimple, Trash, X, Briefcase } from '@phosphor-icons/react';
 import LifecycleControl, { StatusDot } from '../components/LifecycleControl';
+import ConfirmDeleteModal from '../components/ConfirmDeleteModal';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -14,6 +15,8 @@ export default function ManageJobRoles() {
     const [showModal, setShowModal] = useState(false);
     const [editId, setEditId] = useState(null);
     const [formName, setFormName] = useState('');
+    // iter146 — confirmation modal for delete (replaces instant axios.delete).
+    const [deleteTarget, setDeleteTarget] = useState(null); // {id, name} | null
 
     const fetch_ = useCallback(async () => {
         setLoading(true);
@@ -43,7 +46,7 @@ export default function ManageJobRoles() {
     };
 
     const handleDelete = async (id) => {
-        try { await axios.delete(`${API}/api/bb/job-roles/${id}`, { withCredentials: true }); toast.success('Deleted'); fetch_(); }
+        try { await axios.delete(`${API}/api/bb/job-roles/${id}`, { withCredentials: true }); toast.success('Deleted'); setDeleteTarget(null); fetch_(); }
         catch { toast.error('Failed'); }
     };
 
@@ -70,7 +73,7 @@ export default function ManageJobRoles() {
                             <div className="flex gap-2 shrink-0 flex-wrap justify-end ml-auto">
                                 <LifecycleControl entity="job-roles" id={r.id} name={r.name} status={r.status} onChanged={fetch_} testIdPrefix={`role-${r.id}-lifecycle`} />
                                 <button onClick={() => openEdit(r)} data-testid={`edit-${r.id}`} className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800 transition-colors"><PencilSimple size={16} /></button>
-                                <button onClick={() => handleDelete(r.id)} data-testid={`delete-${r.id}`} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800 transition-colors"><Trash size={16} /></button>
+                                <button onClick={() => setDeleteTarget({ id: r.id, name: r.name })} data-testid={`delete-${r.id}`} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800 transition-colors"><Trash size={16} /></button>
                             </div>
                         </div>
                     ))}
@@ -92,6 +95,15 @@ export default function ManageJobRoles() {
                     </div>
                 </div>
             )}
+            <ConfirmDeleteModal
+                open={!!deleteTarget}
+                title="Delete Job Role?"
+                itemLabel={deleteTarget?.name}
+                description="Any Job Openings and Hiring Forms attached to this role may become orphaned."
+                testId="delete-job-role"
+                onConfirm={() => handleDelete(deleteTarget.id)}
+                onClose={() => setDeleteTarget(null)}
+            />
         </div>
     );
 }

@@ -6,6 +6,7 @@ import {
     ArrowLeft, Plus, PencilSimple, Trash, X, Square,
     DownloadSimple, UploadSimple, ArrowsClockwise, FunnelSimple,
 } from '@phosphor-icons/react';
+import ConfirmDeleteModal from '../components/ConfirmDeleteModal';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 const TS = `${API}/api/team-score`;
@@ -352,6 +353,8 @@ function RoundsModal({ rounds, onClose, onChanged }) {
     const [name, setName] = useState('');
     const [total, setTotal] = useState('');
     const [editing, setEditing] = useState(null);
+    // iter146 — secure delete confirmation target (replaces window.confirm).
+    const [deleteTarget, setDeleteTarget] = useState(null); // round | null
 
     const submit = async () => {
         if (!name.trim()) return toast.error('Round name required');
@@ -369,10 +372,10 @@ function RoundsModal({ rounds, onClose, onChanged }) {
     };
 
     const remove = async (r) => {
-        if (!window.confirm(`Delete round "${r.round_name}"?`)) return;
         try {
             await axios.delete(`${TS}/rounds/${r.id}`, { withCredentials: true });
             toast.success('Deleted');
+            setDeleteTarget(null);
             onChanged();
         } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
     };
@@ -406,7 +409,7 @@ function RoundsModal({ rounds, onClose, onChanged }) {
                                         <span className="whitespace-nowrap">{r.round_name} ({r.total_score})</span>
                                         <button onClick={() => { setEditing(r); setName(r.round_name); setTotal(String(r.total_score)); }}
                                             data-testid={`ts-round-edit-${r.id}`} className="text-zinc-400 hover:text-white"><PencilSimple size={12} /></button>
-                                        <button onClick={() => remove(r)} data-testid={`ts-round-del-${r.id}`} className="text-zinc-400 hover:text-red-400"><Trash size={12} /></button>
+                                        <button onClick={() => setDeleteTarget(r)} data-testid={`ts-round-del-${r.id}`} className="text-zinc-400 hover:text-red-400"><Trash size={12} /></button>
                                     </div>
                                 ))}
                             </div>
@@ -414,6 +417,15 @@ function RoundsModal({ rounds, onClose, onChanged }) {
                     )}
                 </div>
             </div>
+            <ConfirmDeleteModal
+                open={!!deleteTarget}
+                title="Delete Team Round?"
+                itemLabel={deleteTarget?.round_name}
+                description="This will remove the round permanently. Any score data already recorded against this round will be detached."
+                testId="ts-delete-round"
+                onConfirm={() => remove(deleteTarget)}
+                onClose={() => setDeleteTarget(null)}
+            />
         </div>
     );
 }
