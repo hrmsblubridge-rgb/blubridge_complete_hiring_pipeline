@@ -53,6 +53,13 @@ def _is_enabled(flag: str) -> bool:
 
 _db = None  # injected by server.py via init_messaging(db) at startup
 
+# iter149 — Manual toggle: persistent DB-backed override that takes priority
+# over the legacy TEST_MODE env var. Cached at module level so `is_test_mode()`
+# stays synchronous and zero-cost (every WhatsApp/Email call invokes it).
+# `None` = not loaded yet → fall back to env var. Refreshed on startup and
+# after every successful toggle via the admin API.
+_test_mode_cache = None  # type: Optional[bool]
+
 
 def init_messaging(db):
     """Wire the Mongo handle so `can_send_message` can read tester credentials."""
@@ -60,10 +67,60 @@ def init_messaging(db):
     _db = db
 
 
-def is_test_mode() -> bool:
-    """Default TRUE — fail-safe. Only `TEST_MODE=false` (case-insensitive)
-    in /app/backend/.env disables test mode."""
+def _env_test_mode() -> bool:
+    """Legacy env-var read. Used only when the DB override is absent."""
     return os.environ.get("TEST_MODE", "true").strip().lower() == "true"
+
+
+async def load_test_mode_from_db():
+    """iter149 — Read the persisted manual toggle on startup. Falls back to
+    env var if the settings doc doesn't exist yet. Updates the module cache.
+    Returns the resolved value."""
+    global _test_mode_cache
+    if _db is None:
+        _test_mode_cache = _env_test_mode()
+        return _test_mode_cache
+    try:
+        doc = await _db.bb_app_settings.find_one({"key": "test_mode"})
+        if doc and isinstance(doc.get("value"), bool):
+            _test_mode_cache = doc["value"]
+        else:
+            _test_mode_cache = _env_test_mode()
+    except Exception as e:
+        _logger.warning(f"[test_mode] DB load failed, using env: {e}")
+        _test_mode_cache = _env_test_mode()
+    _logger.info(f"[test_mode] loaded from DB → {_test_mode_cache}")
+    return _test_mode_cache
+
+
+async def set_test_mode(enabled: bool, set_by: str = "admin") -> bool:
+    """iter149 — Persist a new value to bb_app_settings and update the cache."""
+    global _test_mode_cache
+    if _db is None:
+        raise RuntimeError("Messaging DB not initialized")
+    from datetime import datetime, timezone
+    await _db.bb_app_settings.update_one(
+        {"key": "test_mode"},
+        {"$set": {
+            "key": "test_mode",
+            "value": bool(enabled),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_by": set_by,
+        }},
+        upsert=True,
+    )
+    _test_mode_cache = bool(enabled)
+    _logger.info(f"[test_mode] manual override set → {_test_mode_cache} (by {set_by})")
+    return _test_mode_cache
+
+
+def is_test_mode() -> bool:
+    """Synchronous fast-path. DB-backed override (loaded on startup +
+    after each toggle) wins; falls back to TEST_MODE env var only if the
+    cache has never been initialised. iter149 — manual toggle support."""
+    if _test_mode_cache is None:
+        return _env_test_mode()
+    return _test_mode_cache
 
 
 def _norm_email(v: str) -> str:

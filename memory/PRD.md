@@ -1,3 +1,65 @@
+## iter149 — Manual TEST_MODE toggle (DB-backed, no restart) (Feb 8, 2026)
+
+### Spec
+Replace the env-var-only `TEST_MODE` flag with a manual UI toggle that
+persists to MongoDB and takes effect instantly (no backend restart):
+- **TEST MODE ON**  → only recipients on `bb_test_credentials` receive
+  outbound WhatsApp / Email. Everyone else is silently dropped by the
+  central gate.
+- **TEST MODE OFF** → the gate is open; every recipient is messaged.
+
+Hard safety guarantees (per the user's strict rules):
+1. Backend pytest suite **never touches the real transport** —
+   `AISENSY_API_URL` and `RESEND_API_KEY` are monkey-patched to sentinel
+   values during testing, so a regression that accidentally calls the
+   transport would surface immediately.
+2. Tests do **NOT** seed, mutate, or reset `bb_users` — the stored
+   admin password is left untouched. The new test file asserts this
+   explicitly (`test_no_user_credential_mutation`).
+
+### Implementation
+- `/app/backend/messaging.py`
+  - New module-level cache `_test_mode_cache`.
+  - `load_test_mode_from_db()` (async) — reads
+    `bb_app_settings.find_one({key: "test_mode"})` and primes the cache
+    on startup. Falls back to the env var if no doc exists.
+  - `set_test_mode(enabled, set_by)` (async) — upserts the value and
+    updates the cache atomically.
+  - `is_test_mode()` stays synchronous (zero cost per send) and reads
+    the cache.
+- `/app/backend/server.py`
+  - Startup calls `await load_test_mode_from_db()` after
+    `init_messaging(db)`.
+  - New `POST /api/messaging/test-mode` (admin-only) accepts
+    `{enabled: bool}` and persists it. The existing
+    `GET /api/messaging/status` returns the current cached value.
+- `/app/frontend/src/components/AppShell.js`
+  - Banner is now two-state:
+    * Amber TEST MODE ACTIVE banner with a "Turn OFF" pill button
+      (`data-testid="test-mode-toggle-off-btn"`).
+    * Rose LIVE MODE banner with a "Turn Test Mode ON" pill button
+      (`data-testid="test-mode-toggle-on-btn"`).
+  - Turning OFF is gated by a dedicated confirmation modal
+    (`data-testid="test-mode-off-confirm-modal"`) because it un-gates
+    live communications. Turning ON is one click (it's the safer
+    direction).
+
+### DB schema
+- `bb_app_settings` (new): single doc per key.
+  `{key: "test_mode", value: bool, updated_at: ISO8601, updated_by: str}`
+
+### Files modified
+- `/app/backend/messaging.py`
+- `/app/backend/server.py`
+- `/app/frontend/src/components/AppShell.js`
+
+### Files added
+- `/app/backend/tests/test_iter149_test_mode_toggle.py` (7 tests, all
+  passing).
+
+---
+
+
 ## iter148 — Update Applicants Scores: permanent (hard) delete for rounds (Feb 8, 2026)
 
 ### Problem

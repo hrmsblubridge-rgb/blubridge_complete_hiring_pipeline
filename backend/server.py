@@ -4196,7 +4196,7 @@ except Exception:
 
 # Wire centralized messaging gate (TEST_MODE → bb_test_credentials lookup)
 try:
-    from messaging import init_messaging, is_test_mode
+    from messaging import init_messaging, is_test_mode, load_test_mode_from_db, set_test_mode
     init_messaging(db)
 except Exception:
     import traceback
@@ -4226,6 +4226,23 @@ except Exception:
 async def messaging_status(user: str = Depends(get_current_user)):
     """Surface the current TEST_MODE status to the UI banner."""
     return {"test_mode": is_test_mode()}
+
+
+# iter149 — Manual TEST_MODE toggle (admin-only). Persists to bb_app_settings
+# and instantly takes effect; no backend restart required. Replaces the
+# env-var-only flow.
+class _TestModeToggleBody(BaseModel):
+    enabled: bool
+
+
+@app.post("/api/messaging/test-mode")
+async def messaging_test_mode_set(body: _TestModeToggleBody, user: str = Depends(get_current_user)):
+    """Persist the manual TEST_MODE override. When `enabled=true`, only
+    recipients on the Tester Credentials list will receive WhatsApp/Email.
+    When `enabled=false`, the gate is open and every recipient is messaged.
+    """
+    new_val = await set_test_mode(body.enabled, set_by=str(user or "admin"))
+    return {"test_mode": new_val}
 
 # CORS Configuration
 try:
@@ -4420,6 +4437,10 @@ async def startup_event():
     # so the centralized TEST_MODE gate has a non-empty allow list on first run.
     try:
         await _ensure_default_test_credentials()
+        # iter149 — Load the persisted manual TEST_MODE override (falls back to
+        # the env var if no override has been set yet). Must run AFTER the
+        # `init_messaging(db)` call above so `_db` is wired.
+        await load_test_mode_from_db()
         count = await db.bb_test_credentials.count_documents({})
         logger.info(f"[TEST_MODE] is_on={is_test_mode()} testers_in_db={count}")
     except Exception as e:

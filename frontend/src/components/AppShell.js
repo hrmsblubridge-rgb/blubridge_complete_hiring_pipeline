@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import { toast } from 'sonner';
 import { useAuth } from '../context/AuthContext';
 import {
     SquaresFour, ChartBar, FileText, CalendarCheck, PencilLine, Table,
     MagnifyingGlass, Briefcase, FolderOpen, GraduationCap, CalendarBlank,
     ShieldCheck, SignOut, List, X, UserCircle, WhatsappLogo, Question,
-    EnvelopeSimple, Flask, UserMinus, Users,
+    EnvelopeSimple, Flask, UserMinus, Users, Power,
 } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -38,6 +39,11 @@ export default function AppShell({ children }) {
     const navigate = useNavigate();
     const [open, setOpen] = useState(false);
     const [testMode, setTestMode] = useState(null);
+    // iter149 — guard against double-clicks while the toggle round-trips.
+    const [toggling, setToggling] = useState(false);
+    // iter149 — confirmation modal for turning TEST MODE OFF (which would
+    // otherwise un-gate live mail/WhatsApp to non-tester recipients).
+    const [confirmOff, setConfirmOff] = useState(false);
 
     useEffect(() => {
         let mounted = true;
@@ -46,6 +52,28 @@ export default function AppShell({ children }) {
             .catch(() => { if (mounted) setTestMode(null); });
         return () => { mounted = false; };
     }, []);
+
+    // iter149 — Persist the manual TEST_MODE toggle via the admin API.
+    const applyTestMode = async (next) => {
+        setToggling(true);
+        try {
+            const r = await axios.post(`${API}/api/messaging/test-mode`,
+                { enabled: next }, { withCredentials: true });
+            setTestMode(!!r.data?.test_mode);
+            toast.success(next ? 'Test Mode ON — messages limited to testers' : 'Test Mode OFF — messages will be sent to all recipients');
+        } catch (e) {
+            toast.error(e?.response?.data?.detail || 'Failed to update Test Mode');
+        } finally { setToggling(false); }
+    };
+    const onTestModeButton = () => {
+        if (testMode === null || toggling) return;
+        if (testMode) {
+            // Turning OFF is the risky direction — require explicit confirm.
+            setConfirmOff(true);
+        } else {
+            applyTestMode(true);
+        }
+    };
 
     const handleLogout = async () => {
         await logout();
@@ -145,15 +173,78 @@ export default function AppShell({ children }) {
             <div className="lg:pl-[260px] min-h-screen">
                 {testMode === true && (
                     <div
-                        className="sticky top-0 z-30 w-full bg-amber-100 border-b border-amber-300 text-amber-900 text-[12px] font-semibold py-1.5 px-4 flex items-center justify-center gap-2"
+                        className="sticky top-0 z-30 w-full bg-amber-100 border-b border-amber-300 text-amber-900 text-[12px] font-semibold py-1.5 px-4 flex items-center justify-center gap-3"
                         data-testid="test-mode-banner"
                     >
                         <Flask size={14} weight="fill" />
-                        TEST MODE ACTIVE — outbound WhatsApp / Email is delivered only to recipients on the Tester Credentials list.
+                        <span>TEST MODE ACTIVE — outbound WhatsApp / Email is delivered only to recipients on the Tester Credentials list.</span>
+                        <button
+                            onClick={onTestModeButton}
+                            disabled={toggling}
+                            data-testid="test-mode-toggle-off-btn"
+                            className="ml-2 inline-flex items-center gap-1 px-2.5 py-0.5 bg-amber-900 hover:bg-amber-800 text-white text-[11px] font-semibold rounded disabled:opacity-60"
+                            title="Turn Test Mode OFF"
+                        >
+                            <Power size={11} weight="bold" /> Turn OFF
+                        </button>
+                    </div>
+                )}
+                {testMode === false && (
+                    <div
+                        className="sticky top-0 z-30 w-full bg-rose-50 border-b border-rose-200 text-rose-900 text-[12px] font-semibold py-1.5 px-4 flex items-center justify-center gap-3"
+                        data-testid="test-mode-banner-off"
+                    >
+                        <span className="inline-flex items-center gap-1.5">
+                            <span className="inline-block w-2 h-2 rounded-full bg-rose-600" />
+                            LIVE MODE — messages are being sent to all recipients (not limited to testers).
+                        </span>
+                        <button
+                            onClick={onTestModeButton}
+                            disabled={toggling}
+                            data-testid="test-mode-toggle-on-btn"
+                            className="ml-2 inline-flex items-center gap-1 px-2.5 py-0.5 bg-rose-700 hover:bg-rose-800 text-white text-[11px] font-semibold rounded disabled:opacity-60"
+                            title="Turn Test Mode ON"
+                        >
+                            <Flask size={11} weight="bold" /> Turn Test Mode ON
+                        </button>
                     </div>
                 )}
                 {children}
             </div>
+            {/* iter149 — Confirmation before disabling TEST MODE. */}
+            {confirmOff && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+                    onClick={() => setConfirmOff(false)}
+                    data-testid="test-mode-off-confirm-modal">
+                    <div className="bg-white border border-rose-300 w-full max-w-md mx-4 shadow-2xl"
+                        onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-between p-5 pb-4 border-b border-rose-100">
+                            <h2 className="text-base font-semibold text-rose-700">Turn OFF Test Mode?</h2>
+                            <button onClick={() => setConfirmOff(false)} className="text-zinc-500 hover:text-rose-700" aria-label="Close">
+                                <X size={18} />
+                            </button>
+                        </div>
+                        <div className="p-5 space-y-2.5 text-sm text-zinc-700">
+                            <p>Disabling Test Mode immediately switches the system to <span className="font-semibold text-rose-700">LIVE</span> mode.</p>
+                            <p className="text-zinc-500">All outbound WhatsApp messages and emails will be sent to every recipient, including production candidates — not just testers.</p>
+                            <p className="text-rose-600 text-xs font-medium">Only proceed if you are intentionally rolling out real communications.</p>
+                        </div>
+                        <div className="flex justify-end gap-2 p-5 pt-3 border-t border-rose-100 bg-rose-50/40">
+                            <button onClick={() => setConfirmOff(false)}
+                                data-testid="test-mode-off-cancel-btn"
+                                className="px-4 py-2 bg-zinc-200 hover:bg-zinc-300 text-zinc-800 text-sm">
+                                Cancel
+                            </button>
+                            <button onClick={() => { setConfirmOff(false); applyTestMode(false); }}
+                                disabled={toggling}
+                                data-testid="test-mode-off-confirm-btn"
+                                className="px-4 py-2 bg-rose-700 hover:bg-rose-800 text-white text-sm font-medium disabled:opacity-60">
+                                Turn OFF
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
