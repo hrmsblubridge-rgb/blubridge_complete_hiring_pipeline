@@ -1,3 +1,36 @@
+## iter150 — Hiring Forms: collapsible sections grouped by Form Type (Feb 8, 2026)
+
+### Spec
+Replace the flat descending-by-creation list of hiring forms with one
+collapsible section header per Form Type. Clicking a header
+expands/collapses the cards that belong to that type. The set of headers
+is derived live from the `bb_form_types` DB collection — adding a type
+adds its header on the next refresh, deleting a type removes its header.
+
+### Safety
+- Orphan forms whose `form_type_id` no longer points to any existing
+  Form Type are bucketed into an "Uncategorized" amber section so they
+  never disappear silently after a type deletion.
+- All section state is purely client-side (collapsed by default). No DB
+  writes; no auth flows touched.
+
+### Implementation (`/app/frontend/src/pages/HiringForms.js`)
+- `useMemo formsByType` buckets forms by `form_type_id` against the
+  current `formTypes` list.
+- `expandedTypes` state map drives the open/close per header.
+- Extracted `renderFormCard(f)` helper so the same card markup is reused
+  inside every group.
+- Each header has `data-testid="forms-group-header-{id}"`, body has
+  `data-testid="forms-group-body-{id}"`, and a count badge has
+  `forms-group-count-{id}`. Uncategorized bucket uses the
+  `-uncategorized` suffix.
+
+### Files modified
+- `/app/frontend/src/pages/HiringForms.js`
+
+---
+
+
 ## iter149 — Manual TEST_MODE toggle (DB-backed, no restart) (Feb 8, 2026)
 
 ### Spec

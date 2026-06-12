@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { toast } from 'sonner';
-import { ArrowLeft, Plus, PencilSimple, Trash, X, Link as LinkIcon, Copy } from '@phosphor-icons/react';
+import { ArrowLeft, Plus, PencilSimple, Trash, X, Link as LinkIcon, Copy, CaretDown, CaretRight } from '@phosphor-icons/react';
 import LifecycleControl, { StatusDot } from '../components/LifecycleControl';
 import ConfirmDeleteModal from '../components/ConfirmDeleteModal';
 
@@ -33,6 +33,13 @@ export default function HiringForms() {
     const [deleteFormTarget, setDeleteFormTarget] = useState(null); // {id, name} | null
     // iter146b — Hiring Forms page form-types deletion modal.
     const [deleteTypeTarget, setDeleteTypeTarget] = useState(null); // {id, name} | null
+    // iter150 — Forms section now groups by form type. Each section header
+    // expands to reveal that type's cards. The set of headers is derived
+    // live from `formTypes`, so adding/removing a type from the database
+    // adds/removes its header automatically on the next refresh.
+    // Map<form_type_id, boolean> — `true` = expanded.
+    const [expandedTypes, setExpandedTypes] = useState({});
+    const toggleType = (typeId) => setExpandedTypes(p => ({ ...p, [typeId]: !p[typeId] }));
 
     const fetchAll = useCallback(async () => {
         setLoading(true);
@@ -104,6 +111,65 @@ export default function HiringForms() {
         try { await axios.delete(`${API}/api/bb/hiring-forms/${id}`, { withCredentials: true }); toast.success('Deleted'); setDeleteFormTarget(null); fetchAll(); } catch { toast.error('Failed'); }
     };
 
+    // iter150 — Bucket forms by their form_type_id so each section header
+    // can render only its own cards. Orphan forms (whose form_type_id no
+    // longer matches a current type — e.g. the type was just deleted) land
+    // in a dedicated "Uncategorized" bucket so they never disappear silently.
+    const formsByType = useMemo(() => {
+        const buckets = {};
+        const knownIds = new Set(formTypes.map(t => t.id));
+        for (const f of forms) {
+            const key = knownIds.has(f.form_type_id) ? f.form_type_id : '__uncategorized__';
+            (buckets[key] = buckets[key] || []).push(f);
+        }
+        return buckets;
+    }, [forms, formTypes]);
+    const uncategorizedCount = (formsByType['__uncategorized__'] || []).length;
+
+    // iter150 — Single card renderer reused inside each grouped section.
+    // Kept inline (closes over the page's handlers/state) instead of a
+    // separate component so the existing event wiring stays intact.
+    const renderFormCard = (f) => (
+        <div key={f.id} className="bg-zinc-900 border border-zinc-800 p-5" data-testid={`form-${f.id}`}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <StatusDot status={f.status} testId={`form-${f.id}-status-dot`} />
+                        <h3 className="font-medium break-words">{f.name}</h3>
+                    </div>
+                    <p className="text-xs text-zinc-500 mt-1 break-words">Type: {f.form_type_name} | Role: {f.job_role}</p>
+                    {f.conditions && Object.keys(f.conditions).length > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-2">
+                            {f.conditions.age_min != null && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">Age: {f.conditions.age_min}-{f.conditions.age_max}</span>}
+                            {f.conditions.grad_year_min != null && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">Grad: {f.conditions.grad_year_min}-{f.conditions.grad_year_max}</span>}
+                            {f.conditions.locations?.length > 0 && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">Locations: {f.conditions.locations.join(', ')}</span>}
+                            {f.conditions.location_change !== 'NA' && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">Loc Change: {f.conditions.location_change}</span>}
+                            {f.conditions.attend_in_person !== 'NA' && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">In Person: {f.conditions.attend_in_person}</span>}
+                            {f.conditions.college_limit !== 'Both' && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">College: {f.conditions.college_limit}</span>}
+                        </div>
+                    )}
+                </div>
+                <div className="flex gap-2 shrink-0 flex-wrap justify-end ml-auto">
+                    <LifecycleControl entity="hiring-forms" id={f.id} name={f.name} status={f.status} onChanged={fetchAll} testIdPrefix={`form-${f.id}-lifecycle`} />
+                    <a href={`/register/${f.slug || f.id}`} target="_blank" rel="noreferrer" data-testid={`link-${f.id}`} className="p-2 text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800" title="Open Registration Link"><LinkIcon size={16} /></a>
+                    <button
+                        onClick={() => {
+                            const url = `${window.location.origin}/register/${f.slug || f.id}`;
+                            navigator.clipboard.writeText(url)
+                                .then(() => toast.success(`Copied: ${url}`))
+                                .catch(() => toast.error('Clipboard write failed'));
+                        }}
+                        data-testid={`copy-link-${f.id}`}
+                        title="Copy Registration URL"
+                        className="p-2 text-zinc-500 hover:text-emerald-400 hover:bg-zinc-800"
+                    ><Copy size={16} /></button>
+                    <button onClick={() => openEditForm(f)} className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800"><PencilSimple size={16} /></button>
+                    <button onClick={() => setDeleteFormTarget({ id: f.id, name: f.name })} data-testid={`form-delete-${f.id}`} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800"><Trash size={16} /></button>
+                </div>
+            </div>
+        </div>
+    );
+
     return (
         <div className="min-h-screen bg-[#0a0a0a] text-white" data-testid="hiring-forms-page">
             <header className="border-b border-zinc-800 px-8 py-5 flex items-center gap-4">
@@ -130,56 +196,60 @@ export default function HiringForms() {
                         ))}
                     </div>}
                 </section>
-                {/* Forms */}
+                {/* Forms — iter150: grouped by Form Type with collapsible
+                    section headers. Headers are derived from `formTypes`
+                    so they stay in sync with the DB automatically. */}
                 <section>
                     <h2 className="text-sm font-medium text-zinc-500 uppercase tracking-widest mb-4">Forms</h2>
                     {forms.length === 0 ? <p className="text-zinc-600 text-sm" data-testid="no-forms">No forms yet.</p> :
+                    formTypes.length === 0 && uncategorizedCount === 0 ? <p className="text-zinc-600 text-sm">Add a Form Type to organise your forms.</p> :
                     <div className="space-y-3" data-testid="forms-list">
-                        {forms.map(f => (
-                            <div key={f.id} className="bg-zinc-900 border border-zinc-800 p-5" data-testid={`form-${f.id}`}>
-                                {/* iter132 — Self-adjusting row (see JobOpenings comment). */}
-                                <div className="flex flex-wrap items-start justify-between gap-3">
-                                    <div className="min-w-0 flex-1">
-                                        <div className="flex items-center gap-2 flex-wrap">
-                                            <StatusDot status={f.status} testId={`form-${f.id}-status-dot`} />
-                                            <h3 className="font-medium break-words">{f.name}</h3>
+                        {formTypes.map(t => {
+                            const list = formsByType[t.id] || [];
+                            const isOpen = !!expandedTypes[t.id];
+                            return (
+                                <div key={t.id} className="border border-zinc-800 bg-zinc-950" data-testid={`forms-group-${t.id}`}>
+                                    <button
+                                        type="button"
+                                        onClick={() => toggleType(t.id)}
+                                        data-testid={`forms-group-header-${t.id}`}
+                                        aria-expanded={isOpen}
+                                        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-zinc-900 focus:outline-none"
+                                    >
+                                        {isOpen ? <CaretDown size={14} className="text-zinc-400" /> : <CaretRight size={14} className="text-zinc-400" />}
+                                        <span className="text-sm font-semibold text-white">{t.name}</span>
+                                        <span className="text-xs text-zinc-500" data-testid={`forms-group-count-${t.id}`}>{list.length} form{list.length === 1 ? '' : 's'}</span>
+                                    </button>
+                                    {isOpen && (
+                                        <div className="border-t border-zinc-800 p-3 space-y-3" data-testid={`forms-group-body-${t.id}`}>
+                                            {list.length === 0
+                                                ? <p className="text-xs text-zinc-600 px-2 py-1">No forms of this type yet.</p>
+                                                : list.map(f => renderFormCard(f))}
                                         </div>
-                                        <p className="text-xs text-zinc-500 mt-1 break-words">Type: {f.form_type_name} | Role: {f.job_role}</p>
-                                        {f.conditions && Object.keys(f.conditions).length > 0 && (
-                                            <div className="flex flex-wrap gap-2 mt-2">
-                                                {f.conditions.age_min != null && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">Age: {f.conditions.age_min}-{f.conditions.age_max}</span>}
-                                                {f.conditions.grad_year_min != null && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">Grad: {f.conditions.grad_year_min}-{f.conditions.grad_year_max}</span>}
-                                                {f.conditions.locations?.length > 0 && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">Locations: {f.conditions.locations.join(', ')}</span>}
-                                                {f.conditions.location_change !== 'NA' && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">Loc Change: {f.conditions.location_change}</span>}
-                                                {f.conditions.attend_in_person !== 'NA' && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">In Person: {f.conditions.attend_in_person}</span>}
-                                                {f.conditions.college_limit !== 'Both' && <span className="text-xs bg-zinc-800 px-2 py-0.5 text-zinc-400 rounded whitespace-nowrap">College: {f.conditions.college_limit}</span>}
-                                            </div>
-                                        )}
-                                    </div>
-                                    <div className="flex gap-2 shrink-0 flex-wrap justify-end ml-auto">
-                                        <LifecycleControl entity="hiring-forms" id={f.id} name={f.name} status={f.status} onChanged={fetchAll} testIdPrefix={`form-${f.id}-lifecycle`} />
-                                        <a href={`/register/${f.slug || f.id}`} target="_blank" rel="noreferrer" data-testid={`link-${f.id}`} className="p-2 text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800" title="Open Registration Link"><LinkIcon size={16} /></a>
-                                        <button
-                                            onClick={() => {
-                                                // Iter47 — build the absolute URL at runtime from the
-                                                // current origin so the link always matches whatever
-                                                // domain/subdomain HR is on (xyz.com, abc.com, xyz.ai).
-                                                // DB stores only the slug; the URL is constructed here.
-                                                const url = `${window.location.origin}/register/${f.slug || f.id}`;
-                                                navigator.clipboard.writeText(url)
-                                                    .then(() => toast.success(`Copied: ${url}`))
-                                                    .catch(() => toast.error('Clipboard write failed'));
-                                            }}
-                                            data-testid={`copy-link-${f.id}`}
-                                            title="Copy Registration URL"
-                                            className="p-2 text-zinc-500 hover:text-emerald-400 hover:bg-zinc-800"
-                                        ><Copy size={16} /></button>
-                                        <button onClick={() => openEditForm(f)} className="p-2 text-zinc-500 hover:text-white hover:bg-zinc-800"><PencilSimple size={16} /></button>
-                                        <button onClick={() => setDeleteFormTarget({ id: f.id, name: f.name })} data-testid={`form-delete-${f.id}`} className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800"><Trash size={16} /></button>
-                                    </div>
+                                    )}
                                 </div>
+                            );
+                        })}
+                        {uncategorizedCount > 0 && (
+                            <div className="border border-amber-900/60 bg-zinc-950" data-testid="forms-group-uncategorized">
+                                <button
+                                    type="button"
+                                    onClick={() => toggleType('__uncategorized__')}
+                                    data-testid="forms-group-header-uncategorized"
+                                    aria-expanded={!!expandedTypes['__uncategorized__']}
+                                    className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-zinc-900 focus:outline-none"
+                                >
+                                    {expandedTypes['__uncategorized__'] ? <CaretDown size={14} className="text-amber-400" /> : <CaretRight size={14} className="text-amber-400" />}
+                                    <span className="text-sm font-semibold text-amber-300">Uncategorized</span>
+                                    <span className="text-xs text-amber-500/80">{uncategorizedCount} form{uncategorizedCount === 1 ? '' : 's'} — type was deleted</span>
+                                </button>
+                                {expandedTypes['__uncategorized__'] && (
+                                    <div className="border-t border-amber-900/40 p-3 space-y-3" data-testid="forms-group-body-uncategorized">
+                                        {(formsByType['__uncategorized__'] || []).map(f => renderFormCard(f))}
+                                    </div>
+                                )}
                             </div>
-                        ))}
+                        )}
                     </div>}
                 </section>
                 </>}
