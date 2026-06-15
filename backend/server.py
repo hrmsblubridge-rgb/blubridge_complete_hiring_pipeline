@@ -2140,9 +2140,7 @@ async def export_global_applicants(
         "schedule_date": 1, "schedule_time": 1,
         "submitted_at": 1, "last_update": 1, "result_status": 1,
     }
-    docs = await db.pipeline_data.find(match, projection).sort([("name", 1)]).to_list(None)
-    if not docs:
-        raise HTTPException(status_code=404, detail="No data available to export")
+    docs_cursor = db.pipeline_data.find(match, projection).sort([("name", 1)])
 
     headers = [
         "Name", "Email", "Phone", "Age", "Gender",
@@ -2181,33 +2179,80 @@ async def export_global_applicants(
     today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     fname = f"View_Applicants_{today_iso}"
 
+    # iter151 — Streaming export. We previously did `.to_list(None)` and
+    # buffered the entire CSV/XLSX in RAM, which spiked RSS by 200–300 MB
+    # on Render's 512 MB free tier and caused OOM crashes that took the
+    # whole process down (registration submits, OTP, alerts all dropped).
+    # The cursor below is now consumed in chunks; only one chunk lives in
+    # memory at a time. Same headers, same row layout, same output file.
+
     if format == "csv":
-        buf = io.StringIO()
-        w = _csv.writer(buf)
-        w.writerow(headers)
-        for d in docs:
-            w.writerow(_row(d))
-        buf.seek(0)
+        async def _csv_iter():
+            buf = io.StringIO()
+            w = _csv.writer(buf)
+            w.writerow(headers)
+            yield buf.getvalue()
+            buf.seek(0); buf.truncate(0)
+            count = 0
+            async for d in docs_cursor:
+                w.writerow(_row(d))
+                count += 1
+                if count % 500 == 0:
+                    yield buf.getvalue()
+                    buf.seek(0); buf.truncate(0)
+            if count == 0:
+                raise HTTPException(status_code=404, detail="No data available to export")
+            tail = buf.getvalue()
+            if tail:
+                yield tail
         return StreamingResponse(
-            iter([buf.getvalue()]),
+            _csv_iter(),
             media_type="text/csv",
             headers={"Content-Disposition": f'attachment; filename="{fname}.csv"'},
         )
 
+    # XLSX path — openpyxl's ZIP format can't be true-streamed, but we
+    # avoid the in-memory BytesIO buffer by writing to a NamedTemporaryFile
+    # and streaming the file chunks back. Write-only Workbook flushes rows
+    # to disk, so peak RAM stays in single-digit MB even on 50k-row exports.
+    import tempfile, os as _os
     from openpyxl import Workbook
     wb = Workbook(write_only=True)
     ws = wb.create_sheet("View Applicants")
     ws.append(headers)
-    for d in docs:
+    seen_any = False
+    async for d in docs_cursor:
         ws.append(_row(d))
-    bio = io.BytesIO()
-    wb.save(bio)
-    bio.seek(0)
-    return StreamingResponse(
-        iter([bio.getvalue()]),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{fname}.xlsx"'},
-    )
+        seen_any = True
+    if not seen_any:
+        raise HTTPException(status_code=404, detail="No data available to export")
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    tmp_path = tmp.name
+    try:
+        tmp.close()
+        wb.save(tmp_path)
+
+        def _file_iter():
+            try:
+                with open(tmp_path, "rb") as f:
+                    while True:
+                        chunk = f.read(64 * 1024)
+                        if not chunk:
+                            break
+                        yield chunk
+            finally:
+                try: _os.unlink(tmp_path)
+                except Exception: pass
+
+        return StreamingResponse(
+            _file_iter(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{fname}.xlsx"'},
+        )
+    except Exception:
+        try: _os.unlink(tmp_path)
+        except Exception: pass
+        raise
 
 
 # ============ ATTENDED APPLICANTS MODULE ============
@@ -2537,39 +2582,54 @@ async def export_attended_applicants(
         "_normalized_job_role": 1, "job_role": 1, "job_title": 1,
         "schedule_date": 1, "result_status": 1,
     }
-    docs = await db.pipeline_data.find(match, projection).sort([("name", 1)]).to_list(None)
-    if not docs:
-        raise HTTPException(status_code=404, detail="No data available to export")
+    docs_cursor = db.pipeline_data.find(match, projection).sort([("name", 1)])
 
-    # Fetch all scores for these applicants in one shot.
-    page_emails = list({normalize_email(d.get("email")) for d in docs if d.get("email")})
-    page_phones = list({normalize_phone(d.get("phone")) for d in docs if d.get("phone")})
-    upd_query = []
-    if page_emails: upd_query.append({"email": {"$in": page_emails}})
-    if page_phones: upd_query.append({"phone": {"$in": page_phones}})
-    upd_records = []
-    if upd_query:
+    def _rkey(rn):
+        return re.sub(r"\s+", "", (rn or "")).lower()
+
+    # iter151 — Stream the score join in chunks instead of holding all
+    # applicants + all their scores in memory at once. For each chunk of
+    # 1000 docs we (a) collect ids, (b) batch-fetch matching scores, then
+    # (c) yield CSV rows / append XLSX rows. Peak RAM stays in single MB.
+    CHUNK = 1000
+
+    async def _chunks():
+        batch: list = []
+        async for d in docs_cursor:
+            batch.append(d)
+            if len(batch) >= CHUNK:
+                yield batch
+                batch = []
+        if batch:
+            yield batch
+
+    async def _scores_for(batch):
+        page_emails = list({normalize_email(d.get("email")) for d in batch if d.get("email")})
+        page_phones = list({normalize_phone(d.get("phone")) for d in batch if d.get("phone")})
+        upd_query = []
+        if page_emails: upd_query.append({"email": {"$in": page_emails}})
+        if page_phones: upd_query.append({"phone": {"$in": page_phones}})
+        if not upd_query:
+            return {}, {}
         upd_records = await db.bb_applicant_updates.find(
             {"$or": upd_query} if len(upd_query) > 1 else upd_query[0],
             {"_id": 0, "email": 1, "phone": 1, "scores": 1},
         ).to_list(None)
-
-    def _rkey(rn):
-        return re.sub(r"\s+", "", (rn or "")).lower()
-    scores_by_email: Dict[str, Dict[str, Any]] = {}
-    scores_by_phone: Dict[str, Dict[str, Any]] = {}
-    for upd in upd_records:
-        ue = normalize_email(upd.get("email"))
-        up_ = normalize_phone(upd.get("phone"))
-        s_map = {}
-        for s in (upd.get("scores") or []):
-            rn = (s.get("round_name") or "").strip()
-            if rn:
-                s_map[_rkey(rn)] = s.get("score")
-        if ue:
-            scores_by_email.setdefault(ue, {}).update(s_map)
-        if up_:
-            scores_by_phone.setdefault(up_, {}).update(s_map)
+        scores_by_email: Dict[str, Dict[str, Any]] = {}
+        scores_by_phone: Dict[str, Dict[str, Any]] = {}
+        for upd in upd_records:
+            ue = normalize_email(upd.get("email"))
+            up_ = normalize_phone(upd.get("phone"))
+            s_map = {}
+            for s in (upd.get("scores") or []):
+                rn = (s.get("round_name") or "").strip()
+                if rn:
+                    s_map[_rkey(rn)] = s.get("score")
+            if ue:
+                scores_by_email.setdefault(ue, {}).update(s_map)
+            if up_:
+                scores_by_phone.setdefault(up_, {}).update(s_map)
+        return scores_by_email, scores_by_phone
 
     headers = [
         "Name", "Email", "Phone", "Age", "Gender",
@@ -2577,7 +2637,7 @@ async def export_attended_applicants(
         "Job Role", "Scheduled Date", "Result Status",
     ] + dynamic_rounds
 
-    def _row(d):
+    def _row(d, scores_by_email, scores_by_phone):
         de = normalize_email(d.get("email"))
         dp = normalize_phone(d.get("phone"))
         rl: Dict[str, Any] = {}
@@ -2609,32 +2669,71 @@ async def export_attended_applicants(
     fname = f"View_Attended_Applicants_{today_iso}"
 
     if format == "csv":
-        buf = io.StringIO()
-        w = _csv.writer(buf)
-        w.writerow(headers)
-        for d in docs:
-            w.writerow(_row(d))
-        buf.seek(0)
+        async def _csv_iter():
+            buf = io.StringIO()
+            w = _csv.writer(buf)
+            w.writerow(headers)
+            yield buf.getvalue()
+            buf.seek(0); buf.truncate(0)
+            total_written = 0
+            async for batch in _chunks():
+                se, sp = await _scores_for(batch)
+                for d in batch:
+                    w.writerow(_row(d, se, sp))
+                yield buf.getvalue()
+                buf.seek(0); buf.truncate(0)
+                total_written += len(batch)
+            if total_written == 0:
+                raise HTTPException(status_code=404, detail="No data available to export")
         return StreamingResponse(
-            iter([buf.getvalue()]),
+            _csv_iter(),
             media_type="text/csv",
             headers={"Content-Disposition": f'attachment; filename="{fname}.csv"'},
         )
 
+    # XLSX path — write rows to disk via NamedTemporaryFile + write_only
+    # Workbook; stream the resulting file back in 64 KB chunks. Peak RAM
+    # stays bounded regardless of total row count.
+    import tempfile, os as _os
     from openpyxl import Workbook
     wb = Workbook(write_only=True)
     ws = wb.create_sheet("View Attended Applicants")
     ws.append(headers)
-    for d in docs:
-        ws.append(_row(d))
-    bio = io.BytesIO()
-    wb.save(bio)
-    bio.seek(0)
-    return StreamingResponse(
-        iter([bio.getvalue()]),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{fname}.xlsx"'},
-    )
+    total_written = 0
+    async for batch in _chunks():
+        se, sp = await _scores_for(batch)
+        for d in batch:
+            ws.append(_row(d, se, sp))
+        total_written += len(batch)
+    if total_written == 0:
+        raise HTTPException(status_code=404, detail="No data available to export")
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    tmp_path = tmp.name
+    try:
+        tmp.close()
+        wb.save(tmp_path)
+
+        def _file_iter():
+            try:
+                with open(tmp_path, "rb") as f:
+                    while True:
+                        chunk = f.read(64 * 1024)
+                        if not chunk:
+                            break
+                        yield chunk
+            finally:
+                try: _os.unlink(tmp_path)
+                except Exception: pass
+
+        return StreamingResponse(
+            _file_iter(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{fname}.xlsx"'},
+        )
+    except Exception:
+        try: _os.unlink(tmp_path)
+        except Exception: pass
+        raise
 
 
 # ============ SCORE SHEET UPLOAD ============

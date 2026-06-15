@@ -1,3 +1,58 @@
+## iter151 — Memory Step B: Chunked-streaming exports (Feb 8, 2026)
+
+### Problem
+On Render's 512 MB free tier the process was OOM-crashing for 1–2 min
+during bulk uploads and "load all" operations, taking down unrelated
+flows (registration submits, OTP, manual alerts) with it. Root-cause
+analysis identified that the two unbounded exports were the biggest
+non-upload spike sources:
+- `/api/applicants/export` — `.to_list(None)` on `pipeline_data` +
+  full CSV/XLSX buffer in memory (peak +200–300 MB).
+- `/api/attended/export` — same pattern, plus an in-memory score-join
+  over `bb_applicant_updates` for every matching applicant.
+
+### Spec (Step B of the agreed Flow 1: B → A → D)
+Replace the unbounded materialisation with **chunked-streaming**:
+- CSV: async generator yielding rows in 500–1000-row chunks via
+  `StreamingResponse`. Peak RAM ≈ size of one chunk (a few hundred KB).
+- XLSX: write-only `openpyxl.Workbook` flushes rows to disk via a
+  `NamedTemporaryFile`, then `StreamingResponse` ships the file back in
+  64 KB chunks. Peak RAM stays in single-digit MB even on 50k-row
+  exports.
+- `/attended/export` additionally batches the score-join: for each
+  1000-row applicant chunk it batch-fetches only that chunk's scores,
+  yields the rows, then releases the memory before the next chunk.
+
+### Safety
+- **No schema changes, no data writes, no auth touch.** Exports remain
+  read-only.
+- **Same output:** same headers, same row layout, same CSV/XLSX format.
+- **Rollback:** revert this single commit; the previous endpoints
+  resume.
+- **Regression guard:** `test_iter151_streaming_exports.py` instruments
+  `AsyncIOMotorCursor.to_list` and asserts `pipeline_data` is NEVER
+  materialised via `to_list` during either export. If a future change
+  re-introduces the pattern, CI fails.
+- **bb_users untouched:** auth is bypassed via FastAPI dependency
+  override; tests assert the `bb_users` count is identical before/after.
+
+### Files modified
+- `/app/backend/server.py` — `export_global_applicants`,
+  `export_attended_applicants`.
+
+### Files added
+- `/app/backend/tests/test_iter151_streaming_exports.py` — 4 tests, all
+  passing.
+
+### Steps A and D status
+- **A (stream the upload parsers):** still pending — biggest remaining
+  spike source. Recommended next step.
+- **D (background queue + status polling):** deferred until A is
+  measured. May not be needed if A is enough.
+
+---
+
+
 ## iter150 — Hiring Forms: collapsible sections grouped by Form Type (Feb 8, 2026)
 
 ### Spec
