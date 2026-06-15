@@ -1,3 +1,79 @@
+## iter152 — Memory Step A: Streaming upload parsers (Feb 8, 2026)
+
+### Problem
+The three big upload endpoints (`/upload/naukri`, `/upload/pipeline`,
+`/upload/scoresheet`) all funneled through `parse_file(content,
+filename)` which called `pd.read_excel(io.BytesIO(content))`. Pandas
+inflates XLSX content 8–15× in RAM because of object dtype + index
+overhead. A 5 MB upload routinely created a 100–150 MB DataFrame, which
+combined with Render's 512 MB ceiling caused OOM kills that took down
+unrelated flows (registration submits, OTP, manual alerts).
+
+### Spec (Step A of the agreed Flow 1: B → A → D)
+Replace the pandas-based reader with a streaming row-by-row reader for
+the three upload endpoints. Keep all other logic (column mapping,
+deduplication, upsert behaviour, error reporting) byte-identical.
+
+### Implementation
+- New helper in `/app/backend/server.py`: `iter_rows_streaming(content,
+  filename, lowercase_headers=False)`.
+  * CSV path: stdlib `csv.reader` over `io.StringIO`.
+  * XLSX path: `openpyxl.load_workbook(read_only=True,
+    data_only=True)` + `ws.iter_rows(values_only=True)`. Closes
+    workbook after iteration to release ZipFile / XML parsers.
+  * Yields `(idx, row_dict)` to preserve the existing "Row {idx+2}"
+    error reporting style.
+  * Auto-skips fully-blank rows (common in Excel exports).
+- Refactored endpoints:
+  * `/upload/naukri` — drops `df.columns.str.strip()` /
+    `df.iterrows()`; uses the row generator. Adds `del content; gc.collect()`
+    before the background reprocess task.
+  * `/upload/pipeline` — ports the duplicate-column dedup logic
+    (previously `df.iloc[:, keep_indices]`) to operate on the header
+    list. Maintains a `clean_header → raw_header` map so row dicts (keyed
+    by raw header) are still resolvable.
+  * `/upload/scoresheet` — replaces `pd.isna(score_val)` with a tiny
+    inline `_is_nan` helper so pandas isn't needed in the request path.
+- The legacy `parse_file(...)` function is kept for the lower-volume
+  `/upload/college-rank` endpoint, but no longer called from the three
+  hot paths.
+
+### Safety
+- **No schema changes, no data writes outside the normal upsert paths.**
+- **Same column mapping, same upsert behaviour, same error messages
+  ("Row N: ...").**
+- **Same on-disk shape** for both `naukri_applies` and `pipeline_data` —
+  same `_extra_*` columns, same `created_at` / `updated_at`,
+  same identifier normalisation.
+- **Regression guard:** `test_iter152_streaming_uploads.py` monkey-
+  patches `pd.read_excel` and `pd.read_csv` to throw on touch, then
+  exercises each upload endpoint. If a future change re-introduces
+  pandas in the upload path, CI fails immediately.
+- **bb_users untouched:** auth bypassed via dependency override; tests
+  assert `bb_users` count is unchanged after every upload.
+
+### Files modified
+- `/app/backend/server.py` — added `iter_rows_streaming`, refactored
+  `upload_naukri`, `upload_pipeline`, `upload_score_sheet`.
+
+### Files added
+- `/app/backend/tests/test_iter152_streaming_uploads.py` — 5 tests, all
+  passing.
+
+### Cumulative test status
+- iter149 (test_mode toggle): 7 passed
+- iter151 (streaming exports): 4 passed
+- iter152 (streaming uploads): 5 passed
+- **Total: 16 / 16 passing.**
+
+### Step D status
+- Deferred. With A + B both shipped, the recommendation is to observe
+  Render memory for 2–3 days under real traffic before deciding whether
+  D (background queue + status polling) is still needed.
+
+---
+
+
 ## iter151 — Memory Step B: Chunked-streaming exports (Feb 8, 2026)
 
 ### Problem

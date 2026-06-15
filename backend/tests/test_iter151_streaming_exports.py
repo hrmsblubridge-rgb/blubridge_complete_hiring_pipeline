@@ -25,16 +25,16 @@ os.environ.setdefault("DB_NAME", os.environ.get("DB_NAME", "test_iter151"))
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-pytestmark = pytest.mark.asyncio(loop_scope="module")
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
-@pytest_asyncio.fixture(loop_scope="module", scope="module")
+@pytest_asyncio.fixture(loop_scope="session", scope="session")
 async def app_module():
     import server  # noqa: E402
     return server
 
 
-@pytest_asyncio.fixture(loop_scope="module")
+@pytest_asyncio.fixture(loop_scope="session")
 async def auth_override(app_module):
     from server import app, get_current_user
     app.dependency_overrides[get_current_user] = lambda: "pytest-user"
@@ -42,7 +42,7 @@ async def auth_override(app_module):
     app.dependency_overrides.pop(get_current_user, None)
 
 
-@pytest_asyncio.fixture(loop_scope="module")
+@pytest_asyncio.fixture(loop_scope="session")
 async def seeded_db(app_module):
     db = app_module.db
     await db.pipeline_data.delete_many({"_iter151_marker": True})
