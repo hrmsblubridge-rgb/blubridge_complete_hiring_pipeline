@@ -1,3 +1,92 @@
+## iter153 — Memory Step C: Chunked reprocess_matching + debounce + RSS probe (Feb 8, 2026)
+
+### Problem
+Even after iter151 (streaming exports) and iter152 (streaming uploads),
+a 310-row XLSX upload was still tripping Render's 512 MB OOM ceiling
+1–2 minutes after the upload succeeded. Root-cause: the *post-upload*
+fire-and-forget task `_bg_post_upload_pipeline` / `_bg_post_upload_naukri`
+called `reprocess_matching()`, which still loaded both `naukri_applies`
+and `pipeline_data` wholesale via `.to_list(None)` and built two large
+in-memory lookup dicts. With production-sized collections this peaked
+at 200–300 MB. Concurrent uploads compounded it further (no debounce).
+
+### Spec (Step C of Flow 1: B → A → C → D-deferred)
+1. Rewrite `reprocess_matching()` to use a **streaming naukri cursor**
+   processed in 500-row chunks. For each chunk, batch-fetch only the
+   matching pipeline rows by email/phone — no wholesale collection loads.
+2. Add a **debounce wrapper** `_trigger_post_upload_reprocess()` that
+   coalesces concurrent triggers: at most one in-flight reprocess +
+   one trailing run. Any number of additional triggers in between are
+   collapsed.
+3. Both `/upload/naukri` and `/upload/pipeline` route their post-upload
+   work through the wrapper.
+4. Add a **lightweight in-process memory probe** (logs RSS / peak RSS
+   once a minute) so headroom can be observed empirically.
+
+### Safety — exhaustive checklist
+- **Processing/pre-processing logic:** Unchanged. Same matching
+  semantics (`email` first, then `phone` fallback), same enrichment
+  rules, same `_has_naukri_match=True` tag, same `job_title`-fallback-
+  to-`job_role`, same `_skip_keys` set.
+- **Storage:** Unchanged. Same `registered_candidates` schema, same
+  indexes (recreated identically after the rebuild), same
+  `bulk_write` upsert payloads.
+- **Other modules:** Untouched. The chunking is purely internal to
+  `reprocess_matching`; every downstream consumer (View Applicants,
+  Score & Round, Update Scores, Analytics Summary, Manage Job Roles,
+  Hiring Forms, Team Score, Manual Alerts, OTP, Tester Credentials,
+  Test Mode gate, auth) reads identical data.
+- **Visibility window:** During the run, an in-flight HTTP request may
+  briefly see partially-reprocessed rows. This was already true under
+  the previous implementation; the chunked version preserves identical
+  semantics.
+- **Concurrency:** Debounce wrapper ensures at most 2 reprocess
+  invocations even under heavy upload bursts (proven by
+  `test_debounce_coalesces_concurrent_triggers`).
+- **bb_users:** Never read or written by the reprocess path; tests
+  assert the count is unchanged before/after.
+
+### Files modified
+- `/app/backend/server.py` — rewrote `reprocess_matching` (chunked
+  cursor + per-chunk batched pipeline fetch); added
+  `_trigger_post_upload_reprocess` (lock + pending flag); added
+  `_memory_probe_loop` (RSS log every 60s); updated upload endpoints
+  to route through the wrapper.
+
+### Files added
+- `/app/backend/tests/test_iter153_chunked_reprocess.py` — 4 tests, all
+  passing.
+
+### Cumulative test status
+- iter149 (test_mode toggle): 7 passed
+- iter151 (streaming exports): 4 passed
+- iter152 (streaming uploads): 5 passed
+- iter153 (chunked reprocess + debounce): 4 passed
+- **Total: 20 / 20 passing.**
+
+### Memory profile (theoretical)
+- Steady-state RSS: ~200–280 MB
+- Peak during upload + post-upload reprocess: ~280–320 MB (down from
+  ~450–550 MB previously)
+- Headroom under Render's 512 MB ceiling: ~190–230 MB
+
+### Observability
+After this deploy, every minute the Render logs will show a line like:
+```
+INFO:server:[MEM] rss_mb=187 peak_rss_mb=243
+```
+After 3–5 days of real traffic, the peak value tells you definitively
+whether Step D (process isolation) is needed or whether A+B+C was
+sufficient.
+
+### Step D status
+- Deferred. Recommend observing `peak_rss_mb` in Render logs for
+  3–5 days under real traffic before deciding. If peak stays below
+  ~400 MB, Step D is not needed.
+
+---
+
+
 ## iter152 — Memory Step A: Streaming upload parsers (Feb 8, 2026)
 
 ### Problem

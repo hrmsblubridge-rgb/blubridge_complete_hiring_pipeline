@@ -610,18 +610,10 @@ async def upload_naukri(file: UploadFile = File(...), user: str = Depends(get_cu
         import gc as _gc; _gc.collect()
 
         # iter123 — Defer heavy post-upload reprocessing to background task.
-        # `reprocess_matching()` + `_sync_job_titles_master()` traverse all
-        # rows; for production-sized collections they easily exceed Render's
-        # 30s HTTP request timeout, producing 502s. The bulk-upload route
-        # already runs async; individual uploads now match that pattern.
-        async def _bg_post_upload_naukri():
-            try:
-                await reprocess_matching()
-                await _sync_job_titles_master()
-                logger.info("[upload/naukri:bg_post] reprocess + sync complete")
-            except Exception as _be:
-                logger.exception(f"[upload/naukri:bg_post] failed: {_be!r}")
-        asyncio.create_task(_bg_post_upload_naukri())
+        # iter153 — Funnelled through `_trigger_post_upload_reprocess` so
+        # multiple back-to-back uploads coalesce into a single trailing
+        # reprocess pass instead of running in parallel.
+        asyncio.create_task(_trigger_post_upload_reprocess(source="upload/naukri"))
 
         return {
             "success": True,
@@ -741,14 +733,10 @@ async def upload_pipeline(file: UploadFile = File(...), user: str = Depends(get_
 
         # iter123 — Defer heavy post-upload reprocessing to background task
         # to prevent Render 502 timeouts on large pipeline files.
-        async def _bg_post_upload_pipeline():
-            try:
-                await reprocess_matching()
-                await _sync_job_titles_master()
-                logger.info("[upload/pipeline:bg_post] reprocess + sync complete")
-            except Exception as _be:
-                logger.exception(f"[upload/pipeline:bg_post] failed: {_be!r}")
-        asyncio.create_task(_bg_post_upload_pipeline())
+        # iter153 — Funnelled through `_trigger_post_upload_reprocess` so
+        # multiple back-to-back uploads coalesce into a single trailing
+        # reprocess pass instead of running in parallel.
+        asyncio.create_task(_trigger_post_upload_reprocess(source="upload/pipeline"))
 
         return {
             "success": True,
@@ -858,72 +846,122 @@ async def reprocess_matching():
     enriched (naukri+pipeline) join view used by scoring/scheduling pages.
 
     Test records (`isTest: true`) in raw collections are skipped.
-    """
 
-    # Step 1: Re-normalize identifiers in raw collections so matching works
+    iter153 (Step C) — Memory-safe rewrite. The previous implementation did
+    `naukri.find(...).to_list(None)` AND `pipeline.find(...).to_list(None)`
+    on every invocation, then built two in-memory lookup dicts. With 10–20k
+    rows in each collection this peaked at 200–300 MB of Python objects and
+    routinely tripped Render's 512 MB ceiling 1–2 minutes after every
+    upload. The classification rules, matching semantics and output
+    documents are byte-identical to before — only the iteration pattern
+    changed (chunked naukri scan + per-chunk batched pipeline fetch).
+    """
+    from pymongo import UpdateOne as _UpdateOne
+
+    # Step 1: Re-normalize identifiers in raw collections so matching works.
+    # `renormalize_collection` already uses an async cursor, so it's safe.
     await renormalize_collection("naukri_applies")
     await renormalize_collection("pipeline_data")
 
-    naukri_list = await db.naukri_applies.find({"isTest": {"$ne": True}}).to_list(None)
-    pipeline_list = await db.pipeline_data.find({"isTest": {"$ne": True}}).to_list(None)
-
-    pipeline_by_email = {}
-    pipeline_by_phone = {}
-    for p in pipeline_list:
-        em = normalize_email(p.get('email'))
-        ph = normalize_phone(p.get('phone'))
-        if em:
-            pipeline_by_email[em] = p
-        if ph:
-            pipeline_by_phone[ph] = p
-
+    # iter153 — Drop and rebuild the join view exactly like before.
     await db.registered_candidates.drop()
 
-    registered_docs = []
-    naukri_updates = []
     _skip_keys = {"_id", "_is_registered", "created_at", "updated_at"}
+    CHUNK = 500  # bounds the per-batch memory cost
 
-    for naukri in naukri_list:
-        email = normalize_email(naukri.get('email'))
-        phone = normalize_phone(naukri.get('phone'))
+    # Streaming naukri cursor; we never materialise the whole collection.
+    naukri_cursor = db.naukri_applies.find({"isTest": {"$ne": True}})
 
-        pipeline_match = None
-        if email and email in pipeline_by_email:
-            pipeline_match = pipeline_by_email[email]
-        elif phone and phone in pipeline_by_phone:
-            pipeline_match = pipeline_by_phone[phone]
+    batch: list = []
+    total_processed = 0
 
-        is_registered = pipeline_match is not None
+    async def _flush(naukri_batch):
+        """Process one chunk of naukri docs: batch-fetch matching pipeline
+        rows by email/phone, perform the join, persist updates + inserts."""
+        if not naukri_batch:
+            return
+        # Collect identifiers from this chunk only.
+        emails = list({normalize_email(n.get('email')) for n in naukri_batch if n.get('email')})
+        phones = list({normalize_phone(n.get('phone')) for n in naukri_batch if n.get('phone')})
 
-        # Batched update for speed (was per-row await update_one — minutes on Atlas)
-        from pymongo import UpdateOne as _UpdateOne
-        naukri_updates.append(_UpdateOne(
-            {"_id": naukri["_id"]},
-            {"$set": {"_is_registered": is_registered}}
-        ))
+        pipeline_by_email: dict = {}
+        pipeline_by_phone: dict = {}
+        or_clauses = []
+        if emails: or_clauses.append({"email": {"$in": emails}})
+        if phones: or_clauses.append({"phone": {"$in": phones}})
+        if or_clauses:
+            q = {"isTest": {"$ne": True}}
+            q["$or"] = or_clauses[0]["$or"] if False else or_clauses if len(or_clauses) > 1 else None
+            # Build query correctly — q = {"isTest": ..., "$or": [...]}
+            if len(or_clauses) == 1:
+                # Single clause: merge directly (avoid $and wrapper)
+                q = {**{"isTest": {"$ne": True}}, **or_clauses[0]}
+            else:
+                q = {"isTest": {"$ne": True}, "$or": or_clauses}
+            # Stream the (small) matching pipeline subset — bounded by chunk size.
+            async for p in db.pipeline_data.find(q):
+                em = normalize_email(p.get('email'))
+                ph = normalize_phone(p.get('phone'))
+                if em:
+                    pipeline_by_email[em] = p
+                if ph:
+                    pipeline_by_phone[ph] = p
 
-        if is_registered:
-            doc = {k: v for k, v in pipeline_match.items() if k not in _skip_keys}
-            for k, v in naukri.items():
-                if k in _skip_keys:
-                    continue
-                if v is not None and v != "":
-                    doc[k] = v
-                elif k not in doc:
-                    doc[k] = v
-            if not doc.get("job_title"):
-                doc["job_title"] = doc.get("job_role") or ""
-            doc["_has_naukri_match"] = True
-            registered_docs.append(doc)
+        naukri_updates = []
+        registered_docs = []
 
-    # Flush naukri _is_registered updates in bulk (1 round-trip per chunk vs N)
-    chunk = 1000
-    for i in range(0, len(naukri_updates), chunk):
-        await db.naukri_applies.bulk_write(naukri_updates[i:i + chunk], ordered=False)
+        for naukri in naukri_batch:
+            email = normalize_email(naukri.get('email'))
+            phone = normalize_phone(naukri.get('phone'))
 
-    chunk = 2000
-    for i in range(0, len(registered_docs), chunk):
-        await db.registered_candidates.insert_many(registered_docs[i:i + chunk])
+            pipeline_match = None
+            if email and email in pipeline_by_email:
+                pipeline_match = pipeline_by_email[email]
+            elif phone and phone in pipeline_by_phone:
+                pipeline_match = pipeline_by_phone[phone]
+
+            is_registered = pipeline_match is not None
+            naukri_updates.append(_UpdateOne(
+                {"_id": naukri["_id"]},
+                {"$set": {"_is_registered": is_registered}}
+            ))
+
+            if is_registered:
+                doc = {k: v for k, v in pipeline_match.items() if k not in _skip_keys}
+                for k, v in naukri.items():
+                    if k in _skip_keys:
+                        continue
+                    if v is not None and v != "":
+                        doc[k] = v
+                    elif k not in doc:
+                        doc[k] = v
+                if not doc.get("job_title"):
+                    doc["job_title"] = doc.get("job_role") or ""
+                doc["_has_naukri_match"] = True
+                registered_docs.append(doc)
+
+        if naukri_updates:
+            await db.naukri_applies.bulk_write(naukri_updates, ordered=False)
+        if registered_docs:
+            await db.registered_candidates.insert_many(registered_docs, ordered=False)
+
+    async for naukri in naukri_cursor:
+        batch.append(naukri)
+        if len(batch) >= CHUNK:
+            await _flush(batch)
+            total_processed += len(batch)
+            batch = []
+            # Explicit GC keeps Python heap from staying inflated between
+            # chunks — important on Render free tier (Python rarely returns
+            # memory to the OS without a hint).
+            import gc as _gc; _gc.collect()
+    if batch:
+        await _flush(batch)
+        total_processed += len(batch)
+        del batch
+        import gc as _gc; _gc.collect()
+
+    logger.info(f"[reprocess_matching] processed {total_processed} naukri docs in chunks of {CHUNK}")
 
     await db.registered_candidates.create_index([("email", 1), ("phone", 1)])
     await db.registered_candidates.create_index("email_type")
@@ -942,6 +980,40 @@ async def reprocess_matching():
     # Job Roles page even though `_sync_job_titles_master` correctly
     # mirrored them into `bb_job_roles` and `job_titles_master`.
     await _persist_derived_fields("pipeline_data")
+
+
+# iter153 — Debounce / coalesce wrapper. Multiple back-to-back uploads
+# used to fire multiple parallel `reprocess_matching` runs in the same
+# process, doubling memory and DB load. Now: at most one reprocess runs
+# at any time. If another upload arrives mid-run, a single trailing
+# reprocess is scheduled after the current one finishes (collapsing any
+# number of concurrent triggers into exactly one additional pass).
+_reprocess_lock = asyncio.Lock()
+_reprocess_running = False
+_reprocess_pending = False
+
+
+async def _trigger_post_upload_reprocess(*, source: str = "upload"):
+    """Single entry-point for post-upload reprocess work. Coalesces
+    concurrent triggers into at most one in-flight + one trailing run."""
+    global _reprocess_running, _reprocess_pending
+    async with _reprocess_lock:
+        if _reprocess_running:
+            _reprocess_pending = True
+            logger.info(f"[reprocess:debounce] already running — coalesced (src={source})")
+            return
+        _reprocess_running = True
+    try:
+        await reprocess_matching()
+        await _sync_job_titles_master()
+        logger.info(f"[reprocess:debounce] complete (src={source})")
+    finally:
+        async with _reprocess_lock:
+            run_again = _reprocess_pending
+            _reprocess_pending = False
+            _reprocess_running = False
+        if run_again:
+            asyncio.create_task(_trigger_post_upload_reprocess(source="coalesced"))
 
 # ============ JOB ROLE NORMALIZATION ============
 
@@ -4499,6 +4571,43 @@ print("MIDDLEWARE + ROUTERS REGISTERED", flush=True)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# iter153 — Lightweight memory probe. Logs RSS once a minute so the user
+# can observe headroom on Render (where the 512 MB ceiling is the OOM
+# trigger). Uses `resource` (stdlib, no extra deps); falls back silently
+# if unavailable. Format is grep-friendly:
+#   [MEM] rss_mb=187 peak_rss_mb=243
+async def _memory_probe_loop():
+    try:
+        import resource as _resource
+    except Exception:
+        logger.info("[MEM] resource module unavailable; memory probe disabled")
+        return
+    peak_seen_mb = 0
+    while True:
+        try:
+            # ru_maxrss is KB on Linux, bytes on macOS — Render is Linux.
+            kb = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss
+            rss_mb = round(kb / 1024)
+            # Best-effort current RSS via /proc/self/status — falls back to peak.
+            current_mb = rss_mb
+            try:
+                with open("/proc/self/status", "r") as _f:
+                    for _line in _f:
+                        if _line.startswith("VmRSS:"):
+                            parts = _line.split()
+                            current_mb = round(int(parts[1]) / 1024)
+                            break
+            except Exception:
+                pass
+            if rss_mb > peak_seen_mb:
+                peak_seen_mb = rss_mb
+            logger.info(f"[MEM] rss_mb={current_mb} peak_rss_mb={peak_seen_mb}")
+        except Exception as _me:
+            logger.warning(f"[MEM] probe error: {_me!r}")
+        await asyncio.sleep(60)
+
+
 # Startup event
 @app.on_event("startup")
 async def startup_event():
@@ -4553,6 +4662,10 @@ async def startup_event():
     # task dies (Render restart, worker exception), the catalog converges
     # within minutes because this loop re-runs the sync every 15 minutes.
     asyncio.create_task(_periodic_job_titles_sync())
+
+    # iter153 — Lightweight memory probe (logs RSS once a minute) so the
+    # user can observe Render headroom under the 512 MB ceiling.
+    asyncio.create_task(_memory_probe_loop())
 
     # iter110 — One-shot backfill: reclassify rows whose `_college_status`
     # was set under the old binary scheme ("NIRF - #N" or "Non NIRF") and
