@@ -1,0 +1,78 @@
+{
+  "summary": "Iteration 28 backend regression covering May-2026 classification rule change (Registered=pipeline_data, Unregistered=naukri without match), new /api/data/classification endpoint, refactored /api/data/registered and /api/data/unregistered, /api/summary extended fields (total_registered_hr / total_unregistered_naukri), isTest safety (test rows excluded from counts), and OTP worker camelCase aliases (otpGeneratedAt / otpExpiry). 14/14 tests pass (100%). All numbers match brief exactly: total_registered=100798, total_unregistered=15555, total_naukri=35469, matched=19914. iteration_27 endpoints still regression-green.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_tests": {
+    "auth": [
+      "POST /api/login 'Admin User'/'Admin User' -> 200 + access_token cookie; GET /api/auth/check -> 200"
+    ],
+    "classification_new": [
+      "GET /api/data/classification -> 200 with keys {total_registered, total_unregistered, total_naukri, matched, note}",
+      "total_registered=100798 == pipeline_data.count({isTest!=true})",
+      "total_unregistered=15555 == naukri_applies.count({_is_registered!=true, isTest!=true})",
+      "total_naukri=35469, matched=19914"
+    ],
+    "drill_downs": [
+      "GET /api/data/registered?page=1&limit=10 -> 200, total=100798, columns=[name,email,phone,job_title,date_of_application,gender,date_of_birth]",
+      "GET /api/data/unregistered?page=1&limit=10 -> 200, total=15555, same columns"
+    ],
+    "isTest_safety": [
+      "Insert pipeline_data isTest:true row -> /api/data/registered total unchanged; /api/data/classification total_registered unchanged",
+      "Insert naukri_applies isTest:true _is_registered:false row -> total_unregistered unchanged on both /api/data/classification and /api/data/unregistered",
+      "All TEST_iter28 seed rows deleted post-test (verified 0 leftover in pipeline_data/naukri_applies/bb_registrations)"
+    ],
+    "summary_extended": [
+      "GET /api/summary -> 200 with new top-level fields total_registered_hr and total_unregistered_naukri matching raw collection counts; legacy total_registered (JOIN view count) still present"
+    ],
+    "otp_worker_camelcase": [
+      "Insert test bb_registrations (isTest:true, is_shortlisted:true, schedule_date=today, schedule_time = now+2h within 3h-1min window); within ~30-60s worker sets otp, otp_sent=true, otp_sent_at (snake_case) AND otpGeneratedAt + otpExpiry (camelCase)",
+      "otpExpiry ISO equals interview datetime ISO exactly (replace(second=0,microsecond=0)); otpGeneratedAt == otp_sent_at"
+    ],
+    "regression_iter27": [
+      "GET /api/applicants?page=1&limit=50 -> 200, data non-empty",
+      "GET /api/applicants?collegeStatus=NIRF -> only NIRF rows (no leak)",
+      "GET /api/applicants pagination page=1 vs page=2 -> rows distinct",
+      "GET /api/applicants?jobRole=<encoded top role> -> non-empty rows",
+      "GET /api/job-roles -> sorted desc by count",
+      "GET /api/attended?page=1&limit=50 -> 200"
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration28_classification_otp.py",
+    "/app/test_reports/pytest/pytest_results_iteration28.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Classification rule correctly implemented via VIEW-based (no physical duplication) approach: /api/data/classification reads directly from pipeline_data + naukri_applies, avoiding Atlas quota impact.",
+    "isTest exclusion consistently applied: {'isTest': {'$ne': True}} filter in /api/data/classification, /api/data/registered, /api/data/unregistered, and /api/summary's new counters — defensive and backward-compatible (old docs without isTest field still included).",
+    "/api/summary preserves legacy total_registered (JOIN-based 19914) while adding total_registered_hr (100798) and total_unregistered_naukri (15555) — no breaking change for existing clients.",
+    "OTP worker correctly writes BOTH snake_case (otp_sent_at) and camelCase (otpGeneratedAt, otpExpiry) fields atomically in a single update; otpExpiry is ISO of exact interview datetime (interview_dt.isoformat()), which aligns with the 3h-1min send window and the 8h fallback expiry worker.",
+    "/api/data/registered maps pipeline_data -> unified column shape (job_title<-job_role, date_of_application<-last_update, date_of_birth<-degree). The last mapping is a known compromise since pipeline_data has no DOB column; acceptable per task brief but worth documenting in API response note for consumers.",
+    "bg_workers.py side-effect: OTP worker also writes otpGeneratedAt/otpExpiry to registered_candidates for matching email/phone — useful for cross-collection consistency but may touch multiple docs if duplicates exist."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration28_classification_otp.py"
+  ],
+  "success_rate": {
+    "backend": "100% (14/14 tests passed)",
+    "frontend": "Not tested (backend only per request)"
+  },
+  "test_credentials": {
+    "username": "Admin User",
+    "password": "Admin User"
+  },
+  "seed_data_creation": "Transient test seed data inserted and deleted within each test: pipeline_data TEST_iter28_pipeline_* (isTest:true), naukri_applies TEST_iter28_naukri_* (isTest:true, _is_registered:false), bb_registrations TEST_iter28_otp (isTest:true). Verified 0 leftover after suite completion. No modifications to real production data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Reusable regression suite at /app/backend/tests/test_iteration28_classification_otp.py covers: login, /api/data/classification, /api/data/registered, /api/data/unregistered, isTest exclusion for both collections, /api/summary new fields, OTP worker camelCase aliases, and iter27 regression. All test inserts use isTest:true prefix 'TEST_iter28_' and are deleted in finally blocks — safe to re-run. OTP worker test waits up to 75s for the 30s-interval worker. If classification rule changes again, update TestClassification expected counts and TestSummaryExtended's new-field assertions.",
+  "mocked_apis": {
+    "WhatsApp AiSensy": "Returns 401 (gracefully handled) - inherited, not tested in iter28"
+  }
+}

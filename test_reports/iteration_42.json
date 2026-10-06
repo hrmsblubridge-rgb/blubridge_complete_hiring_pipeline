@@ -1,0 +1,56 @@
+{
+  "summary": "Iteration 42 backend tests for the four logic updates: (1) DELAYED SCHEDULING LINK 5-min/schedule_initiated-aware, (2) RESCHEDULE RESETS, (3) OTP-VERIFIED LOCK + 4-MONTH RE-REGISTRATION BLOCK, (4) POST-OTP CANDIDATE DETAILS UI payload. RESULT: 8/10 PASS, 2 FAIL — both failures are caused by the SAME critical bug: duplicate `$or` key in the `recent_attended` Mongo filter in bb_modules.py:1952-1959. Python collapses duplicate dict keys to the last one, so the email/phone match is silently dropped and the query becomes 'any otp_verified=True doc with otp_sent_at OR last_update >= 120d ago' — blocking EVERY new public registration system-wide (4 real production-style records currently match). Tests for delayed worker (5-min delay + schedule_initiated skip), schedule-click endpoint, OTP-verified schedule lock, reschedule reset, verify-otp candidate payload, and verify-otp expired path all pass cleanly. The schedule-click test had to bypass /pub/register and seed bb_registrations directly because the same `$or` bug blocks fresh registrations.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/pub/register (bb_modules.py:1952-1959)",
+        "issue": "DUPLICATE `$or` KEY IN DICT LITERAL — Python silently keeps only the LAST `$or`, so the email/phone match is dropped from the `recent_attended` filter. Resulting query: `{otp_verified:True, $or:[{otp_sent_at:{$gte:120d}},{last_update:{$gte:120d}}]}` — matches ANY otp-verified candidate within 120 days, regardless of whether the email/phone matches the new registrant. Effect: 4 production records currently match this query, so EVERY fresh /pub/register call returns 409 'You have already attended an interview…'. Reproduced by 2 failing tests (test_register_fresh_email_no_immediate_link_sent, test_register_succeeds_after_120_days). Fix: combine into a single `$and` clause, e.g. `{'$and':[{'$or':[{'email':email_norm},{'phone':phone_norm}]},{'otp_verified':True},{'$or':[{'otp_sent_at':{'$gte':four_months_ago}},{'last_update':{'$gte':four_months_ago}}]}]}`.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/pub/schedule/{token} (bb_modules.py:2334-2343)",
+        "issue": "After the reschedule `$unset` block clears `interview_mail_sent` etc., the post-confirmation update unconditionally re-stamps `interview_mail_sent: True` whenever `_is_new_record` is true. Spec says only `schedule_message_sent` should be the canonical 'latest schedule communicated' flag — re-stamping `interview_mail_sent` here partially undoes the reset and may leak stale semantics back. Recommend dropping `interview_mail_sent` from this re-stamp (keep `schedule_message_sent` only)."
+      },
+      {
+        "endpoint": "GET /api/bb/verify-otp (bb_modules.py:1815-1823)",
+        "issue": "Endpoint requires admin auth via `_require_auth`. This is fine for the HR-side OTP-entry kiosk but if the candidate-facing `/verify-otp` page on the public domain ever needs to call it directly without an admin cookie, it will 401. Confirm the frontend `/verify-otp` page is gated behind admin login (matches expected design) — if so, no action needed."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration42_delayed_schedule_otp_lock.py",
+    "/app/test_reports/pytest/iter42.xml"
+  ],
+  "action_items": [
+    "PRIORITY 1 — Fix bb_modules.py:1952-1959 duplicate `$or`. Replace with `$and` wrapping both `$or` clauses (email/phone + date), or merge into one. After fix, re-run test_iteration42 — the 2 currently-failing tests should pass and the third (test_register_blocked_by_recent_attended_record) will then validate the BLOCK for the right reason (currently passes coincidentally because the buggy query blocks everything).",
+    "PRIORITY 2 — Decide on `interview_mail_sent` re-stamp at bb_modules.py:2336-2338. If `schedule_message_sent` is the new canonical flag, drop the `interview_mail_sent: True` line.",
+    "PRIORITY 3 (verify-only) — Confirm /verify-otp candidate page is intended to be HR-admin-gated (since /api/bb/verify-otp uses _require_auth). If candidate-facing without auth was intended, mount this on pub_router instead."
+  ],
+  "critical_code_review_comments": [
+    "BUG (CRITICAL): bb_modules.py:1952-1959 has TWO `$or` keys in the same dict literal. Python keeps only the LAST `$or`, silently dropping the email/phone match from the recent_attended query. Effect: ALL new public registrations are blocked by 409 once any single otp_verified=True doc exists within 120d. Confirmed live: 4 docs currently match the buggy query in production-mode DB.",
+    "OBSERVATION: bb_modules.py:2334-2343 re-stamps `interview_mail_sent: True` after the reschedule `$unset`, which conflicts with the spec ('only the new `schedule_message_sent` flag is set after notify_schedule_confirmation'). Consider removing.",
+    "VERIFIED: bg_workers.py:_worker_schedule_link_sender (lines 160-212) correctly filters on `schedule_initiated:{$ne:True}` AND `registered_at <= 5min ago` AND `>= max(24h ago, MESSAGING_CUTOFF_TS)`. Behaviour confirmed by test_worker_sends_after_5min_and_skips_if_initiated.",
+    "VERIFIED: pub /schedule-click/{token} idempotently sets `schedule_initiated:true` + ISO timestamp; 404 path correct; works for any registered token.",
+    "VERIFIED: /pub/schedule/{token} returns 409 'already attended' when otp_verified is True/'1' (lines 2231-2238) — tested with both seeds.",
+    "VERIFIED: /bb/verify-otp returns the new {success, message, candidate:{name,phone,email,job_role,college_type,source}} payload pulled from pipeline_data with bb_registrations fallback. pipeline_data row gets status:'Attended' + otp_verified:'1' + last_update bumped (lines 1839-1843).",
+    "VERIFIED: /bb/verify-otp on otp_expired returns {success:false, message: 'OTP has expired…'} with no candidate object (lines 1828-1830)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration42_delayed_schedule_otp_lock.py (NEW)"
+  ],
+  "success_rate": {"backend": "80% (8/10 — 2 fails both root-caused to one bug)", "frontend": "not tested (testing_type=backend only)"},
+  "test_credentials": "Admin User / Admin User (cookie session)",
+  "seed_data_creation": "Each test seeds its own bb_registrations / pipeline_data rows tagged isTest:true and tears them down in finally blocks. Final cleanup verified: 0 TEST_iter42_* docs remain.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Re-run /app/backend/tests/test_iteration42_delayed_schedule_otp_lock.py after main agent fixes the duplicate `$or` bug at bb_modules.py:1952-1959. Expected outcome: 10/10 pass. test_register_blocked_by_recent_attended_record currently passes for the WRONG reason (buggy query blocks everything) — after the fix it will validate the actual same-email/phone+120d window logic. Worker test (test_worker_sends_after_5min_and_skips_if_initiated) takes ~75-90s because it waits for the 60-s worker loop; do not lower the timeout below 110s.",
+  "rca_of_the_issue": {
+    "symptom": "POST /api/pub/register returns 409 'You have already attended…' for ANY new email/phone, even brand-new ones never seen before.",
+    "root_cause": "bb_modules.py register_applicant builds the duplicate-attended check as a Python dict literal with TWO `$or` keys (lines 1953 + 1955-1958). Python dict literals silently overwrite earlier duplicate keys, so the first `$or` (email-or-phone match) is dropped before the dict is ever sent to MongoDB. The pymongo driver receives `{'otp_verified':True, '$or':[{'otp_sent_at':{...}},{'last_update':{...}}]}`. This matches every otp_verified=True record within 120 days regardless of who is registering.",
+    "evidence": "Live DB check: `count_documents` for the buggy query = 4, for the correct (with email/phone filter) query = 0 for our test data. Two pytest cases (fresh_email_no_link_sent, succeeds_after_120_days) fail at register with 409. Symptom disappears as soon as the dict is rewritten with `$and`.",
+    "mitigation": "Replace lines 1952-1959 with: `recent_attended = await _db.bb_registrations.find_one({'$and': [{'$or':[{'email':email_norm},{'phone':phone_norm}]}, {'otp_verified':True}, {'$or':[{'otp_sent_at':{'$gte':four_months_ago}},{'last_update':{'$gte':four_months_ago}}]}]})`."
+  }
+}

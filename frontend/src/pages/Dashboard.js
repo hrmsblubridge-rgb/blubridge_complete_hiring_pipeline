@@ -1,0 +1,277 @@
+import { useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import axios from 'axios';
+import { toast } from 'sonner';
+import { Upload, ChartBar, Users, SignOut, CheckCircle, SpinnerGap, FileText, UserCheck, FolderPlus, GraduationCap, Tag, ArrowLeft, MagnifyingGlass } from '@phosphor-icons/react';
+import BulkUploadModal from '../components/BulkUploadModal';
+import CandidateJourneyModal from '../components/CandidateJourneyModal';
+import ApplicantSearchCards from '../components/ApplicantSearchCards';
+import ProgressDialog from '../components/ProgressDialog';
+
+const API = process.env.REACT_APP_BACKEND_URL;
+
+export default function Dashboard() {
+    const { logout } = useAuth();
+    const navigate = useNavigate();
+    const naukriRef = useRef(null);
+    const pipelineRef = useRef(null);
+    const scoresheetRef = useRef(null);
+    const collegeRankRef = useRef(null);
+    const [uploading, setUploading] = useState({ naukri: false, pipeline: false, scoresheet: false, collegerank: false });
+    const [uploadResult, setUploadResult] = useState({ naukri: null, pipeline: null, scoresheet: null, collegerank: null });
+    // iter155 — Progress dialog state. Uses the shared ProgressDialog
+    // component for a consistent UX with BulkUpload.
+    const [progress, setProgress] = useState(null); // { title, message, variant?, percent? } | null
+    const [bulkType, setBulkType] = useState(null);
+    // Iter53 / iter97 — Score and Round quick-search state. Now uses the shared
+    // ApplicantSearchCards component for partial-match + 6-digit phone-min rule
+    // so this Dashboard search behaves identically to /candidate-journey,
+    // /manual-alerts and /manual-otp-verify.
+    const [journeyQuery, setJourneyQuery] = useState('');
+    const [journeyCandidate, setJourneyCandidate] = useState(null);
+
+    const handleJourneySelect = (card) => {
+        const payload = {};
+        if (card.email) payload.email = String(card.email).toLowerCase();
+        if (card.phone) payload.phone = String(card.phone).replace(/\D/g, '').slice(-10);
+        setJourneyCandidate(payload);
+    };
+
+    const handleUpload = async (type, file) => {
+        if (!file) return;
+        // iter155 — guard against duplicate uploads while one is in flight.
+        if (uploading[type]) return;
+        const labelMap = { naukri: 'Naukri Dataset', pipeline: 'HR Internal Pipeline Dataset', scoresheet: 'Scoresheet', collegerank: 'College Rank' };
+        const formData = new FormData();
+        formData.append('file', file);
+        setUploading(prev => ({ ...prev, [type]: true }));
+        setUploadResult(prev => ({ ...prev, [type]: null }));
+        // Open the progress dialog immediately after file selection.
+        setProgress({
+            title: `Uploading ${labelMap[type]}…`,
+            message: `Please wait — ${file.name} is being processed.`,
+            variant: 'busy',
+        });
+        try {
+            const endpointMap = { scoresheet: 'upload/scoresheet', collegerank: 'upload/college-rank' };
+            const endpoint = endpointMap[type] || `upload/${type}`;
+            const res = await axios.post(`${API}/api/${endpoint}`, formData, {
+                withCredentials: true,
+                onUploadProgress: (evt) => {
+                    if (!evt.total) return;
+                    const pct = Math.round((evt.loaded * 100) / evt.total);
+                    setProgress(p => p ? { ...p, percent: pct } : p);
+                },
+            });
+            setUploadResult(prev => ({ ...prev, [type]: res.data }));
+            toast.success(`${labelMap[type]}: ${res.data.inserted} inserted${res.data.updated !== undefined ? `, ${res.data.updated} updated` : ''}`);
+            // Auto-close the dialog on success.
+            setProgress(null);
+        } catch (err) {
+            const detail = err.response?.data?.detail || 'Upload failed';
+            toast.error(detail);
+            setProgress(null);
+        } finally {
+            setUploading(prev => ({ ...prev, [type]: false }));
+            if (naukriRef.current) naukriRef.current.value = '';
+            if (pipelineRef.current) pipelineRef.current.value = '';
+            if (scoresheetRef.current) scoresheetRef.current.value = '';
+            if (collegeRankRef.current) collegeRankRef.current.value = '';
+        }
+    };
+
+    const handleLogout = async () => {
+        try {
+            await axios.post(`${API}/api/logout`, {}, { withCredentials: true });
+        } catch {}
+        logout();
+        navigate('/login');
+    };
+
+    return (
+        <div className="min-h-screen bg-[#0a0a0a] text-white" data-testid="dashboard-page">
+            <header className="border-b border-zinc-800 px-8 py-5 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                    <button onClick={() => window.history.length > 1 ? navigate(-1) : navigate('/home')} data-testid="back-btn" className="p-2 hover:bg-zinc-800"><ArrowLeft size={20} /></button>
+                    <h1 className="text-xl font-semibold tracking-tight">Recruitment Analytics</h1>
+                </div>
+                <button onClick={handleLogout} data-testid="logout-btn"
+                    className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition-colors">
+                    <SignOut size={18} /> Logout
+                </button>
+            </header>
+
+            <main className="max-w-3xl mx-auto px-6 py-12 space-y-8">
+                {/* Upload Section */}
+                <section className="space-y-4" data-testid="upload-section">
+                    <h2 className="text-sm font-medium text-zinc-500 uppercase tracking-widest">Upload Datasets</h2>
+
+                    <input type="file" ref={naukriRef} accept=".csv,.xlsx,.xls" className="hidden"
+                        onChange={e => handleUpload('naukri', e.target.files[0])} data-testid="naukri-file-input" />
+                    <div className="flex items-stretch gap-2">
+                        <button onClick={() => naukriRef.current?.click()} disabled={uploading.naukri}
+                            data-testid="upload-naukri-btn"
+                            className="flex-1 flex items-center justify-between px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-emerald-600 hover:bg-zinc-900/80 transition-all group">
+                            <span className="flex items-center gap-3">
+                                {uploading.naukri ? <SpinnerGap size={22} className="animate-spin text-emerald-500" /> :
+                                 uploadResult.naukri ? <CheckCircle size={22} weight="fill" className="text-emerald-500" /> :
+                                 <Upload size={22} className="text-zinc-500 group-hover:text-emerald-500 transition-colors" />}
+                                <span className="text-base font-medium">Upload Naukri Applies Dataset</span>
+                            </span>
+                            {uploadResult.naukri && (
+                                <span className="text-xs text-zinc-500">{uploadResult.naukri.inserted} new, {uploadResult.naukri.updated} updated</span>
+                            )}
+                        </button>
+                        <button onClick={() => setBulkType('naukri')} data-testid="bulk-naukri-btn"
+                            className="flex items-center gap-2 px-4 bg-zinc-900 border border-zinc-800 hover:border-emerald-600 hover:bg-zinc-900/80 transition-all text-sm text-zinc-400 hover:text-emerald-400">
+                            <FolderPlus size={18} /> Bulk
+                        </button>
+                    </div>
+
+                    <input type="file" ref={pipelineRef} accept=".csv,.xlsx,.xls" className="hidden"
+                        onChange={e => handleUpload('pipeline', e.target.files[0])} data-testid="pipeline-file-input" />
+                    <div className="flex items-stretch gap-2">
+                        <button onClick={() => pipelineRef.current?.click()} disabled={uploading.pipeline}
+                            data-testid="upload-pipeline-btn"
+                            className="flex-1 flex items-center justify-between px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-blue-600 hover:bg-zinc-900/80 transition-all group">
+                            <span className="flex items-center gap-3">
+                                {uploading.pipeline ? <SpinnerGap size={22} className="animate-spin text-blue-500" /> :
+                                 uploadResult.pipeline ? <CheckCircle size={22} weight="fill" className="text-blue-500" /> :
+                                 <Upload size={22} className="text-zinc-500 group-hover:text-blue-500 transition-colors" />}
+                                <span className="text-base font-medium">Upload HR Internal Pipeline Dataset</span>
+                            </span>
+                            {uploadResult.pipeline && (
+                                <span className="text-xs text-zinc-500">{uploadResult.pipeline.inserted} new, {uploadResult.pipeline.updated} updated</span>
+                            )}
+                        </button>
+                        <button onClick={() => setBulkType('pipeline')} data-testid="bulk-pipeline-btn"
+                            className="flex items-center gap-2 px-4 bg-zinc-900 border border-zinc-800 hover:border-blue-600 hover:bg-zinc-900/80 transition-all text-sm text-zinc-400 hover:text-blue-400">
+                            <FolderPlus size={18} /> Bulk
+                        </button>
+                    </div>
+
+                    <input type="file" ref={scoresheetRef} accept=".csv,.xlsx,.xls" className="hidden"
+                        onChange={e => handleUpload('scoresheet', e.target.files[0])} data-testid="scoresheet-file-input" />
+                    <div className="flex items-stretch gap-2">
+                        <button onClick={() => scoresheetRef.current?.click()} disabled={uploading.scoresheet}
+                            data-testid="upload-scoresheet-btn"
+                            className="flex-1 flex items-center justify-between px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-purple-600 hover:bg-zinc-900/80 transition-all group">
+                            <span className="flex items-center gap-3">
+                                {uploading.scoresheet ? <SpinnerGap size={22} className="animate-spin text-purple-500" /> :
+                                 uploadResult.scoresheet ? <CheckCircle size={22} weight="fill" className="text-purple-500" /> :
+                                 <FileText size={22} className="text-zinc-500 group-hover:text-purple-500 transition-colors" />}
+                                <span className="text-base font-medium">Upload Score Sheet</span>
+                            </span>
+                            {uploadResult.scoresheet && (
+                                <span className="text-xs text-zinc-500">{uploadResult.scoresheet.inserted} scores imported</span>
+                            )}
+                        </button>
+                        <button onClick={() => setBulkType('score')} data-testid="bulk-score-btn"
+                            className="flex items-center gap-2 px-4 bg-zinc-900 border border-zinc-800 hover:border-purple-600 hover:bg-zinc-900/80 transition-all text-sm text-zinc-400 hover:text-purple-400">
+                            <FolderPlus size={18} /> Bulk
+                        </button>
+                    </div>
+
+                    <input type="file" ref={collegeRankRef} accept=".csv,.xlsx,.xls" className="hidden"
+                        onChange={e => handleUpload('collegerank', e.target.files[0])} data-testid="collegerank-file-input" />
+                    <button onClick={() => collegeRankRef.current?.click()} disabled={uploading.collegerank}
+                        data-testid="upload-collegerank-btn"
+                        className="w-full flex items-center justify-between px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-amber-600 hover:bg-zinc-900/80 transition-all group">
+                        <span className="flex items-center gap-3">
+                            {uploading.collegerank ? <SpinnerGap size={22} className="animate-spin text-amber-500" /> :
+                             uploadResult.collegerank ? <CheckCircle size={22} weight="fill" className="text-amber-500" /> :
+                             <GraduationCap size={22} className="text-zinc-500 group-hover:text-amber-500 transition-colors" />}
+                            <span className="text-base font-medium">Upload College Rank List</span>
+                        </span>
+                        {uploadResult.collegerank && (
+                            <span className="text-xs text-zinc-500">{uploadResult.collegerank.inserted} colleges imported</span>
+                        )}
+                    </button>
+                </section>
+
+                {/* Iter53 / iter97 — Score and Round quick-search → Candidate Journey modal.
+                    Now uses ApplicantSearchCards so partial name/email/phone matching,
+                    6-digit phone minimum, and card-click flow match the rest of the app. */}
+                <section className="space-y-4 pt-4" data-testid="score-round-section">
+                    <h2 className="text-sm font-medium text-zinc-500 uppercase tracking-widest">Score and Round</h2>
+                    <div className="bg-zinc-900 border border-zinc-800 hover:border-cyan-600 transition-all p-5">
+                        <div className="flex items-center gap-3 mb-3">
+                            <MagnifyingGlass size={22} className="text-cyan-500" />
+                            <div>
+                                <div className="text-base font-medium">Candidate Journey</div>
+                                <div className="text-sm text-zinc-500 mt-0.5">Look up any candidate's full lifecycle — rounds, scores, status, induction date</div>
+                            </div>
+                        </div>
+                        <div className="mt-4">
+                            <ApplicantSearchCards
+                                value={journeyQuery}
+                                onChange={setJourneyQuery}
+                                onSelect={handleJourneySelect}
+                                onCancel={() => setJourneyQuery('')}
+                                testIdPrefix="journey-search"
+                                placeholder="Type name, email, or phone (6+ digits for phone)…"
+                                autoFocus={false}
+                            />
+                        </div>
+                    </div>
+                </section>
+
+                {/* Navigation Panels */}
+                <section className="space-y-4 pt-4" data-testid="nav-section">
+                    <h2 className="text-sm font-medium text-zinc-500 uppercase tracking-widest">Analytics</h2>
+
+                    <button onClick={() => navigate('/summary')} data-testid="nav-summary-btn"
+                        className="w-full flex items-center gap-4 px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-amber-600 hover:bg-zinc-900/80 transition-all group text-left">
+                        <ChartBar size={28} className="text-zinc-500 group-hover:text-amber-500 transition-colors" />
+                        <div>
+                            <div className="text-base font-medium">View Applicants Summary Statistics</div>
+                            <div className="text-sm text-zinc-500 mt-0.5">Role-wise funnel breakdown with filters</div>
+                        </div>
+                    </button>
+
+                    <button onClick={() => navigate('/roles')} data-testid="nav-roles-btn"
+                        className="w-full flex items-center gap-4 px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-violet-600 hover:bg-zinc-900/80 transition-all group text-left">
+                        <Users size={28} className="text-zinc-500 group-hover:text-violet-500 transition-colors" />
+                        <div>
+                            <div className="text-base font-medium">View Applicants</div>
+                            <div className="text-sm text-zinc-500 mt-0.5">All registered applicants with filters</div>
+                        </div>
+                    </button>
+
+                    <button onClick={() => navigate('/attended-roles')} data-testid="nav-attended-btn"
+                        className="w-full flex items-center gap-4 px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-emerald-600 hover:bg-zinc-900/80 transition-all group text-left">
+                        <UserCheck size={28} className="text-zinc-500 group-hover:text-emerald-500 transition-colors" />
+                        <div>
+                            <div className="text-base font-medium">View Attended Applicants</div>
+                            <div className="text-sm text-zinc-500 mt-0.5">Attended applicants with scores and filters</div>
+                        </div>
+                    </button>
+
+                    <button onClick={() => navigate('/jobs-keywords')} data-testid="nav-jobs-keywords-btn"
+                        className="w-full flex items-center gap-4 px-6 py-5 bg-zinc-900 border border-zinc-800 hover:border-teal-600 hover:bg-zinc-900/80 transition-all group text-left">
+                        <Tag size={28} className="text-zinc-500 group-hover:text-teal-500 transition-colors" />
+                        <div>
+                            <div className="text-base font-medium">Jobs & Keywords</div>
+                            <div className="text-sm text-zinc-500 mt-0.5">Manage keyword mappings for job role normalization</div>
+                        </div>
+                    </button>
+                </section>
+            </main>
+            {bulkType && <BulkUploadModal type={bulkType} onClose={() => setBulkType(null)} />}
+            {/* Iter53 — Candidate Journey modal opened from Score and Round */}
+            {journeyCandidate && (
+                <CandidateJourneyModal candidate={journeyCandidate} onClose={() => setJourneyCandidate(null)} />
+            )}
+            {/* iter155 — Shared progress dialog for individual uploads. */}
+            <ProgressDialog
+                open={!!progress}
+                title={progress?.title || 'Working…'}
+                message={progress?.message || 'Please wait…'}
+                percent={progress?.percent}
+                variant={progress?.variant || 'busy'}
+                testId="upload-progress-dialog"
+            />
+        </div>
+    );
+}

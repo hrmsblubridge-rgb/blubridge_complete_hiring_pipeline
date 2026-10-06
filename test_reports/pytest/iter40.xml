@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="5" skipped="0" tests="14" time="212.160" timestamp="2026-05-05T20:04:27.309096+00:00" hostname="agent-env-16039ee8-3553-4bac-b658-381702f7d9fe"><testcase classname="backend.tests.test_iteration39_bulk_instruction_messaging" name="test_bulk_upload_naukri_completes" time="29.264"><failure message="AssertionError: naukri file not processed within 25s. status={'pending': [{'id': '69fa4d4bd931dc62516bc9d5', 'name': 'TEST_naukri_1778011467.csv', 'status': 'queued', 'size': 163}], 'processed': [{'id': '69fa4b39c676b48af6ab6a1a', 'name': 'probe.csv', 'size': 50, 'result': {'success': True, 'inserted': 1, 'updated': 0}}, {'id': '69fa47f2e8692dee574d9c2e', 'name': 'TEST_seq_1778010098_1.csv', 'size': 66, 'result': {'success': True, 'inserted': 1, 'updated': 0}}, {'id': '69fa3702fd64de1c438c75b8', 'name': 'Naukri-data-05052026.xlsx', 'size': 640097, 'result': {'success': True, 'inserted': 0, 'updated': 937}}], 'failed': []}&#10;assert False&#10; +  where False = _wait_until(&lt;function test_bulk_upload_naukri_completes.&lt;locals&gt;.done at 0xff88e676d4e0&gt;, timeout_s=25, poll=1.5)">backend/tests/test_iteration39_bulk_instruction_messaging.py:102: in test_bulk_upload_naukri_completes
+    assert _wait_until(done, timeout_s=25, poll=1.5), \
+E   AssertionError: naukri file not processed within 25s. status={'pending': [{'id': '69fa4d4bd931dc62516bc9d5', 'name': 'TEST_naukri_1778011467.csv', 'status': 'queued', 'size': 163}], 'processed': [{'id': '69fa4b39c676b48af6ab6a1a', 'name': 'probe.csv', 'size': 50, 'result': {'success': True, 'inserted': 1, 'updated': 0}}, {'id': '69fa47f2e8692dee574d9c2e', 'name': 'TEST_seq_1778010098_1.csv', 'size': 66, 'result': {'success': True, 'inserted': 1, 'updated': 0}}, {'id': '69fa3702fd64de1c438c75b8', 'name': 'Naukri-data-05052026.xlsx', 'size': 640097, 'result': {'success': True, 'inserted': 0, 'updated': 937}}], 'failed': []}
+E   assert False
+E    +  where False = _wait_until(&lt;function test_bulk_upload_naukri_completes.&lt;locals&gt;.done at 0xff88e676d4e0&gt;, timeout_s=25, poll=1.5)</failure></testcase><testcase classname="backend.tests.test_iteration39_bulk_instruction_messaging" name="test_bulk_upload_pipeline_completes" time="32.878"><failure message="AssertionError: pipeline file not processed within 30s — possibly stuck on reprocess_matching. status={'pending': [{'id': '69fa4d68d931dc62516bc9d6', 'name': 'TEST_pipeline_1778011496.csv', 'status': 'queued', 'size': 127}], 'processed': [], 'failed': []}&#10;assert False&#10; +  where False = _wait_until(&lt;function test_bulk_upload_pipeline_completes.&lt;locals&gt;.done at 0xff88e627fc40&gt;, timeout_s=30, poll=1.5)">backend/tests/test_iteration39_bulk_instruction_messaging.py:132: in test_bulk_upload_pipeline_completes
+    assert _wait_until(done, timeout_s=30, poll=1.5), \
+E   AssertionError: pipeline file not processed within 30s — possibly stuck on reprocess_matching. status={'pending': [{'id': '69fa4d68d931dc62516bc9d6', 'name': 'TEST_pipeline_1778011496.csv', 'status': 'queued', 'size': 127}], 'processed': [], 'failed': []}
+E   assert False
+E    +  where False = _wait_until(&lt;function test_bulk_upload_pipeline_completes.&lt;locals&gt;.done at 0xff88e627fc40&gt;, timeout_s=30, poll=1.5)</failure></testcase><testcase classname="backend.tests.test_iteration39_bulk_instruction_messaging" name="test_bulk_upload_score_completes" time="25.575"><failure message="AssertionError: score file not processed. status={'pending': [{'id': '69fa4d89d931dc62516bc9d7', 'name': 'TEST_score_1778011529.csv', 'status': 'queued', 'size': 95}], 'processed': [{'id': '69fa47eae8692dee574d9c2b', 'name': 'TEST_score_1778010090.csv', 'size': 95, 'result': {'success': True, 'inserted': 1}}], 'failed': []}&#10;assert False&#10; +  where False = _wait_until(&lt;function test_bulk_upload_score_completes.&lt;locals&gt;.done at 0xff88e676d4e0&gt;, timeout_s=20, poll=1.0)">backend/tests/test_iteration39_bulk_instruction_messaging.py:151: in test_bulk_upload_score_completes
+    assert _wait_until(done, timeout_s=20, poll=1.0), \
+E   AssertionError: score file not processed. status={'pending': [{'id': '69fa4d89d931dc62516bc9d7', 'name': 'TEST_score_1778011529.csv', 'status': 'queued', 'size': 95}], 'processed': [{'id': '69fa47eae8692dee574d9c2b', 'name': 'TEST_score_1778010090.csv', 'size': 95, 'result': {'success': True, 'inserted': 1}}], 'failed': []}
+E   assert False
+E    +  where False = _wait_until(&lt;function test_bulk_upload_score_completes.&lt;locals&gt;.done at 0xff88e676d4e0&gt;, timeout_s=20, poll=1.0)</failure></testcase><testcase classname="backend.tests.test_iteration39_bulk_instruction_messaging" name="test_bulk_upload_invalid_type_returns_400" time="0.069" /><testcase classname="backend.tests.test_iteration39_bulk_instruction_messaging" name="test_bulk_upload_status_shape" time="2.304" /><testcase classname="backend.tests.test_iteration39_bulk_instruction_messaging" name="test_clear_failed_endpoint" time="3.143" /><testcase classname="backend.tests.test_iteration39_bulk_instruction_messaging" name="test_bulk_upload_sequential_queue" time="68.359"><failure message="AssertionError: sequential queue did not drain. status={'pending': [{'id': '69fa4d4bd931dc62516bc9d5', 'name': 'TEST_naukri_1778011467.csv', 'status': 'queued', 'size': 163}, {'id': '69fa4da9d931dc62516bc9d8', 'name': 'TEST_seqQ_1778011560_0.csv', 'status': 'queued', 'size': 66}, {'id': '69fa4da9d931dc62516bc9d9', 'name': 'TEST_seqQ_1778011561_1.csv', 'status': 'queued', 'size': 66}], 'processed': [{'id': '69fa4b39c676b48af6ab6a1a', 'name': 'probe.csv', 'size': 50, 'result': {'success': True, 'inserted': 1, 'updated': 0}}, {'id': '69fa47f2e8692dee574d9c2e', 'name': 'TEST_seq_1778010098_1.csv', 'size': 66, 'result': {'success': True, 'inserted': 1, 'updated': 0}}, {'id': '69fa3702fd64de1c438c75b8', 'name': 'Naukri-data-05052026.xlsx', 'size': 640097, 'result': {'success': True, 'inserted': 0, 'updated': 937}}], 'failed': []}&#10;assert False&#10; +  where False = _wait_until(&lt;function test_bulk_upload_sequential_queue.&lt;locals&gt;.all_done at 0xff88e5289a80&gt;, timeout_s=60, poll=2.0)">backend/tests/test_iteration39_bulk_instruction_messaging.py:229: in test_bulk_upload_sequential_queue
+    assert _wait_until(all_done, timeout_s=60, poll=2.0), \
+E   AssertionError: sequential queue did not drain. status={'pending': [{'id': '69fa4d4bd931dc62516bc9d5', 'name': 'TEST_naukri_1778011467.csv', 'status': 'queued', 'size': 163}, {'id': '69fa4da9d931dc62516bc9d8', 'name': 'TEST_seqQ_1778011560_0.csv', 'status': 'queued', 'size': 66}, {'id': '69fa4da9d931dc62516bc9d9', 'name': 'TEST_seqQ_1778011561_1.csv', 'status': 'queued', 'size': 66}], 'processed': [{'id': '69fa4b39c676b48af6ab6a1a', 'name': 'probe.csv', 'size': 50, 'result': {'success': True, 'inserted': 1, 'updated': 0}}, {'id': '69fa47f2e8692dee574d9c2e', 'name': 'TEST_seq_1778010098_1.csv', 'size': 66, 'result': {'success': True, 'inserted': 1, 'updated': 0}}, {'id': '69fa3702fd64de1c438c75b8', 'name': 'Naukri-data-05052026.xlsx', 'size': 640097, 'result': {'success': True, 'inserted': 0, 'updated': 937}}], 'failed': []}
+E   assert False
+E    +  where False = _wait_until(&lt;function test_bulk_upload_sequential_queue.&lt;locals&gt;.all_done at 0xff88e5289a80&gt;, timeout_s=60, poll=2.0)</failure></testcase><testcase classname="backend.tests.test_iteration39_bulk_instruction_messaging" name="test_create_hiring_form_with_instruction_fields" time="1.784" /><testcase classname="backend.tests.test_iteration39_bulk_instruction_messaging" name="test_public_form_returns_instruction_fields" time="1.875" /><testcase classname="backend.tests.test_iteration39_bulk_instruction_messaging" name="test_update_hiring_form_show_instruction_false" time="2.151" /><testcase classname="backend.tests.test_iteration39_bulk_instruction_messaging" name="test_bg_workers_uses_ist" time="0.001" /><testcase classname="backend.tests.test_iteration39_bulk_instruction_messaging" name="test_otp_worker_processes_seeded_record" time="11.191" /><testcase classname="backend.tests.test_iteration39_bulk_instruction_messaging" name="test_rejection_mailer_continuous_worker" time="32.143" /><testcase classname="backend.tests.test_iteration39_bulk_instruction_messaging" name="test_verify_otp_updates_pipeline_data" time="1.201"><failure message="requests.exceptions.ConnectionError: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))">/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:787: in urlopen
+    response = self._make_request(
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:534: in _make_request
+    response = conn.getresponse()
+               ^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/urllib3/connection.py:571: in getresponse
+    httplib_response = super().getresponse()
+                       ^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/http/client.py:1415: in getresponse
+    response.begin()
+/usr/local/lib/python3.11/http/client.py:330: in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/http/client.py:299: in _read_status
+    raise RemoteDisconnected("Remote end closed connection without"
+E   http.client.RemoteDisconnected: Remote end closed connection without response
+
+During handling of the above exception, another exception occurred:
+/root/.venv/lib/python3.11/site-packages/requests/adapters.py:644: in send
+    resp = conn.urlopen(
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:841: in urlopen
+    retries = retries.increment(
+/root/.venv/lib/python3.11/site-packages/urllib3/util/retry.py:490: in increment
+    raise reraise(type(error), error, _stacktrace)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/urllib3/util/util.py:38: in reraise
+    raise value.with_traceback(tb)
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:787: in urlopen
+    response = self._make_request(
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:534: in _make_request
+    response = conn.getresponse()
+               ^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/urllib3/connection.py:571: in getresponse
+    httplib_response = super().getresponse()
+                       ^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/http/client.py:1415: in getresponse
+    response.begin()
+/usr/local/lib/python3.11/http/client.py:330: in begin
+    version, status, reason = self._read_status()
+                              ^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/http/client.py:299: in _read_status
+    raise RemoteDisconnected("Remote end closed connection without"
+E   urllib3.exceptions.ProtocolError: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+
+During handling of the above exception, another exception occurred:
+backend/tests/test_iteration39_bulk_instruction_messaging.py:426: in test_verify_otp_updates_pipeline_data
+    r = session.post(f"{API}/bb/verify-otp", json={"phone": phone, "otp": otp_code}, timeout=30)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:637: in post
+    return self.request("POST", url, data=data, json=json, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:589: in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:703: in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/adapters.py:659: in send
+    raise ConnectionError(err, request=request)
+E   requests.exceptions.ConnectionError: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))</failure></testcase></testsuite></testsuites>

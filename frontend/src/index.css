@@ -1,0 +1,257 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Cabinet Grotesk - Using Syne as fallback (similar geometric grotesque) */
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+body {
+    margin: 0;
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-color: #efede5;
+    color: #1a2332;
+}
+
+/* ============================================================
+   Cream Light Theme — Global overrides for legacy dark utility
+   classes used across pages. Applied only inside .app-shell so
+   public/login pages remain unaffected.
+   Site BG: #efede5 | Header: #faf9f1 | Container: #fffdf7
+   Accent (navy): #1d3a8a
+   ============================================================ */
+.app-shell .bg-\[\#0a0a0a\] { background-color: #efede5 !important; color: #1a2332 !important; }
+.app-shell .bg-black { background-color: #efede5 !important; }
+.app-shell .bg-zinc-950 { background-color: #efede5 !important; }
+.app-shell .bg-zinc-950\/50 { background-color: #faf9f1 !important; }
+.app-shell .bg-zinc-950\/80 { background-color: #f5f3eb !important; }
+.app-shell .bg-zinc-900 { background-color: #fffdf7 !important; }
+.app-shell .bg-zinc-900\/80 { background-color: #fbfaf2 !important; }
+.app-shell .bg-zinc-900\/50 { background-color: #fbfaf2 !important; }
+.app-shell .bg-zinc-800 { background-color: #f5f3eb !important; }
+.app-shell .bg-zinc-800\/40 { background-color: #faf9f1 !important; }
+.app-shell .bg-zinc-800\/50 { background-color: #faf9f1 !important; }
+.app-shell .bg-zinc-800\/60 { background-color: #f0eee2 !important; }
+.app-shell .bg-zinc-800\/80 { background-color: #f0eee2 !important; }
+.app-shell .bg-zinc-700 { background-color: #e9e7dc !important; }
+.app-shell .bg-zinc-700\/40 { background-color: #efede5 !important; }
+.app-shell .bg-zinc-700\/50 { background-color: #efede5 !important; }
+.app-shell .border-zinc-700\/50 { border-color: #d6d4c8 !important; }
+.app-shell .border-zinc-800\/50 { border-color: #e5e3d8 !important; }
+
+.app-shell aside .text-white { color: #ffffff !important; }
+.app-shell .text-white { color: #1a2332 !important; }
+.app-shell .text-zinc-100 { color: #1a2332 !important; }
+.app-shell .text-zinc-200 { color: #1a2332 !important; }
+.app-shell .text-zinc-300 { color: #3f4655 !important; }
+.app-shell .text-zinc-400 { color: #6b7280 !important; }
+.app-shell .text-zinc-500 { color: #6b7280 !important; }
+.app-shell .text-zinc-600 { color: #9ca3af !important; }
+
+.app-shell .border-zinc-800 { border-color: #e5e3d8 !important; }
+.app-shell .border-zinc-700 { border-color: #d6d4c8 !important; }
+.app-shell .border-zinc-600 { border-color: #c8c6ba !important; }
+.app-shell .border-zinc-900 { border-color: #ece9dc !important; }
+.app-shell .divide-zinc-800 > * + * { border-color: #e5e3d8 !important; }
+.app-shell .divide-zinc-700 > * + * { border-color: #d6d4c8 !important; }
+
+.app-shell .hover\:bg-zinc-800:hover { background-color: #efede5 !important; }
+.app-shell .hover\:bg-zinc-900\/80:hover { background-color: #fbfaf2 !important; }
+.app-shell .hover\:bg-zinc-800\/50:hover { background-color: #f5f3eb !important; }
+.app-shell .hover\:bg-zinc-700:hover { background-color: #e9e7dc !important; }
+.app-shell .hover\:text-white:hover { color: #0a0a0a !important; }
+.app-shell .hover\:border-zinc-700:hover { border-color: #1d3a8a !important; }
+.app-shell .hover\:border-zinc-600:hover { border-color: #1d3a8a !important; }
+
+/* Inputs / placeholders inside legacy dark-style fields */
+.app-shell input.bg-zinc-900,
+.app-shell input.bg-zinc-950,
+.app-shell select.bg-zinc-900,
+.app-shell select.bg-zinc-950,
+.app-shell textarea.bg-zinc-900,
+.app-shell textarea.bg-zinc-950 {
+    background-color: #fffdf7 !important;
+    color: #1a2332 !important;
+    border-color: #e5e3d8 !important;
+}
+.app-shell input.bg-zinc-800,
+.app-shell select.bg-zinc-800,
+.app-shell textarea.bg-zinc-800 {
+    background-color: #faf9f1 !important;
+    color: #1a2332 !important;
+}
+.app-shell input::placeholder,
+.app-shell textarea::placeholder { color: #9ca3af !important; }
+.app-shell .placeholder-zinc-600::placeholder,
+.app-shell .placeholder-zinc-500::placeholder,
+.app-shell .placeholder-zinc-400::placeholder { color: #9ca3af !important; }
+
+/* Status badge remap — dark-translucent bg + light text combos (designed for dark theme)
+   are remapped to clean light bg + saturated text for the cream theme. */
+.app-shell .bg-emerald-900\/40 { background-color: #d1fae5 !important; }
+.app-shell .bg-orange-900\/40  { background-color: #ffedd5 !important; }
+.app-shell .bg-red-900\/40     { background-color: #fee2e2 !important; }
+.app-shell .bg-cyan-900\/40    { background-color: #cffafe !important; }
+.app-shell .bg-amber-900\/40   { background-color: #fef3c7 !important; }
+.app-shell .bg-amber-900\/20   { background-color: #fef3c7 !important; }
+.app-shell .bg-blue-900\/40    { background-color: #dbeafe !important; }
+.app-shell .bg-violet-900\/40  { background-color: #ede9fe !important; }
+
+.app-shell .text-emerald-400 { color: #047857 !important; }
+.app-shell .text-orange-400  { color: #c2410c !important; }
+.app-shell .text-red-400     { color: #b91c1c !important; }
+.app-shell .text-cyan-400    { color: #0e7490 !important; }
+.app-shell .text-amber-400   { color: #b45309 !important; }
+.app-shell .text-blue-400    { color: #1d4ed8 !important; }
+.app-shell .text-violet-400  { color: #6d28d9 !important; }
+.app-shell .text-purple-400  { color: #6d28d9 !important; }
+
+/* Light-shade text tokens (200/300) used inside dark-translucent badges
+   are remapped to saturated dark text to ensure legibility on the
+   cream-tinted badge backgrounds. */
+.app-shell .text-emerald-200 { color: #065f46 !important; }
+.app-shell .text-emerald-300 { color: #047857 !important; }
+.app-shell .text-cyan-200    { color: #155e75 !important; }
+.app-shell .text-cyan-300    { color: #0e7490 !important; }
+.app-shell .text-amber-200   { color: #92400e !important; }
+.app-shell .text-amber-300   { color: #b45309 !important; }
+.app-shell .text-red-300     { color: #b91c1c !important; }
+.app-shell .text-fuchsia-200 { color: #86198f !important; }
+.app-shell .text-fuchsia-300 { color: #a21caf !important; }
+
+/* Saturated 500/700 text tokens occasionally used on cream bg —
+   keep them dark enough to be legible. */
+.app-shell .text-emerald-500 { color: #047857 !important; }
+.app-shell .text-cyan-500    { color: #0e7490 !important; }
+.app-shell .text-amber-500   { color: #b45309 !important; }
+.app-shell .text-blue-500    { color: #1d4ed8 !important; }
+.app-shell .text-red-500     { color: #b91c1c !important; }
+.app-shell .text-yellow-500  { color: #a16207 !important; }
+.app-shell .text-teal-500    { color: #0f766e !important; }
+.app-shell .text-violet-500  { color: #6d28d9 !important; }
+.app-shell .text-purple-500  { color: #6d28d9 !important; }
+
+.app-shell .border-emerald-800\/50 { border-color: #6ee7b7 !important; }
+.app-shell .border-orange-800\/50  { border-color: #fdba74 !important; }
+.app-shell .border-red-800\/50     { border-color: #fca5a5 !important; }
+.app-shell .border-cyan-800\/50    { border-color: #67e8f9 !important; }
+.app-shell .border-amber-800\/50   { border-color: #fcd34d !important; }
+.app-shell .border-amber-800\/40   { border-color: #fcd34d !important; }
+.app-shell .border-cyan-700\/50    { border-color: #22d3ee !important; }
+.app-shell .border-red-900\/30     { border-color: #fca5a5 !important; }
+.app-shell .border-red-900\/40     { border-color: #fca5a5 !important; }
+
+/* Solid 700 backgrounds on buttons — keep them saturated for clear
+   primary/destructive cues against the cream theme. */
+.app-shell .bg-amber-700\/30      { background-color: #fde68a !important; }
+.app-shell .bg-emerald-700\/30    { background-color: #a7f3d0 !important; }
+.app-shell .bg-fuchsia-700\/30    { background-color: #f5d0fe !important; }
+.app-shell .bg-emerald-900\/60    { background-color: #a7f3d0 !important; }
+
+/* Sticky table headers using zinc bg */
+.app-shell thead .bg-zinc-900,
+.app-shell thead.bg-zinc-900,
+.app-shell tr.bg-zinc-900 { background-color: #faf9f1 !important; }
+.app-shell tr.hover\:bg-zinc-900\/50:hover,
+.app-shell .hover\:bg-zinc-900\/50:hover { background-color: #faf9f1 !important; }
+
+
+code {
+    font-family: 'JetBrains Mono', source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+@layer base {
+    :root {
+        --background: 0 0% 100%;
+        --foreground: 0 0% 4%;
+        --card: 0 0% 100%;
+        --card-foreground: 0 0% 4%;
+        --popover: 0 0% 100%;
+        --popover-foreground: 0 0% 4%;
+        --primary: 227 100% 33%;
+        --primary-foreground: 0 0% 100%;
+        --secondary: 220 9% 97%;
+        --secondary-foreground: 0 0% 4%;
+        --muted: 220 9% 97%;
+        --muted-foreground: 220 9% 45%;
+        --accent: 220 9% 97%;
+        --accent-foreground: 0 0% 4%;
+        --destructive: 355 78% 56%;
+        --destructive-foreground: 0 0% 100%;
+        --border: 220 13% 91%;
+        --input: 220 13% 91%;
+        --ring: 227 100% 33%;
+        --chart-1: 227 100% 33%;
+        --chart-2: 225 85% 60%;
+        --chart-3: 218 11% 26%;
+        --chart-4: 218 11% 64%;
+        --chart-5: 0 0% 4%;
+        --radius: 0;
+    }
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+    body {
+        @apply bg-background text-foreground;
+    }
+}
+
+/* Border radius preserved for new cream theme */
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #F3F4F6;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #9CA3AF;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #6B7280;
+}
+
+@layer base {
+    [data-debug-wrapper="true"] {
+        display: contents !important;
+    }
+
+    [data-debug-wrapper="true"] > * {
+        margin-left: inherit;
+        margin-right: inherit;
+        margin-top: inherit;
+        margin-bottom: inherit;
+        padding-left: inherit;
+        padding-right: inherit;
+        padding-top: inherit;
+        padding-bottom: inherit;
+        column-gap: inherit;
+        row-gap: inherit;
+        gap: inherit;
+        border-left-width: inherit;
+        border-right-width: inherit;
+        border-top-width: inherit;
+        border-bottom-width: inherit;
+        border-left-style: inherit;
+        border-right-style: inherit;
+        border-top-style: inherit;
+        border-bottom-style: inherit;
+        border-left-color: inherit;
+        border-right-color: inherit;
+        border-top-color: inherit;
+        border-bottom-color: inherit;
+    }
+}

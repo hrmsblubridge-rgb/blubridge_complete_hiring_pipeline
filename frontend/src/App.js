@@ -1,0 +1,85 @@
+import "@/App.css";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider } from "./context/AuthContext";
+import { ProtectedRoute } from "./components/ProtectedRoute";
+import Login from "./pages/Login";
+import Home from "./pages/Home";
+import Dashboard from "./pages/Dashboard";
+import Summary from "./pages/Summary";
+import Applicants from "./pages/Roles";
+import RoleDrillDown from "./pages/RoleDrillDown";
+import AttendedApplicants from "./pages/AttendedRoles";
+import AttendedDrillDown from "./pages/AttendedDrillDown";
+import JobsKeywords from "./pages/JobsKeywords";
+import ManageJobRoles from "./pages/ManageJobRoles";
+import HiringForms from "./pages/HiringForms";
+import InterviewReports from "./pages/InterviewReports";
+import UpdateScores from "./pages/UpdateScores";
+import JobOpenings from "./pages/JobOpenings";
+import SetHolidays from "./pages/SetHolidays";
+import VerifyOTP from "./pages/VerifyOTP";
+import PublicRegistration from "./pages/PublicRegistration";
+import InterviewSchedule from "./pages/InterviewSchedule";
+import CollegeSchedules from "./pages/CollegeSchedules";
+import CollegeRegistration from "./pages/CollegeRegistration";
+import CandidateJourney from "./pages/CandidateJourney";
+import ScoreRound from "./pages/ScoreRound";
+import WhatsAppResend from "./pages/WhatsAppResend";
+import Help from "./pages/Help";
+import ManualAlerts from "./pages/ManualAlerts";
+import ManualOtpVerify from "./pages/ManualOtpVerify";
+import MissingApplicants from "./pages/MissingApplicants";
+import TesterCredentials from "./pages/TesterCredentials";
+import TeamScore from "./pages/TeamScore";
+import Profile from "./pages/Profile";
+import PublicJobView from "./pages/PublicJobView";
+import { Toaster } from "./components/ui/sonner";
+
+function App() {
+    return (
+        <div className="App">
+            <AuthProvider>
+                <BrowserRouter>
+                    <Routes>
+                        <Route path="/login" element={<Login />} />
+                        <Route path="/home" element={<ProtectedRoute><Home /></ProtectedRoute>} />
+                        <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+                        <Route path="/summary" element={<ProtectedRoute><Summary /></ProtectedRoute>} />
+                        <Route path="/roles" element={<ProtectedRoute><Applicants /></ProtectedRoute>} />
+                        <Route path="/roles/:jobRole" element={<ProtectedRoute><RoleDrillDown /></ProtectedRoute>} />
+                        <Route path="/attended-roles" element={<ProtectedRoute><AttendedApplicants /></ProtectedRoute>} />
+                        <Route path="/attended-roles/:jobRole" element={<ProtectedRoute><AttendedDrillDown /></ProtectedRoute>} />
+                        <Route path="/jobs-keywords" element={<ProtectedRoute><JobsKeywords /></ProtectedRoute>} />
+                        <Route path="/manage-job-roles" element={<ProtectedRoute><ManageJobRoles /></ProtectedRoute>} />
+                        <Route path="/hiring-forms" element={<ProtectedRoute><HiringForms /></ProtectedRoute>} />
+                        <Route path="/interview-reports" element={<ProtectedRoute><InterviewReports /></ProtectedRoute>} />
+                        <Route path="/update-scores" element={<ProtectedRoute><UpdateScores /></ProtectedRoute>} />
+                        <Route path="/job-openings" element={<ProtectedRoute><JobOpenings /></ProtectedRoute>} />
+                        <Route path="/set-holidays" element={<ProtectedRoute><SetHolidays /></ProtectedRoute>} />
+                        <Route path="/verify-otp" element={<ProtectedRoute><VerifyOTP /></ProtectedRoute>} />
+                        <Route path="/college-schedules" element={<ProtectedRoute><CollegeSchedules /></ProtectedRoute>} />
+                        <Route path="/candidate-journey" element={<ProtectedRoute><CandidateJourney /></ProtectedRoute>} />
+                        <Route path="/score-round" element={<ProtectedRoute><ScoreRound /></ProtectedRoute>} />
+                        <Route path="/whatsapp-resend" element={<ProtectedRoute><WhatsAppResend /></ProtectedRoute>} />
+                        <Route path="/help" element={<ProtectedRoute><Help /></ProtectedRoute>} />
+                        <Route path="/manual-alerts" element={<ProtectedRoute><ManualAlerts /></ProtectedRoute>} />
+                        <Route path="/manual-otp-verify" element={<ProtectedRoute><ManualOtpVerify /></ProtectedRoute>} />
+                        <Route path="/missing-applicants" element={<ProtectedRoute><MissingApplicants /></ProtectedRoute>} />
+                        <Route path="/team-score" element={<ProtectedRoute><TeamScore /></ProtectedRoute>} />
+                        <Route path="/tester-credentials" element={<ProtectedRoute><TesterCredentials /></ProtectedRoute>} />
+                        <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
+                        <Route path="/register/college" element={<CollegeRegistration />} />
+                        <Route path="/register/:formId" element={<PublicRegistration />} />
+                        <Route path="/schedule-interview/:token" element={<InterviewSchedule />} />
+                        <Route path="/jobs/view/:openingId" element={<PublicJobView />} />
+                        <Route path="/" element={<Navigate to="/home" replace />} />
+                        <Route path="*" element={<Navigate to="/home" replace />} />
+                    </Routes>
+                </BrowserRouter>
+                <Toaster />
+            </AuthProvider>
+        </div>
+    );
+}
+
+export default App;

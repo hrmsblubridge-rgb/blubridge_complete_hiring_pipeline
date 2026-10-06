@@ -1,0 +1,123 @@
+{
+  "summary": "Comprehensive testing of Recruitment Analytics Schema Refactor. All 20 backend tests passed (100%). Frontend testing verified login, dashboard counts, hierarchical panels, data modals with confirm_box field, upload modal, and logout. Fixed bug: Rejected modal was using 'confirm' instead of 'confirm_box' in column array.",
+  
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Dashboard.js - Rejected Panel",
+        "issue": "FIXED: Column array used 'confirm' instead of 'confirm_box' (line 677)",
+        "selector": "[data-testid='panel-rejected']",
+        "priority": "HIGH",
+        "status": "FIXED"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  
+  "passed_tests": {
+    "backend": [
+      "API health check - returns healthy status v4.0",
+      "Login with admin/admin credentials - returns 200",
+      "Login with invalid credentials - returns 401",
+      "Upload Naukri CSV - processes 10 records with mapped_columns and unmapped_columns",
+      "Naukri UPSERT - re-upload gives 0 inserted, 10 updated",
+      "Upload Pipeline CSV - processes 7 records with mapped_columns and unmapped_columns",
+      "Pipeline UPSERT - re-upload gives 0 inserted, 7 updated",
+      "Dashboard counts structure - all 9 fields present",
+      "Expected counts: total=10, registered=7, unregistered=3",
+      "Expected counts: shortlisted=6, rejected=2",
+      "Expected counts: scheduled=5, not_scheduled=2",
+      "Expected counts: attended=3, not_attended=4",
+      "Relational integrity: registered + unregistered = total (7+3=10)",
+      "Relational integrity: scheduled + not_scheduled = registered (5+2=7)",
+      "Relational integrity: attended + not_attended = registered (3+4=7)",
+      "/api/data/rejected returns confirm_box field (not confirm)",
+      "/api/data/not-scheduled returns confirm_box field (not confirm)",
+      "Diana Lee has location=Pune (correct alignment)",
+      "Eve Wilson has location=Hyderabad (correct alignment)",
+      "All endpoints require authentication (401 without auth)"
+    ],
+    "frontend": [
+      "Login page loads with form elements",
+      "Login with admin/admin redirects to dashboard",
+      "Dashboard shows correct summary cards (Total=10, Registered=7, Unregistered=3)",
+      "Expanding Registered shows Shortlisted(6) and Rejected(2)",
+      "Expanding Shortlisted shows Scheduled(5) and Not Scheduled(2)",
+      "Rejected modal shows confirm_box column (FIXED)",
+      "Not Scheduled modal shows confirm_box column",
+      "Not Scheduled modal: Diana Lee has location=Pune",
+      "Not Scheduled modal: Eve Wilson has location=Hyderabad",
+      "Upload modal shows both Naukri and Pipeline upload zones",
+      "Unregistered modal shows Harry Patel, Ivy Chen, Jack Davis",
+      "Logout redirects to login page"
+    ]
+  },
+  
+  "test_report_links": [
+    "/app/backend/tests/test_schema_refactor.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  
+  "action_items": [],
+  
+  "critical_code_review_comments": [
+    "FIXED: Dashboard.js line 677 - Rejected panel column array used 'confirm' instead of 'confirm_box'"
+  ],
+  
+  "updated_files": [
+    "/app/frontend/src/pages/Dashboard.js",
+    "/app/backend/tests/test_schema_refactor.py"
+  ],
+  
+  "success_rate": {
+    "backend": "100% (20/20 tests passed)",
+    "frontend": "100% (all features working after fix)"
+  },
+  
+  "test_credentials": {
+    "username": "admin",
+    "password": "admin"
+  },
+  
+  "seed_data_creation": "Test data uploaded via /app/test_data/naukri_test.csv (10 records) and /app/test_data/pipeline_test.csv (7 records)",
+  
+  "retest_needed": false,
+  
+  "should_main_agent_self_test": false,
+  
+  "context_for_next_testing_agent": "Schema refactor testing complete. Key changes verified: (1) NAUKRI_COLUMN_MAP maps display names (Email ID, Phone Number, Job Title) to snake_case DB fields, (2) Pipeline stores confirm_box NOT confirm, (3) Pipeline stores job_role NOT job_title, (4) Pipeline id → pipeline_id, (5) registered_candidates merges ALL fields from both datasets. Fixed frontend bug where Rejected modal used 'confirm' instead of 'confirm_box'. All relational integrity constraints validated.",
+  
+  "schema_validation": {
+    "naukri_column_mapping": "Email ID→email, Phone Number→phone, Job Title→job_title, etc.",
+    "pipeline_schema": "confirm_box (not confirm), job_role (not job_title), pipeline_id (for id column)",
+    "registered_candidates": "Merges ALL fields from both naukri_applies and pipeline_data"
+  },
+  
+  "relational_integrity_validation": {
+    "total_applies": 10,
+    "registered": 7,
+    "unregistered": 3,
+    "shortlisted": 6,
+    "rejected": 2,
+    "scheduled": 5,
+    "not_scheduled": 2,
+    "attended": 3,
+    "not_attended": 4,
+    "partition_checks": {
+      "registered_plus_unregistered_equals_total": "7+3=10 ✓",
+      "scheduled_plus_not_scheduled_equals_registered": "5+2=7 ✓",
+      "attended_plus_not_attended_equals_registered": "3+4=7 ✓"
+    }
+  },
+  
+  "data_alignment_verification": {
+    "diana_lee": "location=Pune (correct)",
+    "eve_wilson": "location=Hyderabad (correct)"
+  }
+}

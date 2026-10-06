@@ -1,0 +1,88 @@
+{
+  "summary": "Iteration 17: Complete E2E testing of Bulk Upload functionality. Fixed route ordering bug in backend (process-now route was being matched by {upload_type} route). All 13 backend tests pass, all frontend tests pass.",
+  
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  
+  "passed_tests": {
+    "backend": [
+      "GET /api/bulk-upload/status returns pending/processed for all 3 types (naukri, pipeline, score)",
+      "POST /api/bulk-upload/naukri accepts CSV file and saves to pending",
+      "POST /api/bulk-upload/naukri rejects invalid type with 400",
+      "POST /api/bulk-upload/pipeline accepts CSV file",
+      "POST /api/bulk-upload/score accepts CSV file",
+      "DELETE /api/bulk-upload/naukri/{filename} removes file from pending",
+      "DELETE /api/bulk-upload/naukri/nonexistent returns 404",
+      "POST /api/bulk-upload/process-now processes pending files immediately",
+      "POST /api/bulk-upload/naukri accepts multiple files",
+      "Bulk upload endpoints require authentication (401 without auth)",
+      "POST /api/upload/naukri (single file) still works",
+      "POST /api/upload/pipeline (single file) still works",
+      "POST /api/upload/scoresheet (single file) still works"
+    ],
+    "frontend": [
+      "Login with admin/admin - dashboard loads",
+      "Dashboard shows 3 Bulk buttons (bulk-naukri-btn, bulk-pipeline-btn, bulk-score-btn)",
+      "Clicking bulk-naukri-btn opens BulkUploadModal with title 'Bulk Upload — Naukri Applies'",
+      "Modal has Upload File(s) button (bulk-file-input-label)",
+      "Modal has Pending Files section",
+      "Modal has Processed Files section",
+      "Modal has Close button (X) (bulk-modal-close)",
+      "Closing modal via X button works",
+      "Clicking bulk-pipeline-btn opens modal with 'Pipeline' in title",
+      "Closing modal via clicking overlay works",
+      "Clicking bulk-score-btn opens modal with 'Score Sheet' in title",
+      "Navigation button Summary (nav-summary-btn) works - navigates to /summary",
+      "Navigation button Applicants (nav-roles-btn) works - navigates to /roles",
+      "Navigation button Attended (nav-attended-btn) works - navigates to /attended-roles",
+      "Single upload buttons present: upload-naukri-btn, upload-pipeline-btn, upload-scoresheet-btn"
+    ]
+  },
+  
+  "bug_fixed": {
+    "issue": "POST /api/bulk-upload/process-now was returning 422 (missing files field)",
+    "root_cause": "Route ordering issue - /api/bulk-upload/{upload_type} was defined before /api/bulk-upload/process-now, so FastAPI matched 'process-now' as an upload_type",
+    "fix": "Moved /api/bulk-upload/process-now route definition before /api/bulk-upload/{upload_type} in server.py",
+    "file_modified": "/app/backend/server.py"
+  },
+  
+  "test_report_links": [
+    "/app/backend/tests/test_bulk_upload.py",
+    "/app/test_reports/pytest/pytest_results_iteration17.xml"
+  ],
+  
+  "action_items": [],
+  
+  "critical_code_review_comments": [],
+  
+  "updated_files": [
+    "/app/backend/server.py",
+    "/app/backend/tests/test_bulk_upload.py"
+  ],
+  
+  "success_rate": {
+    "backend": "100% (13/13 tests passed)",
+    "frontend": "100% (15/15 tests passed)"
+  },
+  
+  "test_credentials": {
+    "username": "admin",
+    "password": "admin"
+  },
+  
+  "seed_data_creation": "Test CSV files created during testing for bulk upload verification",
+  
+  "retest_needed": false,
+  
+  "should_main_agent_self_test": false,
+  
+  "context_for_next_testing_agent": "Bulk upload functionality fully tested and working. The app now has: (1) Dashboard with 3 Bulk buttons next to each upload type, (2) BulkUploadModal component with file upload, pending list, processed list, delete, and process-now functionality, (3) Background processor runs every 30s automatically. Upload directories are at /app/uploads/{naukri,pipeline,score}/{pending,processed}. Route ordering fix applied - specific routes must come before parameterized routes in FastAPI."
+}

@@ -1,0 +1,35 @@
+{
+  "summary": "iter95 — executed backend pytest (20/20 passed after .env loading fix) and Playwright frontend tests covering multi-card search on /manual-alerts, /manual-otp-verify, /candidate-journey plus phone onBlur normalization on /register/college. All targeted flows pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "test_iteration95_search_phone.py", "issue": "Test imported `messaging` which fails-fast on missing FRONTEND_URL when pytest is invoked without backend .env loaded. Fixed by adding python-dotenv load_dotenv('/app/backend/.env') at module top so the suite is hermetic."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration95_search_phone.py",
+    "/app/test_reports/pytest/iter95.xml"
+  ],
+  "action_items": [
+    "(Optional, low priority) Seed at least one public recruitment-form slug (e.g. 'ai-ml') in the connected MongoDB so /register/{slug} flow can be exercised end-to-end by future Playwright runs. Currently /api/pub/form/ai-ml → 404, so the JD step of PublicRegistration cannot be reached in this preview DB. PublicRegistration.js uses identical normalizePhone + maskPhoneInput + onBlur code as CollegeRegistration.js (verified by reading source), so the onBlur normalization behaviour is implicitly validated by the College tests + the 6 backend parametrized _validate_phone_10digits tests, all of which pass."
+  ],
+  "critical_code_review_comments": [
+    "bb_modules.py uses deprecated FastAPI `regex=` instead of `pattern=` in 4 Query definitions (lines 1674, 1860, 2344, 3301). Currently a DeprecationWarning; will break on FastAPI/Pydantic v3.",
+    "/app/frontend/src/utils/phone.js normalizePhone returns object {ok,value} — make sure callers (PublicRegistration.js:394, CollegeRegistration.js:181) always read n.ok before n.value (they do, but a one-line JSDoc on the export would prevent regressions)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration95_search_phone.py (added load_dotenv for FRONTEND_URL/REACT_APP_BACKEND_URL — pure test infra change; no production code touched)"
+  ],
+  "success_rate": {"backend": "100% (20/20)", "frontend": "100% on covered routes (manual-alerts, manual-otp-verify, candidate-journey, college-registration); PublicRegistration form not reachable due to absent slug in DB (data gap, not bug)"},
+  "test_credentials": "Admin User / Admin User via POST /api/login; tester record rishi.nayak@blubridge.com / 9443109903 present in DB and returned by /api/bb/manual/applicant/lookup.",
+  "seed_data_creation": "None. No write operations performed on DB. Pytest mocks send_whatsapp & send_email; no outbound messaging. Frontend Playwright never clicked any Send/Submit action that would emit notifications.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "iter95 fully green: 20/20 pytest pass + 4/4 frontend flows pass. Manual-alerts returned 25 cards for q='rish' (truncated), card click loads details, back-to-results works. Manual-otp returned 1 card for 'rishi.nayak', click loads applicant (already-verified status visible). Candidate-journey returned 25 cards, click opens CandidateJourneyModal. College registration: maxlength=13, all 4 phone variants ('+919443109903', '09443109903', '919443109903', '9443109903') normalize to '9443109903' silently onBlur; helper text always visible. PublicRegistration code path is identical to CollegeRegistration but no valid pub/form slug exists in this DB to reach the form step. Curl smoke verified: /api/bb/manual/applicant/search?q=rishi&limit=5 → 5 items truncated=true; /api/bb/manual/applicant/lookup?email=rishi.nayak@blubridge.com → 200 with full applicant record.",
+  "rca of the issue": "Two pytest failures pre-fix (notify_rejected/notify_rejected_with_reason) were caused by messaging.py:448 `FRONTEND_URL = os.environ['FRONTEND_URL']` raising KeyError when pytest runs without the supervisor-injected backend env. Root cause: tests/test_iteration95_search_phone.py did not load /app/backend/.env before `import messaging`. Mitigation: added `from dotenv import load_dotenv; load_dotenv('/app/backend/.env'); load_dotenv('/app/frontend/.env')` at module top. Reproduction: `pytest tests/test_iteration95_search_phone.py` from a shell without REACT_APP_BACKEND_URL/FRONTEND_URL exported. After fix: 20 passed in 11.17s."
+}

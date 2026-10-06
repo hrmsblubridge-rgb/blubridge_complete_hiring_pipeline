@@ -1,0 +1,91 @@
+{
+  "summary": "Iteration 14: Date Filtering Bug Fix Verified. All dates now stored in ISO YYYY-MM-DD format. Date filtering works correctly on /api/summary and /api/role endpoints. Frontend date filter UI sends YYYY-MM-DD format and filters work as expected.",
+  
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  
+  "passed_tests": {
+    "backend": [
+      "Login with admin/admin credentials - returns 200",
+      "GET /api/status: 5 naukri, 5 pipeline, 5 registered",
+      "Dates stored in ISO format: Rishi=2026-03-24, Gautham=2026-03-23, Madhumithaa=2026-03-25, Harshini=2026-03-26, Jona=2026-03-27",
+      "GET /api/summary without date filter: returns all 5 applicants",
+      "GET /api/summary with startDate=2026-03-23&endDate=2026-03-25: returns 3 applicants",
+      "GET /api/summary with startDate=2026-03-24&endDate=2026-03-24: returns 1 (Rishi only)",
+      "GET /api/summary with startDate=2020-01-01&endDate=2020-12-31: returns 0 results",
+      "GET /api/role without date filter: returns all 5 applicants",
+      "GET /api/role with startDate=2026-03-24&endDate=2026-03-26: returns 3 applicants (Rishi, Madhumithaa, Harshini)",
+      "POST /api/reprocess: correctly re-normalizes dates in existing data"
+    ],
+    "frontend": [
+      "Dashboard loads with correct status counts (5 naukri, 5 pipeline, 5 registered)",
+      "/summary page date filter UI works - sends YYYY-MM-DD format",
+      "/summary page filter 2026-03-23 to 2026-03-25 shows 3 applicants",
+      "/summary page filter 2026-03-24 only shows 1 applicant",
+      "/summary page reset shows all 5 applicants",
+      "/roles/:jobRole drilldown date filter UI works",
+      "/roles/:jobRole filter 2026-03-24 to 2026-03-26 shows 3 applicants (Rishi, Madhumithaa, Harshini)",
+      "/roles/:jobRole correctly excludes Gautham (2026-03-23) and Jona (2026-03-27) when filtered",
+      "/roles/:jobRole reset shows all 5 applicants"
+    ]
+  },
+  
+  "feature_verification": {
+    "date_format_fix": {
+      "status": "FIXED",
+      "root_cause": "Dates were stored as DD-Mon-YYYY (e.g. '24-Mar-2026') but filters send YYYY-MM-DD ('2026-03-24')",
+      "fix_applied": "normalize_date() converts all date formats to ISO YYYY-MM-DD before storage",
+      "affected_functions": ["clean_value()", "naukri upload date fields", "renormalize_collection()"]
+    },
+    "date_filtering": {
+      "/api/summary": "Working - filters by date_of_application using ISO string comparison",
+      "/api/role": "Working - filters by date_of_application using ISO string comparison"
+    },
+    "applicant_dates": {
+      "Rishi S Nayak": "2026-03-24",
+      "Gautham Kumar Reddy": "2026-03-23",
+      "Madhumithaa G K": "2026-03-25",
+      "Harshini V M": "2026-03-26",
+      "Jona Delcy C A": "2026-03-27"
+    }
+  },
+  
+  "test_report_links": [
+    "/app/backend/tests/test_iteration14_date_filtering.py",
+    "/app/test_reports/pytest/pytest_results_iteration14.xml"
+  ],
+  
+  "action_items": [],
+  
+  "critical_code_review_comments": [],
+  
+  "updated_files": [
+    "/app/backend/tests/test_iteration14_date_filtering.py"
+  ],
+  
+  "success_rate": {
+    "backend": "100% (10/10 pytest tests passed)",
+    "frontend": "100% (all date filter UI tests passed)"
+  },
+  
+  "test_credentials": {
+    "username": "admin",
+    "password": "admin"
+  },
+  
+  "seed_data_creation": "Test data files at /app/testdata/naukri_test.xlsx and /app/testdata/pipeline_test.xlsx with 5 applicants each",
+  
+  "retest_needed": false,
+  
+  "should_main_agent_self_test": false,
+  
+  "context_for_next_testing_agent": "Date filtering bug is FIXED. All dates are now stored in ISO YYYY-MM-DD format. The normalize_date() function in server.py handles DD-MMM-YYYY, DD-MM-YYYY, and YYYY-MM-DD formats. Both /api/summary and /api/role endpoints correctly filter by date_of_application. Frontend date inputs use type='date' which natively sends YYYY-MM-DD. Score sheet collection is empty (score_sheet_count=0) in this test iteration."
+}
