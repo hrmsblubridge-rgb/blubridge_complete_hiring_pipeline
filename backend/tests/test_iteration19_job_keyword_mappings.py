@@ -31,7 +31,7 @@ class TestJobKeywordMappingsCRUD:
                 for m in mappings_resp.json().get("mappings", []):
                     if m.get("job_role", "").startswith("TEST_"):
                         self.session.delete(f"{BASE_URL}/api/job-keyword-mappings/{m['id']}")
-        except:
+        except Exception:
             pass
     
     def test_list_mappings_returns_200(self):

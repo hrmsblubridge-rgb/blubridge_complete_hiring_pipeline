@@ -42,7 +42,7 @@ class TestDataDrivenMappingFlow:
                 for m in mappings_resp.json().get("mappings", []):
                     if m.get("job_role", "").startswith("TEST_"):
                         self.session.delete(f"{BASE_URL}/api/job-keyword-mappings/{m['id']}")
-        except:
+        except Exception:
             pass
     
     def _create_test_csv(self, job_titles):
