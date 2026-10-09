@@ -10,6 +10,18 @@ const UG_DEGREES = ["BBA","BSc","BA","BBM","B.E","B.Tech","BMC","BJ / BJMC","Oth
 const PG_DEGREES = ["MBA","MSc","MA","M.E","M.Tech","MMC","MJ / MJMC","Other"];
 const GRAD_YEARS = ["2020","2021","2022","2023","2024","2025","2026","2027"];
 
+// Allowed graduation years from the form's conditions (min/max); falls back to defaults.
+const allowedGradYears = (cond) => {
+    const min = Number(cond?.grad_year_min) || null;
+    const max = Number(cond?.grad_year_max) || null;
+    if (!min && !max) return GRAD_YEARS;
+    const lo = min || max - 7;
+    const hi = max || min + 7;
+    const out = [];
+    for (let y = lo; y <= hi && out.length < 50; y++) out.push(String(y));
+    return out;
+};
+
 export default function PublicRegistration() {
     const { formId } = useParams();
     const [form, setForm] = useState(null);
@@ -41,6 +53,7 @@ export default function PublicRegistration() {
         return city && !form.conditions.locations.map(l => l.toLowerCase()).includes(city);
     };
 
+    const [gradOther, setGradOther] = useState(false);
     const [phoneTouched, setPhoneTouched] = useState(false);
     const phoneNorm = normalizePhone(f.phone);
 
@@ -54,6 +67,7 @@ export default function PublicRegistration() {
         // Replace raw input with normalized 10-digit form so backend sees the canonical value.
         setF(p => ({ ...p, phone: phoneNorm.value }));
         if (!state || !city) { alert('Current Location (State) and Preferred Location (City) are required'); return; }
+        if (gradOther && !/^\d{4}$/.test(f.year_of_graduation || '')) { alert('Please enter a valid 4-digit Year of Graduation'); return; }
         setSubmitting(true);
         try {
             const payload = { form_id: formId, ...f, age: f.age ? Number(f.age) : null, year_of_graduation: f.year_of_graduation ? Number(f.year_of_graduation) : null };
@@ -505,11 +519,19 @@ export default function PublicRegistration() {
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5 mb-5">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">Year of Graduation:</label>
-                                    <select value={f.year_of_graduation} onChange={e => setF(p => ({...p, year_of_graduation:e.target.value}))} data-testid="reg-year" required
+                                    <select value={gradOther ? 'Other' : f.year_of_graduation} data-testid="reg-year" required
+                                        onChange={e => { const v = e.target.value; setGradOther(v === 'Other'); setF(p => ({...p, year_of_graduation: v === 'Other' ? '' : v})); }}
                                         className="w-full bg-white border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-400 appearance-none">
                                         <option value="">Select</option>
-                                        {GRAD_YEARS.map(y => <option key={y}>{y}</option>)}
+                                        {allowedGradYears(form?.conditions).map(y => <option key={y}>{y}</option>)}
+                                        <option value="Other">Other</option>
                                     </select>
+                                    {gradOther && (
+                                        <input type="text" inputMode="numeric" placeholder="Enter year (e.g. 2019)" autoFocus
+                                            value={f.year_of_graduation} data-testid="reg-year-other"
+                                            onChange={e => setF(p => ({...p, year_of_graduation: e.target.value.replace(/\D/g, '').slice(0, 4)}))}
+                                            className="mt-2 w-full bg-[#f5f5f5] border border-gray-200 rounded px-4 py-3 text-sm focus:outline-none focus:border-blue-400 focus:bg-white" />
+                                    )}
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1.5">College:</label>
