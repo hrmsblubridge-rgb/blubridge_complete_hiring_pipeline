@@ -8,7 +8,8 @@ export const BulkConfirmDialog = ({ action, items, onClose, onDone }) => {
     const [consent, setConsent] = useState(false);
     const [word, setWord] = useState('');
     const [busy, setBusy] = useState(false);
-    const WORD = action === 'approve' ? 'APPROVE' : 'DELETE';
+    const [shown] = useState(action);
+    const WORD = shown === 'approve' ? 'APPROVE' : 'DELETE';
 
     const run = async () => {
         setBusy(true);

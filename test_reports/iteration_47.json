@@ -1,0 +1,41 @@
+{
+  "summary": "Phase 3 AI Calling Testing Mode (Test Candidate Management) tested end-to-end: backend pytest 17/17 pass (template xlsx/csv, preview categories, .txt/column-mismatch rejection, validate-rows, import rejection + success, list filters/search/pagination, manual create validation/409, approve last4+consent, edit-invalidates-approval with audit, bulk approve/revoke/delete confirmations, single delete 404 after, initiate 423 exact message, live 403, stop calls, emergency stop remains ACTIVE, ai_call_jobs=0/ai_calls=0, no Bolna requests in logs). UI flows all work: sample downloads, unchanged sample -> 2 example rows + import disabled, mixed CSV -> chips, cell edit -> re-validate -> exclude invalid -> re-validate -> import toast, .txt toast, manual add (HTML5 required + server invalid phone toast, 9000000260 normalized to +91), approve dialog, edit phone -> 'Approval was invalidated' toast + Needs approval, pagination 20/page, filters, bulk approve/revoke/delete, single delete, Call Selected/Call Now disabled, exact disabled message, Stop Calls toast. Regression routes all load. Found 3 UI state bugs (stale dialog state, pagination after delete).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/ai-calling/test-candidates", "issue": "Loads up to 5000 docs into memory and filters readiness in Python before paginating; fine for test volumes but silently caps at 5000."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ApproveDialog.jsx", "issue": "consent/last4 state is never reset. After approving one candidate (or after an edit invalidates approval), reopening Approve shows consent checkbox ALREADY CHECKED and previous last4 (e.g. '0260') pre-filled. Weakens the explicit consent confirmation. Reset state when `candidate` changes (useEffect on candidate) or key the dialog by candidate.id.", "selector": "[data-testid=approve-consent-checkbox], [data-testid=approve-last4-input]", "priority": "HIGH"},
+      {"component": "BulkConfirmDialog.jsx", "issue": "consent and typed word persist between openings. Second Bulk approve opens with consent checked and 'APPROVE' already typed -> Confirm enabled immediately, defeating the typed-confirmation safeguard. Opening Delete after Approve shows 'APPROVE' in the box. Reset consent/word when `action` changes/opens. Also during close animation the title flips to 'Delete test candidates' because action becomes null.", "selector": "[data-testid=bulk-consent-checkbox], [data-testid=bulk-confirm-input]", "priority": "HIGH"},
+      {"component": "CandidateList / TestingMode pagination", "issue": "After bulk deleting all rows while on page 2, UI shows 'Page 2 of 1' with empty list; q.page is not clamped/reset to 1 after delete (bulk or single) when the current page becomes empty.", "selector": "[data-testid=pagination]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Testing Mode manual form / edit dialog", "issues": ["Interview date and time use native browser <input type=date/time> pickers instead of shadcn Calendar/Popover (inconsistent styling)."]},
+      {"screen": "Upload preview", "issues": ["After excluding rows and re-validating, the 'Total' chip shows only included rows (Total 3, Excluded 4) — original file total is lost; consider 'Total 7 · Included 3'."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_ai_calling_phase3.py", "/app/test_reports/pytest/pytest_phase3.xml"],
+  "action_items": [
+    "Reset ApproveDialog state (consent=false, last4='') whenever a new candidate is opened",
+    "Reset BulkConfirmDialog state (consent=false, word='') whenever the dialog opens / action changes; keep title stable during close animation",
+    "Reset/clamp q.page when the current page becomes empty after deletes (or use data.pages from response to clamp)",
+    "Optional: replace native date/time inputs with shadcn components"
+  ],
+  "critical_code_review_comments": [
+    "TestingMode.load keeps stale `selected` entries for deleted candidates (fresh[k] || v) — after single delete of a selected row it stays counted in 'N selected' and would be sent to bulk endpoints (backend tolerates via not_found).",
+    "Bulk revoke has no confirmation dialog (acceptable per spec, but inconsistent with bulk approve/delete).",
+    "Backend gating is solid: initiate always 423, live 403, import re-validates server side and rejects if any row invalid, approval requires last4 + consent and is invalidated on phone/name change with audit entry."
+  ],
+  "updated_files": ["/app/backend/tests/test_ai_calling_phase3.py"],
+  "success_rate": {"backend": "100% (17/17)", "frontend": "~90% (all flows functional; 3 state bugs)"},
+  "test_credentials": "Admin User / Admin User (POST /api/login, cookie)",
+  "seed_data_creation": "Created temporary TEST_* candidates with phones +9190000002xx (pytest + UI); all deleted by id. Final state: 6 original candidates untouched (2 approved), emergency_stop still ACTIVE, ai_call_jobs=0, ai_calls=0.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: REACT_APP_BACKEND_URL=... pytest /app/backend/tests/test_ai_calling_phase3.py -p no:randomly (tests are order-dependent within module; uses +9190000002xx phones and cleans up). Retest ApproveDialog/BulkConfirmDialog state reset and pagination after delete. Do not release emergency stop.",
+  "rca of the issue": "Dialogs are always mounted (open controlled by prop) and their useState values are initialized once, so consent/word/last4 survive between openings. Pagination: q.page stays at old value after deletes; backend returns pages=1 but frontend doesn't clamp."
+}

@@ -3,9 +3,9 @@ import { toast } from 'sonner';
 import { aiApi, errMsg } from '../../pages/ai-calling/aiApi';
 import { COLS, CATEGORY_LABELS } from './constants';
 
-const Summary = ({ res, excluded }) => (
+const Summary = ({ res, excluded, fileTotal }) => (
     <div className="flex flex-wrap gap-2 mb-3" data-testid="upload-summary">
-        <span className="px-2.5 py-1 rounded-full bg-zinc-100 text-xs font-semibold">Total {res.total}</span>
+        <span className="px-2.5 py-1 rounded-full bg-zinc-100 text-xs font-semibold">Rows in file {fileTotal} · Checked {res.total}</span>
         <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-semibold" data-testid="summary-valid">Valid {res.valid}</span>
         <span className="px-2.5 py-1 rounded-full bg-rose-100 text-rose-800 text-xs font-semibold" data-testid="summary-invalid">Invalid {res.invalid}</span>
         {excluded > 0 && <span className="px-2.5 py-1 rounded-full bg-zinc-200 text-xs font-semibold">Excluded {excluded}</span>}
@@ -51,7 +51,7 @@ export const UploadPreview = ({ preview, onClose, onImported }) => {
     return (
         <div className="mt-4" data-testid="upload-preview">
             <p className="text-sm text-[#1a2332] mb-2"><b>{preview.filename}</b> — edit cells to correct errors or exclude rows, then re-validate.</p>
-            <Summary res={res} excluded={excluded.size} />
+            <Summary res={res} excluded={excluded.size} fileTotal={preview.total} />
             <div className="overflow-x-auto max-h-96 border border-[#e5e3d8] rounded-xl">
                 <table className="w-full text-xs">
                     <thead className="bg-[#faf9f1] text-[#6b7280] sticky top-0 z-10">

@@ -22,6 +22,7 @@ export default function TestingMode() {
             const params = new URLSearchParams({ ...q, page_size: 20 }).toString();
             const [s, c, b] = await Promise.all([aiApi.get('/settings'), aiApi.get(`/test-candidates?${params}`), aiApi.get('/test-batches')]);
             setSettings(s.data); setData(c.data); setBatches(b.data.items);
+            if (c.data.page > c.data.pages) setQ(p => ({ ...p, page: c.data.pages }));
             const fresh = Object.fromEntries(c.data.items.map(x => [x.id, x]));
             setSelected(sel => Object.fromEntries(Object.entries(sel).map(([k, v]) => [k, fresh[k] || v])));
         } catch (e) { toast.error(errMsg(e, 'Failed to load')); }

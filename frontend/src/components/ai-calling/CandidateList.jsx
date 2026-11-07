@@ -91,9 +91,9 @@ export const CandidateList = ({ data, q, setQ, selected, setSelected, reload }) 
                     <BulkBtn disabled={(data.page || 1) >= (data.pages || 1)} onClick={() => setQ(p => ({ ...p, page: p.page + 1 }))} data-testid="page-next">Next</BulkBtn>
                 </div>
             </div>
-            <ApproveDialog candidate={approving} onClose={() => setApproving(null)} onDone={() => { setApproving(null); reload(); }} />
+            <ApproveDialog key={approving?.id || 'none'} candidate={approving} onClose={() => setApproving(null)} onDone={() => { setApproving(null); reload(); }} />
             <EditCandidateDialog candidate={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); reload(); }} />
-            <BulkConfirmDialog action={bulk} items={Object.values(selected)} onClose={() => setBulk(null)} onDone={done} />
+            <BulkConfirmDialog key={bulk || 'none'} action={bulk} items={Object.values(selected)} onClose={() => setBulk(null)} onDone={done} />
         </Card>
     );
 };

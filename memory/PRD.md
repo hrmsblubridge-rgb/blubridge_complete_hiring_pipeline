@@ -1,3 +1,10 @@
+## AI Calling — Phase 3 Test Candidate Management (Nov 2026)
+- New backend/ai_calling/candidates.py: sample sheet (xlsx/csv), upload preview → validate-rows → import (all-or-nothing), manual CRUD, approve/revoke/opt-out, bulk approve (APPROVE + consent)/revoke/delete (DELETE), list with search/filters/pagination/readiness, calls/initiate (423), calls/stop.
+- New collection ai_upload_batches; ai_test_candidates gains test_candidate_id (unique), interview_timezone, upload_batch_id, consent_status, approval_audit[].
+- Frontend: SampleSheetUpload, UploadPreview, CandidateList, CandidateFilters, CandidateFields, ManualCandidateForm, EditCandidateDialog, BulkConfirmDialog, CallingControls, constants.
+- Emergency stop left ACTIVE. Calling disabled. Live locked.
+
+
 ## AI Calling (Bolna) — Phase 2 foundation (Nov 2026)
 - Isolated module: backend/ai_calling/* (router /api/ai-calling, gate.py permission gate, bolna_client.py stub with no network), frontend pages/ai-calling/* + components/ai-calling/*.
 - Collections: ai_call_settings, ai_test_candidates, ai_test_batches, ai_call_jobs, ai_calls (ai_call_jobs/ai_calls empty).
