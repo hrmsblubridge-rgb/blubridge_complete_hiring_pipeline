@@ -1,0 +1,38 @@
+{
+  "summary": "Phase 3, 3.1 and 4A retest (no real calls). Backend: 37/37 pytest pass (13 new Phase 4A API tests, 7 Phase 4A unit tests, 17 Phase 3 regression tests). UI checks: (1) The approve dialog reopens with consent unchecked and the last-4 field empty. (2) The bulk-approve dialog reopens with consent unchecked and the word field empty. (3) Pagination: with 21 rows, deleting the only row on page 2 drops back to 'Page 1 of 1' with 20 rows. (4) The upload summary shows 'Rows in file 3 · Checked 3'. (5) Dummy key plus caller '12ab': toast reads 'Calling number must be in international format... — API key was not saved.' Only PUT /provider/settings was sent, and config v14, the key mask (bf1d) and the caller mask (1993) did not change. (6) Test Connection was clicked once: verified. Checks: auth, agent ('Interview Confirmation Agent') and caller_number (plivo) verified; caller_agent_link warning; extraction unverified (all 6 fields missing); outbound_authorization cannot_verify. (7) Rotate webhook URL was clicked once and the URL was shown once (not shown after reload). A POST with the valid token and an unknown execution returned {matched:false}. Access logs show [redacted]. (8) Dry run: the approved candidate shows POST https://api.bolna.ai/call, Bearer ••••••••, +91*****0310 / +91*****1993, the 6 user_data variables, 'Tuesday, 15 December 2026' and '2 PM IST', and would_send false. The pending candidate shows dry-run-blocked. (9) call-selected-btn and all 20 call-now-* buttons are disabled; /calls/initiate returns 423; ai_calls=0 and ai_call_jobs=0; no api.bolna.ai/call in the logs; emergency stop is still ACTIVE. (10) Pages /home, /dashboard, /hiring-forms, /tester-credentials, /ai-calling, /live and /history load with no page errors. One bug found and fixed: the webhook returned 500 for a JSON body that is not an object.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/ai-calling/webhook/bolna/{token}", "issue": "With a valid token, a JSON body that is not an object (string or array) caused a 500 (AttributeError: 'str' object has no attribute 'get'). FIXED by the testing agent: added an isinstance(payload, dict) check that returns 400 'Invalid JSON'."},
+      {"endpoint": "backend.out.log", "issue": "One older access-log line, from before the redaction filter was added, contains a webhook token in plaintext. That token is no longer valid because the testing agent rotated the webhook once, as allowed. Consider truncating or rotating that log."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "DryRunDialog", "issues": ["Informational labels end up doubled, e.g. 'Emergency stop inactive (dispatch would be blocked) (blocks real dispatch)'", "For a blocked candidate, the failed checks are shown only by a red icon. Consider adding text or a colour on the label."]},
+      {"screen": "BolnaConfigPanel", "issues": ["The Test Connection label changes to 'Testing…' whenever busy is true, including during Save Configuration (shared busy flag)", "After a failed save, the API key input is cleared, so the user has to type the key again (secure, but adds a step)."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_ai_calling_phase4a_api.py", "/app/backend/tests/test_ai_calling_phase4a.py", "/app/backend/tests/test_ai_calling_phase3.py", "/app/test_reports/pytest/pytest_phase4a.xml"],
+  "action_items": [
+    "IMPORTANT: The webhook URL was rotated once during testing, so the old URL no longer works. The user must click 'Rotate webhook URL' again and paste the new URL into the Bolna agent's webhook setting before Phase 4B.",
+    "Optional: remove the duplicate '(blocks real dispatch)' suffix in DryRunDialog",
+    "Optional: use a separate busy state for Test Connection and Save",
+    "Update /app/memory/test_credentials.md: the password is QAZwsx##123, not 'Admin User'"
+  ],
+  "critical_code_review_comments": [
+    "provider._apply sets status to configured_unverified but keeps last_verification, so after a config change the UI still shows the old 'Last test' checks. Consider marking them stale.",
+    "test_connection: when Bolna returns 404 for the agent, auth is marked 'verified'. Bolna may also return 404 for an agent that belongs to another account, so 'verified' may overstate it.",
+    "bolna_webhook: X-Forwarded-For is taken from the client and can be spoofed, so ip_allowlisted is informational only (which is fine because the execution is re-fetched from Bolna). There is no limit on payload size.",
+    "dry_run does not check whether the interview date is in the past, or the call window/limits. Make sure the Phase 4B gate covers these."
+  ],
+  "updated_files": ["/app/backend/ai_calling/calls.py (non-dict JSON webhook body -> 400)", "/app/backend/tests/test_ai_calling_phase4a_api.py (new)"],
+  "success_rate": {"backend": "100% (37/37; 1 minor 500 found and fixed)", "frontend": "100%"},
+  "test_credentials": "Admin User / QAZwsx##123 (the /app/memory/test_credentials.md file is out of date)",
+  "seed_data_creation": "Created 21 TEST_p4_* (+919000000310-330) and pytest TEST_dry_* (+9190000003xx) candidates. All were deleted by id; the count is back to 6. Uploaded preview rows were cancelled, not imported. 3+ ai_dry_runs docs and 2+ ai_webhook_events (unmatched) docs remain as audit records.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "A REAL Bolna config is stored (v14, verified). Do NOT run test_ai_calling_provider_phase31.py: it saves dummy keys and CLEARS the config. test_ai_calling_phase4a_api.py is safe (it only hits the invalid-caller path and CSRF 403s, and makes no Bolna calls). Test Connection was used once and Rotate webhook URL was used once in this iteration. Candidate list sorts newest first, page_size 20. Run pytest with -p no:xdist."
+}

@@ -25,7 +25,7 @@ export const DryRunDialog = ({ candidate, onClose }) => {
                             {r.checks.map(c => (
                                 <li key={c.key} className="flex items-center gap-2 text-xs">
                                     {c.ok ? <CheckCircle size={14} weight="fill" className="text-emerald-600" /> : c.informational ? <Info size={14} weight="fill" className="text-amber-600" /> : <XCircle size={14} weight="fill" className="text-rose-500" />}
-                                    {c.label}{c.informational && !c.ok ? ' (blocks real dispatch)' : ''}
+                                    {c.label}{c.informational && !c.ok ? ' — blocks real dispatch' : ''}
                                 </li>
                             ))}
                         </ul>

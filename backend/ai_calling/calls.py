@@ -46,7 +46,7 @@ async def dry_run(cid: str, request: Request):
         {"key": "consent", "ok": cand.get("consent_confirmed") is True, "label": "Recipient consent confirmed"},
         {"key": "not_opted_out", "ok": not cand.get("opted_out"), "label": "Recipient has not opted out"},
         {"key": "provider_validated", "ok": provider_ready(prov), "label": "Bolna configuration verified (Test Connection)"},
-        {"key": "emergency_stop", "ok": not s["emergency_stop"], "label": "Emergency stop inactive (dispatch would be blocked)", "informational": True},
+        {"key": "emergency_stop", "ok": not s["emergency_stop"], "label": "Emergency stop inactive", "informational": True},
         {"key": "server_enabled", "ok": gate.server_calling_enabled(), "label": "Server-side calling enabled", "informational": True},
         {"key": "bolna_approved", "ok": gate.BOLNA_INTEGRATION_APPROVED, "label": "Real calls approved (Phase 4B)", "informational": True},
     ]
@@ -104,6 +104,8 @@ async def bolna_webhook(token: str, request: Request):
         payload = await request.json()
     except ValueError:
         raise HTTPException(400, "Invalid JSON") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Invalid JSON")
     ex_id = str(payload.get("id") or payload.get("execution_id") or "")
     status = str(payload.get("status") or "")
     call = await db().ai_calls.find_one({"execution_id": ex_id}) if ex_id else None

@@ -1,3 +1,12 @@
+## AI Calling — Phase 4A Bolna verification + dry-run (Nov 2026)
+- bolna_client.py: real read-only GETs (/v2/agent/{id}, /phone-numbers/all, /executions/{id}); build_call_request; place_call still disabled.
+- execution.py: spoken date/time, user_data mapping, normalize_execution/extraction (empty ⇒ UNKNOWN), status ranking, extraction config check.
+- calls.py: POST /test-candidates/{id}/dry-run (masked preview, never sends), POST /webhook/bolna/{token} (hashed secret route, unmatched ignored, idempotent events, authoritative re-fetch, out-of-order ignored), uvicorn access-log token redaction.
+- provider.py: test-connection implemented (verified status stored with verified_config_version), webhook-token rotate (shown once, hash stored).
+- New collections: ai_webhook_events (unique execution_id+status+payload_hash), ai_dry_runs.
+- Real config verified: agent "Interview Confirmation Agent", caller on plivo; caller not linked to agent; 6 extraction fields NOT found in agent config.
+
+
 ## AI Calling — Phase 3.1 Secure Bolna Configuration (Nov 2026)
 - backend/ai_calling/provider.py: /api/ai-calling/provider (GET masked status, PUT /credentials write-only encrypted key, PUT /settings agent_id + caller_number, POST /clear with CLEAR, GET /audit, POST /test-connection 423).
 - Fernet encryption; master key = backend secret AI_PROVIDER_ENCRYPTION_KEY (process env secret, not in .env). key_id fingerprint detects key mismatch.
