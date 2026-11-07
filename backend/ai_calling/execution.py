@@ -55,7 +55,8 @@ def _field_value(v):
     if isinstance(v, dict) and ("objective" in v or "subjective" in v):
         if v.get("status") not in (None, "completed"):
             return None
-        return v.get("objective") if v.get("objective") is not None else v.get("subjective")
+        obj = v.get("objective")
+        return obj if obj not in (None, "") else v.get("subjective")
     return v
 
 
@@ -88,7 +89,7 @@ def normalize_extraction(extracted) -> dict:
     data = data if isinstance(data, dict) else {}
     flat, meta, category = _flatten(data)
     vals = {f: _field_value(flat[f]) for f in flat}
-    raw_att = str(vals.get("attendance_status") or "").strip()
+    raw_att = re.sub(r"[\s\-]+", "_", str(vals.get("attendance_status") or "").strip())
     att = raw_att.upper() if raw_att.upper() in ATTENDANCE_VALUES else ATTENDANCE.get(raw_att.lower().replace(" ", "_"), "UNKNOWN")
     qs = vals.get("candidate_questions")
     if isinstance(qs, str):
@@ -124,7 +125,8 @@ def extraction_from_dispositions(dispositions: list, errors: int = 0) -> dict:
     """Verify required fields from Bolna disposition definitions (GET /dispositions/{id})."""
     by_name = {}
     for d in dispositions:
-        n = str(d.get("name") or "").strip()
+        d = d.get("data") if isinstance(d.get("data"), dict) else d
+        n = re.sub(r"\s+", "_", str(d.get("name") or "").strip().lower())
         if n:
             by_name[n] = {"category": d.get("category"),
                           "type": "objective" if d.get("is_objective") else "subjective" if d.get("is_subjective") else "none",

@@ -1,3 +1,9 @@
+## AI Calling — Extraction verification fix (Nov 2026)
+- Bolna extraction fields are "dispositions" (agent.dispositions = IDs; GET /dispositions/{id}?agent_id=). Validator now reads them; verified live: all 6 in "Interview Call Results".
+- normalize_extraction supports extracted_data[category][field]{objective|subjective,status,confidence}; Yes/No/Unknown → True/False/None; unknown attendance → UNKNOWN.
+- tests/test_ai_calling_provider_phase31.py now skipped unless AI_TEST_ALLOW_PROVIDER_WRITES=1 (it overwrote the real stored key once).
+
+
 ## AI Calling — Phase 4A Bolna verification + dry-run (Nov 2026)
 - bolna_client.py: real read-only GETs (/v2/agent/{id}, /phone-numbers/all, /executions/{id}); build_call_request; place_call still disabled.
 - execution.py: spoken date/time, user_data mapping, normalize_execution/extraction (empty ⇒ UNKNOWN), status ranking, extraction config check.

@@ -1,0 +1,26 @@
+{
+  "summary": "Bolna extraction verification fix tested. Unit tests in test_ai_calling_phase4a.py: 10/10 passed. phase4a_api + phase3 API tests: 29 passed, 1 skipped. I added test_ai_calling_extraction_edge.py with 8 tests and all passed. They cover garbage and empty inputs, Yes/No/Unknown values, unknown attendance staying UNKNOWN, pending status giving None, and the _extraction_check paths (all found / missing but readable / unreadable / no dispositions so fall back to agent config). Code review of normalize_extraction, _flatten, _field_value, extraction_from_dispositions and the test_connection state logic found it correct for the requested rules: verified only when all 6 are found via dispositions; failed when readable but missing; cannot_verify when unreadable; fallback when the agent has no dispositions. Nothing is hardcoded. UI: login works, /ai-calling/settings Bolna panel loads, and the previous verification showed extraction VERIFIED 'all 6 fields found as dispositions (Interview Call Results)'. One Test Connection click with the dummy key returned verification_failed: auth and agent FAILED 'Bolna rejected the API key', outbound CANNOT VERIFY, extraction null. No key leak; only the masked last4 is shown. ai_calls=0, ai_call_jobs=0, emergency_stop=True, 0 'POST https://api.bolna.ai/call' in backend.err.log, no Authorization/Bearer in logs.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "provider._extraction_check", "issue": "IDs are taken only when agent['dispositions'] items are strings. If Bolna ever returns objects ({id:...}), ids is empty and the check silently falls back to agent-config text, which reports 'unverified'. Consider also accepting dict items with an 'id' key."},
+      {"endpoint": "execution.extraction_from_dispositions", "issue": "Name matching is exact and case-sensitive ('Attendance Status' or 'attendance_status ' with an inner variant would not match). There is also no unwrap if GET /dispositions returns {data:{...}}. Live behaviour was verified by the main agent, so this is defensive only."},
+      {"endpoint": "execution.normalize_extraction", "issue": "'wrong number' / 'do not call' (with spaces) map to UNKNOWN, because the upper-case match needs underscores and the ATTENDANCE map lacks these aliases. This is safe (never confirms), but loses information. _field_value prefers objective even when it is an empty string over subjective."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [{"screen": "AI Calling Settings - Bolna panel", "issues": ["Agent ID input shows the full agent ID in plaintext while the helper text below shows it masked ('Current: ••••7a9ba5'). This is inconsistent, but not a secret."]}]
+  },
+  "test_report_links": ["/app/backend/tests/test_ai_calling_phase4a.py", "/app/backend/tests/test_ai_calling_phase4a_api.py", "/app/backend/tests/test_ai_calling_phase3.py", "/app/backend/tests/test_ai_calling_extraction_edge.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": ["Optional: accept dict disposition entries with 'id' in _extraction_check", "Optional: add 'wrong_number'/'do_not_call' space-variant aliases", "User must re-enter the real Bolna API key (the stored one is a dummy ending 9876); status is now verification_failed after the one allowed Test Connection click"],
+  "critical_code_review_comments": ["No blocking issues. The state logic matches the spec, and a failed extraction correctly makes the overall status verification_failed.", "test_credentials.md lists password 'Admin User', but the working password is 'QAZwsx##123'. Update /app/memory/test_credentials.md."],
+  "updated_files": ["/app/backend/tests/test_ai_calling_extraction_edge.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Admin User / QAZwsx##123 (works). The credentials file is outdated: it says password 'Admin User'.",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Stored Bolna key is a DUMMY, so Test Connection returns 'Bolna rejected the API key'. Do not save/clear credentials or rotate the webhook. Emergency stop is ON. Do not run test_ai_calling_provider_phase31.py with AI_TEST_ALLOW_PROVIDER_WRITES=1. 1 Test Connection click was made in this iteration."
+}

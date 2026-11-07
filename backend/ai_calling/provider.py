@@ -231,7 +231,8 @@ async def provider_audit(request: Request):
 async def _extraction_check(bc, api_key: str, agent_id: str, agent: dict) -> dict:
     """Extraction fields live in Bolna 'dispositions' referenced by ID from the agent, not in agent config."""
     from .execution import extraction_config_check, extraction_from_dispositions
-    ids = [i for i in (agent.get("dispositions") or []) if isinstance(i, str)][:30]
+    ids = [i if isinstance(i, str) else str(i.get("id")) for i in (agent.get("dispositions") or [])
+           if isinstance(i, str) or (isinstance(i, dict) and i.get("id"))][:30]
     if not ids:
         return extraction_config_check(agent)
     defs, errors = [], 0
