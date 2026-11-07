@@ -2,26 +2,34 @@ import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { aiApi, errMsg } from './aiApi';
 import { AICallingHeader } from '../../components/ai-calling/AICallingHeader';
-import { UploadPanel } from '../../components/ai-calling/UploadPanel';
-import { ManualEntryForm } from '../../components/ai-calling/ManualEntryForm';
-import { TestCandidateTable } from '../../components/ai-calling/TestCandidateTable';
+import { SampleSheetUpload } from '../../components/ai-calling/SampleSheetUpload';
+import { ManualCandidateForm } from '../../components/ai-calling/ManualCandidateForm';
+import { CandidateList } from '../../components/ai-calling/CandidateList';
+import { CallingControls } from '../../components/ai-calling/CallingControls';
 import { BatchPanel } from '../../components/ai-calling/BatchPanel';
+
+const Q0 = { search: '', approval: 'all', source: '', language: '', ready: '', page: 1 };
 
 export default function TestingMode() {
     const [settings, setSettings] = useState(null);
-    const [items, setItems] = useState([]);
+    const [data, setData] = useState({ items: [] });
     const [batches, setBatches] = useState([]);
-    const [selected, setSelected] = useState([]);
+    const [selected, setSelected] = useState({});
+    const [q, setQ] = useState(Q0);
 
     const load = useCallback(async () => {
         try {
-            const [s, c, b] = await Promise.all([aiApi.get('/settings'), aiApi.get('/test-candidates'), aiApi.get('/test-batches')]);
-            setSettings(s.data); setItems(c.data.items); setBatches(b.data.items);
-            const ok = new Set(c.data.items.filter(x => x.approved && !x.opted_out).map(x => x.id));
-            setSelected(sel => sel.filter(id => ok.has(id)));
+            const params = new URLSearchParams({ ...q, page_size: 20 }).toString();
+            const [s, c, b] = await Promise.all([aiApi.get('/settings'), aiApi.get(`/test-candidates?${params}`), aiApi.get('/test-batches')]);
+            setSettings(s.data); setData(c.data); setBatches(b.data.items);
+            const fresh = Object.fromEntries(c.data.items.map(x => [x.id, x]));
+            setSelected(sel => Object.fromEntries(Object.entries(sel).map(([k, v]) => [k, fresh[k] || v])));
         } catch (e) { toast.error(errMsg(e, 'Failed to load')); }
-    }, []);
-    useEffect(() => { load(); }, [load]);
+    }, [q]);
+    useEffect(() => {
+        const t = setTimeout(load, 250);
+        return () => clearTimeout(t);
+    }, [load]);
 
     const activate = async () => {
         try { await aiApi.post('/mode', { mode: settings?.mode === 'testing' ? 'off' : 'testing' }); load(); }
@@ -38,10 +46,11 @@ export default function TestingMode() {
                         {settings?.mode === 'testing' ? 'Turn Testing Mode off' : 'Activate Testing Mode'}
                     </button>
                 </div>
-                <UploadPanel onImported={load} />
-                <ManualEntryForm onSaved={load} />
-                <TestCandidateTable items={items} selected={selected} setSelected={setSelected} reload={load} />
-                <BatchPanel selected={selected} clearSelected={() => setSelected([])} batches={batches} reload={load} startEnabled={!!settings?.bolna_integration_approved} />
+                <SampleSheetUpload onImported={load} />
+                <ManualCandidateForm settings={settings} onSaved={load} />
+                <CallingControls selectedCount={Object.keys(selected).length} />
+                <CandidateList data={data} q={q} setQ={setQ} selected={selected} setSelected={setSelected} reload={load} />
+                <BatchPanel selected={Object.keys(selected)} clearSelected={() => setSelected({})} batches={batches} reload={load} startEnabled={!!settings?.bolna_integration_approved} />
             </main>
         </div>
     );

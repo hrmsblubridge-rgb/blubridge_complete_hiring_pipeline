@@ -65,7 +65,16 @@ def mask_phone(p: str) -> str:
     return (p[:3] + "*****" + p[-4:]) if p and len(p) >= 8 else (p or "")
 
 
-# ---------- row normalisation ----------
+
+# ---------- row normalisation (Phase 3 rules) ----------
+TIMEZONE = "Asia/Kolkata"
+EXAMPLE_PREFIX = "EXAMPLE"
+MANDATORY = ["candidate_name", "phone_number", "job_role", "interview_date",
+             "interview_time", "language", "company_name", "office_address"]
+ERROR_CATEGORIES = ["missing_field", "invalid_phone", "invalid_date", "invalid_time",
+                    "invalid_language", "invalid_value", "example_row",
+                    "duplicate_in_file", "duplicate_existing"]
+
 
 def _clean(v) -> str:
     if v is None:
@@ -76,7 +85,7 @@ def _clean(v) -> str:
 
 def normalize_phone(raw) -> str:
     s = _clean(raw)
-    if re.fullmatch(r"\d+\.0", s):
+    if re.fullmatch(r"\+?\d+\.0", s):
         s = s[:-2]
     d = re.sub(r"\D", "", s)
     if len(d) == 12 and d.startswith("91"):
@@ -84,69 +93,80 @@ def normalize_phone(raw) -> str:
     elif len(d) == 11 and d.startswith("0"):
         d = d[1:]
     if len(d) != 10 or d[0] not in "6789":
-        raise ValueError("phone_number must be a valid 10-digit Indian mobile number")
+        raise ValueError("phone_number must be an Indian mobile in +91XXXXXXXXXX format")
     return "+91" + d
 
 
 def parse_date(raw) -> str:
     s = _clean(raw)[:10]
-    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
-        try:
-            return datetime.strptime(s, fmt).date().isoformat()
-        except ValueError:
-            continue
-    raise ValueError("interview_date must be YYYY-MM-DD or DD-MM-YYYY")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+        raise ValueError("interview_date must be YYYY-MM-DD")
+    return date.fromisoformat(s).isoformat()
 
 
 def parse_time(raw) -> str:
-    s = _clean(raw).upper().replace(".", "")
-    for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p", "%I %p", "%I%p"):
-        try:
-            return datetime.strptime(s, fmt).strftime("%H:%M")
-        except ValueError:
-            continue
-    raise ValueError("interview_time must be HH:MM (24h) or h:mm AM/PM")
+    s = _clean(raw)
+    m = re.fullmatch(r"(\d{1,2})(?:\.0)?", s) or re.fullmatch(r"(\d{1,2}):([0-5]\d)(?::[0-5]\d)?", s)
+    if m and 0 <= int(m.group(1)) <= 23:
+        mins = int(m.group(2)) if m.re.groups > 1 and m.group(2) else 0
+        return f"{int(m.group(1)):02d}:{mins:02d}"
+    raise ValueError("interview_time must be HH in 24-hour IST (e.g. 10 or 14), optionally HH:MM")
 
 
-def parse_yes(raw) -> bool:
-    return _clean(raw).lower() in ("yes", "y", "true", "1")
+def parse_yes_no(raw):
+    s = _clean(raw).upper()
+    return True if s in ("YES", "Y") else False if s in ("NO", "N") else None
 
 
-def validate_row(row: dict, settings: dict) -> tuple:
-    """Return (clean_fields, errors). Never authorises anything."""
+def _err(field, category, message):
+    return {"field": field, "category": category, "message": message}
+
+
+def error_text(errors: list) -> str:
+    return "; ".join(e["message"] for e in errors)
+
+
+def validate_row(row: dict, require_flag: bool = False) -> tuple:
+    """Return (clean_fields, errors[]). Never authorises anything."""
     errors, out = [], {}
+    for f in MANDATORY:
+        if not _clean(row.get(f)):
+            errors.append(_err(f, "missing_field", f"{f} is required"))
+    missing = {e["field"] for e in errors}
     out["candidate_name"] = _clean(row.get("candidate_name"))
-    if not out["candidate_name"]:
-        errors.append("candidate_name is required")
-    try:
-        out["phone_e164"] = normalize_phone(row.get("phone_number"))
-    except ValueError as e:
-        out["phone_e164"] = _clean(row.get("phone_number"))
-        errors.append(str(e))
+    if out["candidate_name"].upper().startswith(EXAMPLE_PREFIX):
+        errors.append(_err("candidate_name", "example_row", "Example row — replace with a real test recipient or delete it"))
+    out["phone_e164"] = _clean(row.get("phone_number"))
+    if "phone_number" not in missing:
+        try:
+            out["phone_e164"] = normalize_phone(row.get("phone_number"))
+        except ValueError as e:
+            errors.append(_err("phone_number", "invalid_phone", str(e)))
     out["job_role"] = _clean(row.get("job_role"))
-    if not out["job_role"]:
-        errors.append("job_role is required")
-    try:
-        out["interview_date"] = parse_date(row.get("interview_date"))
-        if date.fromisoformat(out["interview_date"]) < datetime.now(IST).date():
-            errors.append("interview_date is in the past")
-    except ValueError as e:
-        out["interview_date"] = _clean(row.get("interview_date"))
-        errors.append(str(e))
-    try:
-        out["interview_time"] = parse_time(row.get("interview_time"))
-    except ValueError as e:
-        out["interview_time"] = _clean(row.get("interview_time"))
-        errors.append(str(e))
-    lang = _clean(row.get("language")).lower()
-    out["language"] = LANGUAGES.get(lang, _clean(row.get("language")))
-    if lang not in LANGUAGES:
-        errors.append("language must be English or Tamil")
-    out["company_name"] = _clean(row.get("company_name")) or settings.get("default_company_name", "")
-    if not out["company_name"]:
-        errors.append("company_name is required")
-    out["office_address"] = _clean(row.get("office_address")) or settings.get("default_office_address", "")
-    if not out["office_address"]:
-        errors.append("office_address is required")
-    out["sheet_approved_flag"] = parse_yes(row.get("approved_for_test_call"))
+    out["interview_date"] = _clean(row.get("interview_date"))
+    if "interview_date" not in missing:
+        try:
+            out["interview_date"] = parse_date(row.get("interview_date"))
+            if date.fromisoformat(out["interview_date"]) < datetime.now(IST).date():
+                errors.append(_err("interview_date", "invalid_date", "interview_date is in the past"))
+        except ValueError as e:
+            errors.append(_err("interview_date", "invalid_date", str(e)))
+    out["interview_time"] = _clean(row.get("interview_time"))
+    if "interview_time" not in missing:
+        try:
+            out["interview_time"] = parse_time(row.get("interview_time"))
+        except ValueError as e:
+            errors.append(_err("interview_time", "invalid_time", str(e)))
+    lang = _clean(row.get("language"))
+    out["language"] = LANGUAGES.get(lang.lower(), lang)
+    if lang and lang.lower() not in LANGUAGES:
+        errors.append(_err("language", "invalid_language", "language must be English or Tamil"))
+    out["company_name"] = _clean(row.get("company_name"))
+    out["office_address"] = _clean(row.get("office_address"))
+    out["interview_timezone"] = TIMEZONE
+    flag = parse_yes_no(row.get("approved_for_test_call"))
+    if require_flag and flag is None:
+        errors.append(_err("approved_for_test_call", "invalid_value", "approved_for_test_call must be YES or NO"))
+    out["sheet_approved_flag"] = bool(flag)
     return out, errors
+
