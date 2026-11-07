@@ -4,6 +4,11 @@ import os
 import pytest
 import requests
 
+# These tests OVERWRITE / CLEAR the stored Bolna credentials. Never run against a DB holding real config.
+pytestmark = pytest.mark.skipif(os.environ.get("AI_TEST_ALLOW_PROVIDER_WRITES") != "1",
+                                reason="writes provider credentials; set AI_TEST_ALLOW_PROVIDER_WRITES=1 on a scratch DB")
+
+
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL').rstrip('/')
 API = f"{BASE_URL}/api/ai-calling/provider"
 H = {"X-CSRF-Intent": "ai-calling", "Origin": BASE_URL}

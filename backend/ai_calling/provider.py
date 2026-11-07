@@ -228,13 +228,27 @@ async def provider_audit(request: Request):
     return {"items": docs}
 
 
+async def _extraction_check(bc, api_key: str, agent_id: str, agent: dict) -> dict:
+    """Extraction fields live in Bolna 'dispositions' referenced by ID from the agent, not in agent config."""
+    from .execution import extraction_config_check, extraction_from_dispositions
+    ids = [i for i in (agent.get("dispositions") or []) if isinstance(i, str)][:30]
+    if not ids:
+        return extraction_config_check(agent)
+    defs, errors = [], 0
+    for did in ids:
+        try:
+            defs.append(await bc.get_disposition(api_key, did, agent_id))
+        except bc.BolnaError:
+            errors += 1
+    return extraction_from_dispositions(defs, errors)
+
+
 @provider_router.post("/test-connection")
 async def test_connection(request: Request):
     """Read-only checks against documented Bolna endpoints. Never places a call."""
     user = await _auth(request)
     _csrf(request)
     from . import bolna_client as bc
-    from .execution import extraction_config_check
     d = await _doc()
     checks = []
 
@@ -271,10 +285,19 @@ async def test_connection(request: Request):
                 add("caller_number", "Calling number is listed on this Bolna account", "failed", "number not found in /phone-numbers/all")
         except bc.BolnaError as e:
             add("caller_number", "Calling number is listed on this Bolna account", "failed", e.kind)
-        extraction = extraction_config_check(agent)
-        add("extraction", "Extraction fields configured on agent",
-            "verified" if not extraction["fields_missing"] else "unverified",
-            "missing: " + ", ".join(extraction["fields_missing"]) if extraction["fields_missing"] else "all 6 fields found in agent config")
+        extraction = await _extraction_check(bc, api_key, d["agent_id"], agent)
+        missing = extraction["fields_missing"]
+        if extraction.get("source") == "dispositions" and not missing:
+            state, detail = "verified", f"all 6 fields found as dispositions ({', '.join(sorted({v['category'] for v in extraction['fields'].values()}))})"
+            if extraction["outside_category"]:
+                state, detail = "warning", "outside 'Interview Call Results': " + ", ".join(extraction["outside_category"])
+        elif extraction.get("source") == "dispositions" and extraction["dispositions_unreadable"] and missing:
+            state, detail = "cannot_verify", f"{extraction['dispositions_unreadable']} disposition(s) could not be read; not found: {', '.join(missing)}"
+        elif extraction.get("source") == "dispositions":
+            state, detail = "failed", "not found among agent dispositions: " + ", ".join(missing)
+        else:
+            state, detail = ("unverified", "agent has no dispositions; missing: " + ", ".join(missing)) if missing else ("verified", "found in agent config")
+        add("extraction", "Extraction fields configured on agent", state, detail)
     add("outbound_authorization", "Number is authorised for outbound dialling", "cannot_verify",
         "No documented read-only API confirms outbound permission; proven only by the first approved test call (Phase 4B)")
     del api_key

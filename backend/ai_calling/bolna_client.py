@@ -58,6 +58,11 @@ async def get_execution(api_key: str, execution_id: str) -> dict:
     return await _get(api_key, f"/executions/{execution_id}")
 
 
+async def get_disposition(api_key: str, disposition_id: str, agent_id: str) -> dict:
+    """GET /dispositions/{id}?agent_id= (docs/api-reference/dispositions/get). Extraction field definition."""
+    return await _get(api_key, f"/dispositions/{disposition_id}?agent_id={agent_id}")
+
+
 def build_call_request(*, agent_id: str, recipient: str, from_number: str, user_data: dict) -> dict:
     """Documented POST /call body. Only documented fields are used."""
     body = {"agent_id": agent_id, "recipient_phone_number": recipient, "user_data": user_data}
