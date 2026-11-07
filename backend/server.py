@@ -4568,6 +4568,12 @@ except Exception:
     traceback.print_exc()
     raise
 
+# Include AI Calling module (isolated; own ai_* collections only)
+from ai_calling import ai_router, init_ai_calling, ensure_ai_indexes
+init_ai_calling(db, get_current_user)
+app.include_router(ai_router)
+app.add_event_handler("startup", ensure_ai_indexes)
+
 # Include Help / Templates module (iter67)
 try:
     from bb_help import help_router

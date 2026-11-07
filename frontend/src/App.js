@@ -30,6 +30,11 @@ import ManualAlerts from "./pages/ManualAlerts";
 import ManualOtpVerify from "./pages/ManualOtpVerify";
 import MissingApplicants from "./pages/MissingApplicants";
 import TesterCredentials from "./pages/TesterCredentials";
+import AICallingDashboard from "./pages/ai-calling/AICallingDashboard";
+import AITestingMode from "./pages/ai-calling/TestingMode";
+import AILiveMode from "./pages/ai-calling/LiveMode";
+import AICallHistory from "./pages/ai-calling/CallHistory";
+import AICallingSettings from "./pages/ai-calling/AICallingSettings";
 import TeamScore from "./pages/TeamScore";
 import Profile from "./pages/Profile";
 import PublicJobView from "./pages/PublicJobView";
@@ -67,6 +72,11 @@ function App() {
                         <Route path="/missing-applicants" element={<ProtectedRoute><MissingApplicants /></ProtectedRoute>} />
                         <Route path="/team-score" element={<ProtectedRoute><TeamScore /></ProtectedRoute>} />
                         <Route path="/tester-credentials" element={<ProtectedRoute><TesterCredentials /></ProtectedRoute>} />
+                        <Route path="/ai-calling" element={<ProtectedRoute><AICallingDashboard /></ProtectedRoute>} />
+                        <Route path="/ai-calling/testing" element={<ProtectedRoute><AITestingMode /></ProtectedRoute>} />
+                        <Route path="/ai-calling/live" element={<ProtectedRoute><AILiveMode /></ProtectedRoute>} />
+                        <Route path="/ai-calling/history" element={<ProtectedRoute><AICallHistory /></ProtectedRoute>} />
+                        <Route path="/ai-calling/settings" element={<ProtectedRoute><AICallingSettings /></ProtectedRoute>} />
                         <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
                         <Route path="/register/college" element={<CollegeRegistration />} />
                         <Route path="/register/:formId" element={<PublicRegistration />} />

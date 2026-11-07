@@ -7,7 +7,7 @@ import {
     SquaresFour, ChartBar, FileText, CalendarCheck, PencilLine, Table,
     MagnifyingGlass, Briefcase, FolderOpen, GraduationCap, CalendarBlank,
     ShieldCheck, SignOut, List, X, UserCircle, WhatsappLogo, Question,
-    EnvelopeSimple, Flask, UserMinus, Users, Power,
+    EnvelopeSimple, Flask, UserMinus, Users, Power, PhoneCall,
 } from '@phosphor-icons/react';
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -31,6 +31,7 @@ const NAV = [
     { label: 'Set Holidays', icon: CalendarBlank, path: '/set-holidays' },
     { label: 'Team Score', icon: Users, path: '/team-score' },
     { label: 'Verify Applicant OTP', icon: ShieldCheck, path: '/verify-otp' },
+    { label: 'AI Calling', icon: PhoneCall, path: '/ai-calling' },
     // { label: 'Help & Templates', icon: Question, path: '/help' },
 ];
 
