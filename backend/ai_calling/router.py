@@ -7,7 +7,7 @@ from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from . import bolna_client, gate
+from . import gate
 from .store import (
     EDITABLE_SETTINGS, MODES, SETTINGS_ID, _state, db, get_settings,
     mask_phone, now_iso, serialize,
@@ -28,6 +28,7 @@ async def ensure_ai_indexes():
     await d.ai_test_candidates.create_index("test_candidate_id", unique=True, sparse=True)
     await d.ai_upload_batches.create_index("upload_batch_id", unique=True)
     await d.ai_provider_audit.create_index([("provider", 1), ("at", -1)])
+    await d.ai_webhook_events.create_index([("execution_id", 1), ("status", 1), ("payload_hash", 1)], unique=True)
     from .candidates import backfill_candidates
     await backfill_candidates()
     await d.ai_call_jobs.create_index(
@@ -83,7 +84,7 @@ async def read_settings(request: Request):
     s = await get_settings()
     return {**s, "server_calling_enabled": gate.server_calling_enabled(),
             "bolna_integration_approved": gate.BOLNA_INTEGRATION_APPROVED,
-            "live_mode_locked": gate.LIVE_MODE_LOCKED, "bolna_config": bolna_client.config_status()}
+            "live_mode_locked": gate.LIVE_MODE_LOCKED}
 
 
 class SettingsBody(BaseModel):
@@ -258,6 +259,8 @@ async def live_status(request: Request):
 # Phase 3 — Test Candidate Management endpoints (same /api/ai-calling prefix)
 from .candidates import cand_router  # noqa: E402
 from .provider import provider_router  # noqa: E402
+from .calls import calls_router  # noqa: E402
 
 ai_router.include_router(cand_router)
 ai_router.include_router(provider_router)
+ai_router.include_router(calls_router)

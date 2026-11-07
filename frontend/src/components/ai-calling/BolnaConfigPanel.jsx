@@ -9,7 +9,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 const STATUS = {
     not_configured: ['Not configured', 'bg-zinc-100 text-zinc-700'],
     incomplete: ['Incomplete', 'bg-amber-100 text-amber-800'],
-    configured_unverified: ['Saved — not verified (Phase 4)', 'bg-sky-50 text-sky-800'],
+    configured_unverified: ['Saved — not verified', 'bg-sky-50 text-sky-800'],
+    verification_failed: ['Verification failed', 'bg-rose-100 text-rose-800'],
     verified: ['Verified', 'bg-emerald-100 text-emerald-800'],
     key_unreadable: ['Stored key unreadable — re-enter API key', 'bg-rose-100 text-rose-800'],
 };
@@ -56,6 +57,16 @@ export const BolnaConfigPanel = () => {
             load();
         } catch (e) { toast.error(errMsg(e, 'Save failed') + (keySaved ? '' : wantKey ? ' — API key was not saved.' : '')); setApiKey(''); load(); } finally { setBusy(false); }
     };
+    const [hookUrl, setHookUrl] = useState('');
+    const testConn = async () => {
+        setBusy(true);
+        try { const r = (await aiApi.post('/provider/test-connection')).data; toast[r.status === 'verified' ? 'success' : 'error'](r.status === 'verified' ? 'Connection verified (read-only checks)' : 'Verification failed — see checks'); load(); }
+        catch (e) { toast.error(errMsg(e, 'Test failed')); } finally { setBusy(false); }
+    };
+    const genHook = async () => {
+        if (p?.webhook_configured && !window.confirm('Rotate the webhook URL? The old URL stops working.')) return;
+        try { setHookUrl((await aiApi.post('/provider/webhook-token')).data.webhook_url); load(); } catch (e) { toast.error(errMsg(e)); }
+    };
     const clear = async () => {
         try { await aiApi.post('/provider/clear', { confirmation: word }); toast.success('Bolna configuration cleared'); setClearOpen(false); setWord(''); load(); }
         catch (e) { toast.error(errMsg(e)); }
@@ -90,10 +101,30 @@ export const BolnaConfigPanel = () => {
             </div>
             <div className="flex flex-wrap gap-2 mt-4">
                 <button onClick={save} disabled={busy} data-testid="bolna-save-btn" className="px-5 py-2.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold disabled:opacity-50">Save Configuration</button>
-                <button disabled title="Enabled in Phase 4" data-testid="bolna-test-connection-btn" className="px-4 py-2.5 rounded-lg border border-[#e5e3d8] bg-white text-sm font-semibold flex items-center gap-2 opacity-40 cursor-not-allowed"><PlugsConnected size={16} /> Test Connection</button>
+                <button onClick={testConn} disabled={busy || !p?.has_api_key} data-testid="bolna-test-connection-btn" className="px-4 py-2.5 rounded-lg border border-teal-300 bg-teal-50 text-teal-800 text-sm font-semibold flex items-center gap-2 disabled:opacity-40"><PlugsConnected size={16} /> {busy ? 'Testing…' : 'Test Connection'}</button>
+                <button onClick={genHook} disabled={busy} data-testid="bolna-webhook-btn" className="px-4 py-2.5 rounded-lg border border-[#e5e3d8] bg-white text-sm font-semibold">{p?.webhook_configured ? 'Rotate webhook URL' : 'Generate webhook URL'}</button>
                 <button onClick={() => setClearOpen(true)} disabled={!p || p.status === 'not_configured'} data-testid="bolna-clear-btn" className="px-4 py-2.5 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 text-sm font-semibold flex items-center gap-2 disabled:opacity-40"><Trash size={16} /> Clear Configuration</button>
             </div>
             <p className="text-[11px] text-[#9b9787] mt-3">The API key is sent only to the backend, encrypted before storage and never displayed. Any change pauses future call jobs until the configuration is validated.</p>
+            {hookUrl && (
+                <div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs" data-testid="bolna-webhook-url">
+                    <p className="font-semibold text-amber-900 mb-1">Webhook URL (shown once — paste into the Bolna agent's webhook setting):</p>
+                    <code className="break-all">{hookUrl}</code>
+                </div>
+            )}
+            {p?.last_verification && (
+                <div className="mt-4 border border-[#e5e3d8] rounded-xl p-3" data-testid="bolna-verification">
+                    <p className="text-xs font-semibold text-[#1a2332] mb-2">Last test: {new Date(p.last_verification.tested_at).toLocaleString()} by {p.last_verification.tested_by}</p>
+                    <ul className="space-y-1">
+                        {p.last_verification.checks.map(c => (
+                            <li key={c.key} className="text-xs flex gap-2" data-testid={`bolna-check-${c.key}`}>
+                                <span className={`font-bold uppercase w-24 shrink-0 ${c.state === 'verified' ? 'text-emerald-700' : c.state === 'failed' ? 'text-rose-700' : 'text-amber-700'}`}>{c.state.replace('_', ' ')}</span>
+                                <span>{c.label}{c.detail ? <span className="text-[#9b9787]"> — {c.detail}</span> : null}</span>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
             <Dialog open={clearOpen} onOpenChange={(o) => { setClearOpen(o); if (!o) setWord(''); }}>
                 <DialogContent className="bg-[#fffdf7]" data-testid="bolna-clear-dialog">
                     <DialogHeader><DialogTitle>Clear Bolna configuration?</DialogTitle><DialogDescription>Removes the stored API key, Agent ID and calling number.</DialogDescription></DialogHeader>

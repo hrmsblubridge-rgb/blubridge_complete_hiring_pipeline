@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
-import { UsersThree, Trash, Prohibit, ArrowCounterClockwise, SealCheck, PencilSimple, PhoneOutgoing } from '@phosphor-icons/react';
+import { UsersThree, Trash, Prohibit, ArrowCounterClockwise, SealCheck, PencilSimple, PhoneOutgoing, Flask } from '@phosphor-icons/react';
+import { DryRunDialog } from './DryRunDialog';
 import { aiApi, errMsg } from '../../pages/ai-calling/aiApi';
 import { Card, SectionTitle } from './AICallingHeader';
 import { ApproveDialog } from './ApproveDialog';
@@ -24,6 +25,8 @@ export const CandidateList = ({ data, q, setQ, selected, setSelected, reload }) 
     const [approving, setApproving] = useState(null);
     const [editing, setEditing] = useState(null);
     const [bulk, setBulk] = useState(null);
+    const [dryRun, setDryRun] = useState(null);
+    const closeDry = useCallback(() => setDryRun(null), []);
     const items = data.items || [];
     const selIds = Object.keys(selected);
     const act = async (fn, ok) => { try { await fn(); toast.success(ok); reload(); } catch (e) { toast.error(errMsg(e)); } };
@@ -73,6 +76,7 @@ export const CandidateList = ({ data, q, setQ, selected, setSelected, reload }) 
                                                 {c.approved && <Btn title="Revoke approval" testid={`revoke-${c.id}`} onClick={() => act(() => aiApi.post(`/test-candidates/${c.id}/revoke`), 'Approval revoked')}><ArrowCounterClockwise size={14} /></Btn>}
                                                 <Btn title="Edit" testid={`edit-${c.id}`} onClick={() => setEditing(c)}><PencilSimple size={14} /></Btn>
                                                 <Btn title={c.opted_out ? 'Clear opt-out' : 'Mark opted out'} testid={`optout-${c.id}`} onClick={() => act(() => aiApi.post(`/test-candidates/${c.id}/opt-out`, { opted_out: !c.opted_out }), 'Updated')}><Prohibit size={14} /></Btn>
+                                                <Btn title="Dry run (preview request, nothing sent)" testid={`dry-run-${c.id}`} onClick={() => setDryRun(c)}><Flask size={14} /></Btn>
                                                 <Btn title={CALLING_DISABLED_MSG} testid={`call-now-${c.id}`} disabled><PhoneOutgoing size={14} /></Btn>
                                                 <Btn danger title="Delete" testid={`delete-${c.id}`} onClick={() => window.confirm(`Delete ${c.candidate_name}?`) && act(() => aiApi.delete(`/test-candidates/${c.id}`), 'Deleted')}><Trash size={14} /></Btn>
                                             </div>
@@ -91,6 +95,7 @@ export const CandidateList = ({ data, q, setQ, selected, setSelected, reload }) 
                     <BulkBtn disabled={(data.page || 1) >= (data.pages || 1)} onClick={() => setQ(p => ({ ...p, page: p.page + 1 }))} data-testid="page-next">Next</BulkBtn>
                 </div>
             </div>
+            <DryRunDialog candidate={dryRun} onClose={closeDry} />
             <ApproveDialog key={approving?.id || 'none'} candidate={approving} onClose={() => setApproving(null)} onDone={() => { setApproving(null); reload(); }} />
             <EditCandidateDialog candidate={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); reload(); }} />
             <BulkConfirmDialog key={bulk || 'none'} action={bulk} items={Object.values(selected)} onClose={() => setBulk(null)} onDone={done} />

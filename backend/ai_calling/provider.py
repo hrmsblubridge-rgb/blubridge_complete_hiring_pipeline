@@ -133,7 +133,8 @@ async def _apply(request: Request, user: str, action: str, fields: list, set_fie
 def provider_ready(doc: dict) -> bool:
     """Used by the permission gate: configured AND verified (verification arrives in Phase 4)."""
     return bool(doc.get("api_key_encrypted") and doc.get("agent_id") and doc.get("caller_number")
-                and doc.get("status") == "verified" and doc.get("key_id") == _key_id())
+                and doc.get("status") == "verified" and doc.get("key_id") == _key_id()
+                and doc.get("verified_config_version") == doc.get("config_version"))
 
 
 # ---------------- endpoints ----------------
@@ -167,7 +168,8 @@ async def get_provider(request: Request):
         "agent_id": d.get("agent_id", ""), "agent_id_masked": _mask(d.get("agent_id", ""), 6),
         "caller_number_masked": _mask(d.get("caller_number", ""), 4),
         "config_version": d.get("config_version", 0), "updated_by": d.get("updated_by"), "updated_at": d.get("updated_at"),
-        "test_connection_enabled": False,
+        "test_connection_enabled": True, "last_verification": d.get("last_verification"),
+        "verified_at": d.get("verified_at"), "webhook_configured": bool(d.get("webhook_token_hash")),
     }
 
 
@@ -228,6 +230,74 @@ async def provider_audit(request: Request):
 
 @provider_router.post("/test-connection")
 async def test_connection(request: Request):
-    await _auth(request)
+    """Read-only checks against documented Bolna endpoints. Never places a call."""
+    user = await _auth(request)
     _csrf(request)
-    raise HTTPException(423, "Test Connection will be enabled in Phase 4 (Bolna API integration)")
+    from . import bolna_client as bc
+    from .execution import extraction_config_check
+    d = await _doc()
+    checks = []
+
+    def add(key, label, state, detail=""):
+        checks.append({"key": key, "label": label, "state": state, "detail": detail})
+
+    if not (d.get("api_key_encrypted") and d.get("agent_id") and d.get("caller_number")):
+        raise HTTPException(400, "Configure API key, Agent ID and calling number first")
+    try:
+        api_key = decrypt_api_key(d)
+    except (InvalidToken, RuntimeError):
+        raise HTTPException(409, "Stored API key cannot be decrypted with the current encryption key. Re-enter the API key.") from None
+    agent, numbers, extraction = None, None, None
+    try:
+        agent = await bc.get_agent(api_key, d["agent_id"])
+        add("auth", "API key accepted by Bolna", "verified")
+        add("agent", "Agent ID exists and is accessible", "verified", agent.get("agent_name") or "")
+    except bc.BolnaError as e:
+        msg = {"invalid_credentials": "Bolna rejected the API key", "not_found": "Agent ID not found for this API key",
+               "rate_limited": "Bolna rate limit reached — try again later", "network_error": "Could not reach Bolna"}.get(e.kind, f"Bolna error (HTTP {e.status})")
+        add("auth", "API key accepted by Bolna", "verified" if e.kind == "not_found" else "failed", msg if e.kind != "not_found" else "")
+        add("agent", "Agent ID exists and is accessible", "failed", msg)
+    if agent is not None:
+        try:
+            numbers = await bc.list_phone_numbers(api_key)
+            match = next((n for n in numbers if str(n.get("phone_number", "")).replace(" ", "") == d["caller_number"]), None)
+            if match:
+                add("caller_number", "Calling number is listed on this Bolna account", "verified",
+                    f"provider: {match.get('telephony_provider', '?')}, rented: {match.get('rented')}")
+                linked = match.get("agent_id")
+                add("caller_agent_link", "Calling number linked to this agent", "verified" if linked == d["agent_id"] else "warning",
+                    "linked" if linked == d["agent_id"] else "number is linked to a different or no agent")
+            else:
+                add("caller_number", "Calling number is listed on this Bolna account", "failed", "number not found in /phone-numbers/all")
+        except bc.BolnaError as e:
+            add("caller_number", "Calling number is listed on this Bolna account", "failed", e.kind)
+        extraction = extraction_config_check(agent)
+        add("extraction", "Extraction fields configured on agent",
+            "verified" if not extraction["fields_missing"] else "unverified",
+            "missing: " + ", ".join(extraction["fields_missing"]) if extraction["fields_missing"] else "all 6 fields found in agent config")
+    add("outbound_authorization", "Number is authorised for outbound dialling", "cannot_verify",
+        "No documented read-only API confirms outbound permission; proven only by the first approved test call (Phase 4B)")
+    del api_key
+    ok = all(c["state"] in ("verified", "warning", "cannot_verify", "unverified") for c in checks) \
+        and any(c["key"] == "caller_number" and c["state"] == "verified" for c in checks)
+    status = "verified" if ok else "verification_failed"
+    result = {"tested_at": now_iso(), "tested_by": user, "checks": checks, "extraction": extraction}
+    await db().ai_provider_settings.update_one({"_id": DOC_ID}, {"$set": {
+        "status": status, "last_verification": result, "verified_at": now_iso() if ok else None,
+        "verified_config_version": d.get("config_version") if ok else None}})
+    await _audit(request, user, f"test_connection_{status}", [], d.get("config_version", 0))
+    return {"status": status, **result}
+
+
+@provider_router.post("/webhook-token")
+async def rotate_webhook_token(request: Request):
+    """Generate a high-entropy webhook route token. Returned ONCE; only its hash is stored."""
+    import secrets as _secrets
+    user = await _auth(request)
+    _csrf(request)
+    token = _secrets.token_urlsafe(32)
+    await db().ai_provider_settings.update_one({"_id": DOC_ID}, {"$set": {
+        "webhook_token_hash": hashlib.sha256(token.encode()).hexdigest(), "webhook_token_set_at": now_iso()}}, upsert=True)
+    await _audit(request, user, "webhook_token_rotated", ["webhook_token"], (await _doc()).get("config_version", 0))
+    base = os.environ.get("FRONTEND_URL", "").rstrip("/")
+    return {"webhook_url": f"{base}/api/ai-calling/webhook/bolna/{token}", "shown_once": True}
