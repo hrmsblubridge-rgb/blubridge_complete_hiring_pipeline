@@ -32,7 +32,11 @@ async def evaluate(*, mode: str, test_candidate_id: str, batch_id: str, phone_e1
     add("testing_mode", "Testing Mode is active", mode == "testing" and s["mode"] == "testing", f"current mode: {s['mode']}")
     add("not_live", "Job is not a Live Mode job (Live Mode locked)", mode != "live" and LIVE_MODE_LOCKED)
     add("server_enabled", "Server-side calling is enabled", server_calling_enabled(), "AI_CALLING_ENABLED env flag")
-    add("bolna_approved", "Bolna API integration approved", BOLNA_INTEGRATION_APPROVED, "locked until Phase 3 approval")
+    add("bolna_approved", "Bolna API integration approved", BOLNA_INTEGRATION_APPROVED, "locked until Phase 4 approval")
+    from .provider import provider_ready
+    prov = await db().ai_provider_settings.find_one({"_id": "bolna"}) or {}
+    add("provider_validated", "Bolna configuration saved and validated", provider_ready(prov),
+        f"status: {prov.get('status', 'not_configured')}")
     add("no_emergency_stop", "Emergency stop is not active", not s["emergency_stop"])
     add("mode_version", "Job belongs to current operating-mode version", mode_version == s["mode_version"],
         f"job v{mode_version} / current v{s['mode_version']}")

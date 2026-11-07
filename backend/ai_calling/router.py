@@ -27,6 +27,7 @@ async def ensure_ai_indexes():
     await d.ai_test_candidates.create_index("phone_e164", unique=True)
     await d.ai_test_candidates.create_index("test_candidate_id", unique=True, sparse=True)
     await d.ai_upload_batches.create_index("upload_batch_id", unique=True)
+    await d.ai_provider_audit.create_index([("provider", 1), ("at", -1)])
     from .candidates import backfill_candidates
     await backfill_candidates()
     await d.ai_call_jobs.create_index(
@@ -256,5 +257,7 @@ async def live_status(request: Request):
 
 # Phase 3 — Test Candidate Management endpoints (same /api/ai-calling prefix)
 from .candidates import cand_router  # noqa: E402
+from .provider import provider_router  # noqa: E402
 
 ai_router.include_router(cand_router)
+ai_router.include_router(provider_router)

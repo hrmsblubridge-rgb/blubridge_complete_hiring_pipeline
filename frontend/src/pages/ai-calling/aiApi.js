@@ -3,6 +3,7 @@ import axios from 'axios';
 export const aiApi = axios.create({
     baseURL: `${process.env.REACT_APP_BACKEND_URL}/api/ai-calling`,
     withCredentials: true,
+    headers: { 'X-CSRF-Intent': 'ai-calling' },
 });
 
 export const errMsg = (e, fallback = 'Request failed') => {

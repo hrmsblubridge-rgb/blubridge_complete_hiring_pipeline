@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { GearSix, Siren, Key, CheckCircle, XCircle } from '@phosphor-icons/react';
+import { GearSix, Siren, Key } from '@phosphor-icons/react';
 import { aiApi, errMsg } from './aiApi';
 import { AICallingHeader, Card, SectionTitle } from '../../components/ai-calling/AICallingHeader';
+import { BolnaConfigPanel } from '../../components/ai-calling/BolnaConfigPanel';
 
 const inputCls = 'w-full bg-white border border-[#e5e3d8] rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-teal-500';
 const FIELDS = [
@@ -53,14 +54,10 @@ export default function AICallingSettings() {
                     </div>
                     <div className="flex justify-end mt-4"><button onClick={save} data-testid="settings-save-btn" className="px-5 py-2.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold">Save settings</button></div>
                 </Card>
+                <BolnaConfigPanel />
                 <Card>
-                    <SectionTitle icon={Key}>Bolna integration status</SectionTitle>
-                    <p className="text-xs text-[#6b7280] mb-3">Keys are stored only on the server and are never shown here. Integration approval: <b>{s?.bolna_integration_approved ? 'approved' : 'not approved'}</b> · Server calling: <b>{s?.server_calling_enabled ? 'enabled' : 'disabled'}</b></p>
-                    <ul className="grid sm:grid-cols-2 gap-2" data-testid="bolna-config-list">
-                        {Object.entries(s?.bolna_config || {}).map(([k, ok]) => (
-                            <li key={k} className="flex items-center gap-2 text-sm">{ok ? <CheckCircle size={16} weight="fill" className="text-emerald-600" /> : <XCircle size={16} weight="fill" className="text-zinc-400" />}<span className="font-mono text-xs">{k}</span> <span className="text-[#9b9787] text-xs">{ok ? 'present' : 'not set'}</span></li>
-                        ))}
-                    </ul>
+                    <SectionTitle icon={Key}>Calling switches</SectionTitle>
+                    <p className="text-xs text-[#6b7280]">Integration approval: <b>{s?.bolna_integration_approved ? 'approved' : 'not approved'}</b> · Server calling: <b>{s?.server_calling_enabled ? 'enabled' : 'disabled'}</b></p>
                 </Card>
             </main>
         </div>
