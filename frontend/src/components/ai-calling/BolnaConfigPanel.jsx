@@ -42,8 +42,8 @@ export const BolnaConfigPanel = () => {
         const wantSettings = (agentId.trim() && agentId.trim() !== p?.agent_id) || caller.trim();
         if (!wantKey && !wantSettings) { toast.error('Nothing to save'); return; }
         setBusy(true);
+        let keySaved = false;
         try {
-            if (wantKey) { await aiApi.put('/provider/credentials', { api_key: apiKey.trim() }); setApiKey(''); }
             if (wantSettings) {
                 const body = {};
                 if (agentId.trim() !== p?.agent_id) body.agent_id = agentId.trim();
@@ -51,9 +51,10 @@ export const BolnaConfigPanel = () => {
                 await aiApi.put('/provider/settings', body);
                 setCaller('');
             }
+            if (wantKey) { await aiApi.put('/provider/credentials', { api_key: apiKey.trim() }); keySaved = true; setApiKey(''); }
             toast.success('Bolna configuration saved. Pending call jobs (if any) were paused until validation.');
             load();
-        } catch (e) { toast.error(errMsg(e, 'Save failed')); setApiKey(''); } finally { setBusy(false); }
+        } catch (e) { toast.error(errMsg(e, 'Save failed') + (keySaved ? '' : wantKey ? ' — API key was not saved.' : '')); setApiKey(''); load(); } finally { setBusy(false); }
     };
     const clear = async () => {
         try { await aiApi.post('/provider/clear', { confirmation: word }); toast.success('Bolna configuration cleared'); setClearOpen(false); setWord(''); load(); }

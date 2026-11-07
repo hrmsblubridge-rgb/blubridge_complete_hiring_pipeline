@@ -32,7 +32,7 @@ def _manual(name, phone, **kw):
 @pytest.fixture(scope="module")
 def s():
     sess = requests.Session()
-    r = sess.post(f"{BASE_URL}/api/login", json={"username": "Admin User", "password": "Admin User"})
+    r = sess.post(f"{BASE_URL}/api/login", json={"username": "Admin User", "password": "QAZwsx##123"})
     if r.status_code != 200:
         pytest.skip("login failed")
     yield sess

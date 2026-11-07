@@ -1,3 +1,10 @@
+## AI Calling — Phase 3.1 Secure Bolna Configuration (Nov 2026)
+- backend/ai_calling/provider.py: /api/ai-calling/provider (GET masked status, PUT /credentials write-only encrypted key, PUT /settings agent_id + caller_number, POST /clear with CLEAR, GET /audit, POST /test-connection 423).
+- Fernet encryption; master key = backend secret AI_PROVIDER_ENCRYPTION_KEY (process env secret, not in .env). key_id fingerprint detects key mismatch.
+- Collections: ai_provider_settings (_id "bolna"), ai_provider_audit. CSRF: X-CSRF-Intent header + Origin == FRONTEND_URL on mutations.
+- Gate adds provider_validated check (false until Phase 4 verification).
+
+
 ## AI Calling — Phase 3 Test Candidate Management (Nov 2026)
 - New backend/ai_calling/candidates.py: sample sheet (xlsx/csv), upload preview → validate-rows → import (all-or-nothing), manual CRUD, approve/revoke/opt-out, bulk approve (APPROVE + consent)/revoke/delete (DELETE), list with search/filters/pagination/readiness, calls/initiate (423), calls/stop.
 - New collection ai_upload_batches; ai_test_candidates gains test_candidate_id (unique), interview_timezone, upload_batch_id, consent_status, approval_audit[].

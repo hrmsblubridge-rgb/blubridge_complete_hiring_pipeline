@@ -1,0 +1,32 @@
+{
+  "summary": "Phase 3.1 Bolna provider config tested end-to-end (backend pytest + Playwright UI). All requested features PASS. Backend: 10/10 new provider tests pass (401 when not logged in, 403 with no CSRF header, 403 for evil Origin, short key gives 400 without echoing it, save key then masked GET, no plaintext key or 'gAAAA' ciphertext in GET/PUT/audit, invalid caller gives 400, Indian 10-digit number normalised, test-connection gives 423, clear needs the exact word CLEAR plus the CSRF header). Phase 3 regression 17/17 pass. UI: panel and status badge render; dummy key saved, input cleared, hint shows ••••••••1234; key not found in DOM, local/session storage or any GET response; agent ID and caller saved and masked; invalid caller shows error toast; status reads 'Saved — not verified (Phase 4)'; Test Connection disabled; clear dialog confirm stays disabled until CLEAR typed, then status 'Not configured'. /ai-calling/testing (list, upload panel, file input), /home and /dashboard load.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/ai-calling/provider", "issue": "Returns the full agent_id in plaintext next to agent_id_masked, and the UI puts the full agent ID back into the input. Agent ID is not a secret, but the hint says 'masked'. This is OK if intended."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Save Configuration with a new key and an invalid caller in one click", "issue": "The credentials PUT succeeds (key saved, jobs paused), then the settings PUT fails with 400. The user sees only an error toast, so it is a partial save. Suggest validating the caller first or saying in the toast that the key was saved.", "affected_selectors": ["[data-testid='bolna-save-btn']"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_ai_calling_provider_phase31.py", "/app/backend/tests/test_ai_calling_phase3.py", "/app/test_reports/pytest/pytest_phase31.xml"],
+  "action_items": [
+    "Update /app/memory/test_credentials.md: the Admin User password is now QAZwsx##123 ('Admin User' gives 401)",
+    "Optional: deal with the partial save in BolnaConfigPanel.save() when the key saves but the settings fail"
+  ],
+  "critical_code_review_comments": [
+    "provider.py: _auth gives authentication only, with no explicit admin role check. The app has a single admin role today, so this is acceptable.",
+    "clear_provider: _apply writes status configured_unverified, then a second update sets not_configured. This works but is not atomic; minor."
+  ],
+  "updated_files": ["/app/backend/tests/test_ai_calling_provider_phase31.py (new)", "/app/backend/tests/test_ai_calling_phase3.py (password updated to QAZwsx##123)"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Admin User / QAZwsx##123 (the credentials file is out of date)",
+  "seed_data_creation": "Only dummy provider config (dummyKey_NOT_REAL_*, TEST_agent_*). Cleared at the end, so the config is now 'not_configured'.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Provider mutations need the X-CSRF-Intent: ai-calling header, and Origin (if sent) must equal FRONTEND_URL. Run test_ai_calling_provider_phase31.py with -p no:xdist; it ends with a clear. Emergency stop was left untouched (active)."
+}
