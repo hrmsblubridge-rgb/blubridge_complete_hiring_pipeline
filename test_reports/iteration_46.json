@@ -1,0 +1,44 @@
+{
+  "summary": "Tested AI Calling Phase 2 (Testing Mode foundation), backend and frontend. Backend: 40 pytest tests, 38 passed. One real bug: uploading .xlsx files fails in preview because the installed pandas (3.0.6) needs a newer openpyxl than the one installed (3.1.2). Uploading CSV works, and every validation rule passed when tested with CSV. Everything else passed: 401 on all 22 endpoints without login, xlsx/csv template download, manual entry, approval guards, phone edit resetting approval, opt-out and revoke, batch guard, preflight returning allowed=false, start returning 423, stop, live mode returning 403, mode toggle bumping mode_version, settings limit checks and emergency stop. Frontend: all flows passed (dashboard, testing page with template download, CSV preview and import, manual form, ApproveDialog, batch create/preflight/stop, opt-out, Live Mode locked, Call History empty state, Settings emergency stop and save checks, regression pages). No Bolna requests were seen. ai_call_jobs and ai_calls both have 0 documents.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/ai-calling/test-candidates/upload (.xlsx)", "issue": "Every .xlsx upload returns 400 'Could not read file: Pandas requires version '3.1.5' or newer of 'openpyxl' (version '3.1.2' currently installed)'. The environment has drifted: pandas 3.0.6 is installed but requirements.txt pins pandas==2.2.2 and openpyxl==3.1.2. This also affects the existing pd.read_excel uses in server.py:255 and bb_resend.py:367. Users therefore cannot upload the sample Excel template they downloaded. CSV uploads work.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST/PUT endpoints with a body (/mode, /emergency-stop, /settings, /test-candidates, /test-batches, /approve, /opt-out, /upload)", "issue": "Without a body these return 422 before the 401 auth check, because auth runs inside the handler rather than as a Depends(). With a valid body and no login, all return 401."},
+      {"endpoint": "POST /test-candidates/{id}/revoke, /opt-out; DELETE /test-candidates/{id}; POST /test-batches/{id}/stop", "issue": "A valid but non-existent ObjectId returns 200 (revoke/opt-out return null, stop returns stopped:true, delete returns deleted:0) instead of 404."},
+      {"endpoint": "PUT /api/ai-calling/settings", "issue": "call_window_start and call_window_end are not checked for HH:MM format, and nothing checks that start is before end."},
+      {"endpoint": "POST /api/ai-calling/test-batches", "issue": "An invalid ObjectId in candidate_ids returns 404 'Not found' instead of 400."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Upload .xlsx on /ai-calling/testing", "issue": "Shows the 'Could not read file...openpyxl' error toast because of the backend dependency drift described above.", "affected_selectors": ["[data-testid='upload-file-input']"]}
+    ],
+    "design_issues": [
+      {"screen": "/ai-calling/testing", "issues": ["There is no UI for editing a test candidate (PUT exists in the backend only).", "After a batch is created, the selection stays checked, so 'Create batch from 1 selected' is still enabled and makes duplicate batches easy."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_ai_calling_phase2.py", "/app/test_reports/pytest/ai_calling_phase2.xml"],
+  "action_items": [
+    "HIGH: Fix the xlsx reading dependency drift. Either reinstall pandas==2.2.2 to match requirements.txt, or upgrade openpyxl to >=3.1.5 and update requirements.txt. Then retest xlsx upload, including the existing bulk-upload features that use pd.read_excel.",
+    "Optional: move auth to a FastAPI Depends so 401 comes before 422.",
+    "Optional: return 404 for unknown ids on revoke, opt-out, delete and stop.",
+    "Optional: validate the call window HH:MM format and that start is before end.",
+    "Optional: clear the selection after batch creation; add an edit-candidate UI."
+  ],
+  "critical_code_review_comments": [
+    "gate.py and router.py: the safety design is solid. BOLNA_INTEGRATION_APPROVED=False and LIVE_MODE_LOCKED=True are hardcoded, start returns 423 before any job is created, and bolna_client makes no network calls.",
+    "Upload logic, approval guards (consent + last 4 digits + revalidation), phone-change reset and the opt-out revoke are all correct.",
+    "There is no endpoint to delete a batch, so test batches pile up; consider adding DELETE /test-batches/{id}."
+  ],
+  "updated_files": ["/app/backend/tests/test_ai_calling_phase2.py"],
+  "success_rate": {"backend": "95% (38/40; both failures come from the xlsx dependency issue)", "frontend": "100% of tested flows (xlsx upload not tested in the UI; it is blocked by the backend issue)"},
+  "test_credentials": "Admin User / Admin User (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None left behind. All TEST_ candidates (phones 90000000[51-72]) and test batches were deleted by id afterwards. Side effects: mode_version went from 2 to 8 because of the mode toggle tests. Mode was restored to 'testing', emergency_stop to false, and settings to their original values.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && python -m pytest tests/test_ai_calling_phase2.py -v -p no:cacheprovider. The two xlsx tests in TestUpload should pass once the pandas/openpyxl drift is fixed. Existing demo data: Demo A (approved, 9000000011), Demo C (9000000012), Manual Demo (9000000013), and 'Demo batch' (stopped). Do not use phones 9000000011-13 for new test data.",
+  "rca of the issue": "Steps to reproduce: download the template (xlsx) and upload it. The response is 400 from pandas' import_optional_dependency check. Cause: `pip list` shows pandas 3.0.6 against openpyxl 3.1.2, while requirements.txt pins pandas==2.2.2, so the environment was upgraded outside requirements. pandas 3.x needs openpyxl>=3.1.5. Fix: pip install pandas==2.2.2 (or openpyxl>=3.1.5 with requirements.txt updated), then sudo supervisorctl restart backend."
+}

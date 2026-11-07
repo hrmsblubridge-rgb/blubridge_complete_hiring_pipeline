@@ -41,7 +41,7 @@ export default function TestingMode() {
                 <UploadPanel onImported={load} />
                 <ManualEntryForm onSaved={load} />
                 <TestCandidateTable items={items} selected={selected} setSelected={setSelected} reload={load} />
-                <BatchPanel selected={selected} batches={batches} reload={load} startEnabled={!!settings?.bolna_integration_approved} />
+                <BatchPanel selected={selected} clearSelected={() => setSelected([])} batches={batches} reload={load} startEnabled={!!settings?.bolna_integration_approved} />
             </main>
         </div>
     );

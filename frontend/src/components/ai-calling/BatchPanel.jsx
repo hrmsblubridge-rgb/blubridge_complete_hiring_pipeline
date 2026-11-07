@@ -4,12 +4,12 @@ import { Play, Stop, ListChecks, CheckCircle, XCircle } from '@phosphor-icons/re
 import { aiApi, errMsg } from '../../pages/ai-calling/aiApi';
 import { Card, SectionTitle } from './AICallingHeader';
 
-export const BatchPanel = ({ selected, batches, reload, startEnabled }) => {
+export const BatchPanel = ({ selected, clearSelected, batches, reload, startEnabled }) => {
     const [name, setName] = useState('');
     const [checks, setChecks] = useState(null);
 
     const create = async () => {
-        try { await aiApi.post('/test-batches', { name, candidate_ids: selected }); toast.success('Test batch created (no calls started)'); setName(''); reload(); }
+        try { await aiApi.post('/test-batches', { name, candidate_ids: selected }); toast.success('Test batch created (no calls started)'); setName(''); clearSelected(); reload(); }
         catch (e) { toast.error(errMsg(e)); }
     };
     const preflight = async (b) => {

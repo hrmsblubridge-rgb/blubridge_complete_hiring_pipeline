@@ -1,3 +1,12 @@
+## AI Calling (Bolna) — Phase 2 foundation (Nov 2026)
+- Isolated module: backend/ai_calling/* (router /api/ai-calling, gate.py permission gate, bolna_client.py stub with no network), frontend pages/ai-calling/* + components/ai-calling/*.
+- Collections: ai_call_settings, ai_test_candidates, ai_test_batches, ai_call_jobs, ai_calls (ai_call_jobs/ai_calls empty).
+- Testing Mode: template download, xlsx/csv upload with preview, manual entry, explicit approval (consent + last-4 digits), batches, preflight gate check, Start disabled (423), Stop, emergency stop.
+- Live Mode locked in code (LIVE_MODE_LOCKED=True); Bolna not approved (BOLNA_INTEGRATION_APPROVED=False); AI_CALLING_ENABLED=false.
+- Preview DB isolated: local mongodb, DB hiring_ai_testing. Production .env backup: /root/backend.env.prod_backup.
+- Next: Phase 3 Bolna API integration (verify endpoints/webhook against official docs), then Live Mode.
+
+
 ## iter154–iter156 — Production Hardening: Progress UX + Bulk Queue Delete + JWT Security (Feb 8, 2026)
 
 ### 1. Reusable Progress Dialog (iter155)

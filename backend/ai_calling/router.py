@@ -1,6 +1,7 @@
 """AI Calling API (/api/ai-calling). Admin-only except nothing public in Phase 2."""
 import io
 import logging
+import re
 from typing import List, Optional
 
 import pandas as pd
@@ -47,6 +48,13 @@ def _oid(v: str) -> ObjectId:
     if not ObjectId.is_valid(v):
         raise HTTPException(404, "Not found")
     return ObjectId(v)
+
+
+async def _existing(coll, v: str) -> ObjectId:
+    oid = _oid(v)
+    if not await coll.find_one({"_id": oid}, {"_id": 1}):
+        raise HTTPException(404, "Not found")
+    return oid
 
 
 # ---------------- summary / settings / mode ----------------
@@ -97,7 +105,12 @@ async def update_settings(body: SettingsBody, request: Request):
         raise HTTPException(400, "daily_call_limit must be 0–200")
     if "max_concurrent_calls" in upd and not (1 <= upd["max_concurrent_calls"] <= 5):
         raise HTTPException(400, "max_concurrent_calls must be 1–5")
-    await get_settings()
+    for k in ("call_window_start", "call_window_end"):
+        if k in upd and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", upd[k]):
+            raise HTTPException(400, f"{k} must be HH:MM")
+    cur = await get_settings()
+    if upd.get("call_window_start", cur["call_window_start"]) >= upd.get("call_window_end", cur["call_window_end"]):
+        raise HTTPException(400, "call_window_start must be before call_window_end")
     await db().ai_call_settings.update_one({"_id": SETTINGS_ID}, {"$set": {**upd, "updated_by": user, "updated_at": now_iso()}})
     return await read_settings(request)
 
@@ -326,7 +339,7 @@ async def update_candidate(cid: str, body: CandidateBody, request: Request):
 @ai_router.delete("/test-candidates/{cid}")
 async def delete_candidate(cid: str, request: Request):
     await _auth(request)
-    res = await db().ai_test_candidates.delete_one({"_id": _oid(cid)})
+    res = await db().ai_test_candidates.delete_one({"_id": await _existing(db().ai_test_candidates, cid)})
     await db().ai_test_batches.update_many({}, {"$pull": {"candidate_ids": cid}})
     return {"deleted": res.deleted_count}
 
@@ -360,7 +373,7 @@ async def approve_candidate(cid: str, body: ApproveBody, request: Request):
 @ai_router.post("/test-candidates/{cid}/revoke")
 async def revoke_candidate(cid: str, request: Request):
     await _auth(request)
-    oid = _oid(cid)
+    oid = await _existing(db().ai_test_candidates, cid)
     await db().ai_test_candidates.update_one({"_id": oid}, {"$set": {
         "approved": False, "approved_phone": None, "consent_confirmed": False, "updated_at": now_iso()}})
     return _public(await db().ai_test_candidates.find_one({"_id": oid}))
@@ -373,7 +386,7 @@ class OptOutBody(BaseModel):
 @ai_router.post("/test-candidates/{cid}/opt-out")
 async def opt_out_candidate(cid: str, body: OptOutBody, request: Request):
     await _auth(request)
-    oid = _oid(cid)
+    oid = await _existing(db().ai_test_candidates, cid)
     upd = {"opted_out": body.opted_out, "updated_at": now_iso()}
     if body.opted_out:
         upd.update({"approved": False, "approved_phone": None, "consent_confirmed": False})
@@ -449,7 +462,7 @@ async def start_batch(bid: str, request: Request):
 @ai_router.post("/test-batches/{bid}/stop")
 async def stop_batch(bid: str, request: Request):
     user = await _auth(request)
-    oid = _oid(bid)
+    oid = await _existing(db().ai_test_batches, bid)
     await db().ai_test_batches.update_one({"_id": oid}, {"$set": {"status": "stopped", "stopped_by": user, "stopped_at": now_iso()}})
     res = await db().ai_call_jobs.update_many({"batch_id": bid, "status": "pending"},
                                               {"$set": {"status": "cancelled", "cancel_reason": "batch_stopped"}})
