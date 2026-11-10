@@ -17,7 +17,7 @@ export const CATEGORY_LABELS = {
 };
 
 export const READINESS = {
-    ready_calling_disabled: ['Ready (calling disabled)', 'bg-teal-50 text-teal-800'],
+    ready_calling_disabled: ['Ready for test call', 'bg-teal-50 text-teal-800'],
     not_approved: ['Needs approval', 'bg-amber-100 text-amber-800'],
     opted_out: ['Opted out', 'bg-zinc-200 text-zinc-700'],
     interview_passed: ['Interview date passed', 'bg-rose-50 text-rose-700'],

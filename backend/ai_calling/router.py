@@ -36,7 +36,11 @@ async def ensure_ai_indexes():
     await d.ai_call_jobs.create_index([("status", 1), ("created_at", 1)])
     await d.ai_calls.create_index("execution_id", unique=True, sparse=True)
     await d.ai_calls.create_index([("mode", 1), ("created_at", -1)])
+    await d.ai_calls.create_index("state")
+    await d.ai_call_jobs.create_index("idempotency_key", unique=True, sparse=True)
     await get_settings()
+    from .dispatch import startup_recover
+    await startup_recover()
 
 
 async def _auth(request: Request) -> str:
@@ -67,6 +71,7 @@ async def summary(request: Request):
         "mode": s["mode"], "mode_version": s["mode_version"], "emergency_stop": s["emergency_stop"],
         "server_calling_enabled": gate.server_calling_enabled(),
         "bolna_integration_approved": gate.BOLNA_INTEGRATION_APPROVED,
+        "single_test_call_approved": gate.SINGLE_TEST_CALL_APPROVED,
         "live_mode_locked": gate.LIVE_MODE_LOCKED,
         "test_candidates": await c.count_documents({}),
         "approved_candidates": await c.count_documents({"approved": True}),
@@ -233,17 +238,19 @@ async def stop_batch(bid: str, request: Request):
 async def list_calls(request: Request, mode: Optional[str] = Query(None)):
     await _auth(request)
     q = {"mode": mode} if mode in ("testing", "live") else {}
+    from .dispatch import public_call
     docs = await db().ai_calls.find(q).sort("created_at", -1).to_list(500)
-    return {"items": [serialize(d) for d in docs]}
+    return {"items": [public_call(d, full=False) for d in docs]}
 
 
 @ai_router.get("/calls/{call_id}")
 async def get_call(call_id: str, request: Request):
     await _auth(request)
+    from .dispatch import public_call
     doc = await db().ai_calls.find_one({"_id": _oid(call_id)})
     if not doc:
         raise HTTPException(404, "Not found")
-    return serialize(doc)
+    return public_call(doc)
 
 
 @ai_router.get("/live/status")
@@ -260,7 +267,9 @@ async def live_status(request: Request):
 from .candidates import cand_router  # noqa: E402
 from .provider import provider_router  # noqa: E402
 from .calls import calls_router  # noqa: E402
+from .dispatch import dispatch_router  # noqa: E402
 
+ai_router.include_router(dispatch_router)
 ai_router.include_router(cand_router)
 ai_router.include_router(provider_router)
 ai_router.include_router(calls_router)

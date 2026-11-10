@@ -49,7 +49,7 @@ async def dry_run(cid: str, request: Request):
         {"key": "provider_validated", "ok": provider_ready(prov), "label": "Bolna configuration verified (Test Connection)"},
         {"key": "emergency_stop", "ok": not s["emergency_stop"], "label": "Emergency stop inactive", "informational": True},
         {"key": "server_enabled", "ok": gate.server_calling_enabled(), "label": "Server-side calling enabled", "informational": True},
-        {"key": "bolna_approved", "ok": gate.BOLNA_INTEGRATION_APPROVED, "label": "Real calls approved (Phase 4B)", "informational": True},
+        {"key": "bolna_approved", "ok": gate.SINGLE_TEST_CALL_APPROVED, "label": "Single test call approved (Phase 4B)", "informational": True},
     ]
     blocking = [c for c in checks if not c["ok"] and not c.get("informational")]
     if blocking:
@@ -87,14 +87,23 @@ async def apply_execution(call: dict, ex: dict, source: str):
     if rank(n["status"]) < rank(cur) or (cur in TERMINAL and n["status"] != cur):
         return {"ignored": "out_of_order"}
     upd = {"status": n["status"], "updated_at": now_iso(), "last_source": source}
+    if n.get("created_at"):
+        upd["provider_started_at"] = n["created_at"]
     if n["terminal"]:
         upd.update({k: n[k] for k in ("duration_seconds", "hangup_reason", "recording_url", "transcript",
                                        "extracted_data_raw", "error_message")})
         upd["response"] = n["response"]
         upd["completed_at"] = now_iso()
+        upd["provider_ended_at"] = n.get("updated_at")
+        if call.get("state") in (None, "accepted", "pending_reconciliation", "needs_review", "finished"):
+            upd["state"] = "finished"
+    elif call.get("state") == "pending_reconciliation":
+        upd["state"] = "accepted"
     res = await db().ai_calls.update_one({"_id": call["_id"], "status": cur} if cur else {"_id": call["_id"]}, {"$set": upd})
     if not res.matched_count:
         return {"ignored": "concurrent_update"}
+    if n["terminal"] and ObjectId.is_valid(call.get("job_id") or ""):
+        await db().ai_call_jobs.update_one({"_id": ObjectId(call["job_id"])}, {"$set": {"status": "finished", "updated_at": now_iso()}})
     return {"applied": n["status"]}
 
 

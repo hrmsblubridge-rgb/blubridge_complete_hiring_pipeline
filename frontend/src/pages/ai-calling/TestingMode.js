@@ -16,12 +16,13 @@ export default function TestingMode() {
     const [batches, setBatches] = useState([]);
     const [selected, setSelected] = useState({});
     const [q, setQ] = useState(Q0);
+    const [callStatus, setCallStatus] = useState(null);
 
     const load = useCallback(async () => {
         try {
             const params = new URLSearchParams({ ...q, page_size: 20 }).toString();
-            const [s, c, b] = await Promise.all([aiApi.get('/settings'), aiApi.get(`/test-candidates?${params}`), aiApi.get('/test-batches')]);
-            setSettings(s.data); setData(c.data); setBatches(b.data.items);
+            const [s, c, b, cs] = await Promise.all([aiApi.get('/settings'), aiApi.get(`/test-candidates?${params}`), aiApi.get('/test-batches'), aiApi.get('/test-calls/status')]);
+            setSettings(s.data); setData(c.data); setBatches(b.data.items); setCallStatus(cs.data);
             if (c.data.page > c.data.pages) setQ(p => ({ ...p, page: c.data.pages }));
             const fresh = Object.fromEntries(c.data.items.map(x => [x.id, x]));
             setSelected(sel => Object.fromEntries(Object.entries(sel).map(([k, v]) => [k, fresh[k] || v])));
@@ -49,8 +50,8 @@ export default function TestingMode() {
                 </div>
                 <SampleSheetUpload onImported={load} />
                 <ManualCandidateForm settings={settings} onSaved={load} />
-                <CallingControls selectedCount={Object.keys(selected).length} />
-                <CandidateList data={data} q={q} setQ={setQ} selected={selected} setSelected={setSelected} reload={load} />
+                <CallingControls selectedCount={Object.keys(selected).length} status={callStatus} />
+                <CandidateList data={data} q={q} setQ={setQ} selected={selected} setSelected={setSelected} reload={load} callStatus={callStatus} />
                 <BatchPanel selected={Object.keys(selected)} clearSelected={() => setSelected({})} batches={batches} reload={load} startEnabled={!!settings?.bolna_integration_approved} />
             </main>
         </div>

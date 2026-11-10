@@ -2,13 +2,14 @@ import { useCallback, useState } from 'react';
 import { toast } from 'sonner';
 import { UsersThree, Trash, Prohibit, ArrowCounterClockwise, SealCheck, PencilSimple, PhoneOutgoing, Flask } from '@phosphor-icons/react';
 import { DryRunDialog } from './DryRunDialog';
+import { CallNowDialog } from './CallNowDialog';
 import { aiApi, errMsg } from '../../pages/ai-calling/aiApi';
 import { Card, SectionTitle } from './AICallingHeader';
 import { ApproveDialog } from './ApproveDialog';
 import { EditCandidateDialog } from './EditCandidateDialog';
 import { BulkConfirmDialog } from './BulkConfirmDialog';
 import { CandidateFilters } from './CandidateFilters';
-import { READINESS, CALLING_DISABLED_MSG } from './constants';
+import { READINESS } from './constants';
 
 const Approval = ({ c }) => c.opted_out ? <span className="text-xs text-zinc-600 font-semibold">Opted out</span>
     : c.approved ? <span className="text-xs text-emerald-700 font-semibold" title={`by ${c.approved_by} at ${c.approved_at}`}>Approved</span>
@@ -21,7 +22,12 @@ const Btn = ({ title, onClick, children, testid, danger, disabled }) => (
 
 const BulkBtn = ({ children, ...p }) => <button {...p} className="px-3 py-1.5 rounded-lg border border-[#e5e3d8] bg-white text-xs font-semibold hover:bg-[#efede5] disabled:opacity-40">{children}</button>;
 
-export const CandidateList = ({ data, q, setQ, selected, setSelected, reload }) => {
+export const CandidateList = ({ data, q, setQ, selected, setSelected, reload, callStatus }) => {
+    const [calling, setCalling] = useState(null);
+    const callBlockReason = (c) => !callStatus?.single_call_enabled ? 'Single test calls are disabled on the server'
+        : callStatus?.mode !== 'testing' ? 'Activate Testing Mode first'
+            : callStatus?.blocking_call ? 'Another test call is still unresolved'
+                : c.readiness !== 'ready_calling_disabled' ? 'Candidate must be approved, consented and not opted out' : '';
     const [approving, setApproving] = useState(null);
     const [editing, setEditing] = useState(null);
     const [bulk, setBulk] = useState(null);
@@ -77,7 +83,7 @@ export const CandidateList = ({ data, q, setQ, selected, setSelected, reload }) 
                                                 <Btn title="Edit" testid={`edit-${c.id}`} onClick={() => setEditing(c)}><PencilSimple size={14} /></Btn>
                                                 <Btn title={c.opted_out ? 'Clear opt-out' : 'Mark opted out'} testid={`optout-${c.id}`} onClick={() => act(() => aiApi.post(`/test-candidates/${c.id}/opt-out`, { opted_out: !c.opted_out }), 'Updated')}><Prohibit size={14} /></Btn>
                                                 <Btn title="Dry run (preview request, nothing sent)" testid={`dry-run-${c.id}`} onClick={() => setDryRun(c)}><Flask size={14} /></Btn>
-                                                <Btn title={CALLING_DISABLED_MSG} testid={`call-now-${c.id}`} disabled><PhoneOutgoing size={14} /></Btn>
+                                                <Btn title={callBlockReason(c) || 'Call Now — one real test call'} testid={`call-now-${c.id}`} disabled={!!callBlockReason(c)} onClick={() => setCalling(c)}><PhoneOutgoing size={14} /></Btn>
                                                 <Btn danger title="Delete" testid={`delete-${c.id}`} onClick={() => window.confirm(`Delete ${c.candidate_name}?`) && act(() => aiApi.delete(`/test-candidates/${c.id}`), 'Deleted')}><Trash size={14} /></Btn>
                                             </div>
                                         </td>
@@ -96,6 +102,7 @@ export const CandidateList = ({ data, q, setQ, selected, setSelected, reload }) 
                 </div>
             </div>
             <DryRunDialog candidate={dryRun} onClose={closeDry} />
+            <CallNowDialog key={calling?.id || 'none-call'} candidate={calling} onClose={() => setCalling(null)} onDone={() => { setCalling(null); reload(); }} />
             <ApproveDialog key={approving?.id || 'none'} candidate={approving} onClose={() => setApproving(null)} onDone={() => { setApproving(null); reload(); }} />
             <EditCandidateDialog candidate={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); reload(); }} />
             <BulkConfirmDialog key={bulk || 'none'} action={bulk} items={Object.values(selected)} onClose={() => setBulk(null)} onDone={done} />

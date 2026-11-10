@@ -1,24 +1,26 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { ClockCounterClockwise, Waveform, ChatText, ListBullets } from '@phosphor-icons/react';
+import { ClockCounterClockwise } from '@phosphor-icons/react';
 import { aiApi, errMsg } from './aiApi';
 import { AICallingHeader, Card, SectionTitle } from '../../components/ai-calling/AICallingHeader';
+import { CallDetails } from '../../components/ai-calling/CallDetails';
+import { StateBadge, fmtTime } from '../../components/ai-calling/callFormat';
 
-const Placeholder = ({ icon: Icon, title, text, testid }) => (
-    <Card data-testid={testid}>
-        <SectionTitle icon={Icon}>{title}</SectionTitle>
-        <div className="border border-dashed border-[#e5e3d8] rounded-xl p-6 text-center text-sm text-[#9b9787]">{text}</div>
-    </Card>
-);
+const LIVE_STATES = ['Pending', 'In Progress'];
 
 export default function CallHistory() {
     const [mode, setMode] = useState('testing');
     const [items, setItems] = useState([]);
     const [sel, setSel] = useState(null);
 
+    const load = useCallback(() => aiApi.get(`/calls?mode=${mode}`).then(r => setItems(r.data.items)).catch(e => toast.error(errMsg(e))), [mode]);
+    const open = (id) => aiApi.get(`/calls/${id}`).then(r => setSel(r.data)).catch(e => toast.error(errMsg(e)));
+    useEffect(() => { setSel(null); load(); }, [load]);
     useEffect(() => {
-        aiApi.get(`/calls?mode=${mode}`).then(r => { setItems(r.data.items); setSel(null); }).catch(e => toast.error(errMsg(e)));
-    }, [mode]);
+        if (!items.some(c => LIVE_STATES.includes(c.ui_state))) return undefined;
+        const t = setInterval(() => { load(); if (sel) open(sel.id); }, 30000);
+        return () => clearInterval(t);
+    }, [items, sel, load]);
 
     return (
         <div className="min-h-screen" data-testid="ai-history-page">
@@ -32,19 +34,31 @@ export default function CallHistory() {
                 </div>
                 <Card data-testid="history-list">
                     <SectionTitle icon={ClockCounterClockwise}>{mode === 'testing' ? 'Test' : 'Live'} calls ({items.length})</SectionTitle>
-                    {items.length === 0 ? <p className="text-sm text-[#9b9787]" data-testid="history-empty">No calls yet. Calls appear here once Bolna integration is approved.</p> : (
-                        <ul className="divide-y divide-[#efede5]">
-                            {items.map(c => (
-                                <li key={c.id}><button onClick={() => setSel(c)} data-testid={`history-row-${c.id}`} className="w-full text-left py-2 text-sm hover:bg-[#faf9f1]">{c.candidate_name || c.execution_id} · {c.status} · {c.outcome || '—'}</button></li>
-                            ))}
-                        </ul>
+                    {items.length === 0 ? <p className="text-sm text-[#9b9787]" data-testid="history-empty">No calls yet.</p> : (
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                                <thead className="text-[11px] uppercase tracking-wider text-[#9b9787]">
+                                    <tr>{['Candidate', 'Phone', 'Call time', 'State', 'Bolna status', 'Duration', 'Attendance'].map(h => <th key={h} className="px-2 py-2 text-left font-semibold whitespace-nowrap">{h}</th>)}</tr>
+                                </thead>
+                                <tbody>
+                                    {items.map(c => (
+                                        <tr key={c.id} onClick={() => open(c.id)} data-testid={`history-row-${c.id}`} className={`border-t border-[#efede5] cursor-pointer hover:bg-[#faf9f1] ${sel?.id === c.id ? 'bg-[#faf9f1]' : ''}`}>
+                                            <td className="px-2 py-2 font-semibold">{c.candidate_name}</td>
+                                            <td className="px-2 py-2 font-mono text-xs">{c.phone_masked}</td>
+                                            <td className="px-2 py-2 whitespace-nowrap">{fmtTime(c.dispatched_at || c.created_at)}</td>
+                                            <td className="px-2 py-2"><StateBadge s={c.ui_state} /></td>
+                                            <td className="px-2 py-2">{c.status || '—'}</td>
+                                            <td className="px-2 py-2">{c.duration_seconds != null ? `${Math.round(c.duration_seconds)} s` : '—'}</td>
+                                            <td className="px-2 py-2">{c.response?.attendance_status || 'UNKNOWN'}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     )}
                 </Card>
-                <div className="grid lg:grid-cols-3 gap-5">
-                    <Placeholder icon={Waveform} title="Recording" testid="recording-placeholder" text={sel?.recording_url ? 'Recording available' : 'Recording player will appear here.'} />
-                    <Placeholder icon={ChatText} title="Transcript" testid="transcript-placeholder" text={sel?.transcript || 'Full transcript will appear here.'} />
-                    <Placeholder icon={ListBullets} title="Extracted response" testid="extracted-placeholder" text={sel?.outcome || 'Attendance, reschedule, decline, virtual request and questions will appear here.'} />
-                </div>
+                {sel ? <CallDetails key={sel.id} call={sel} onUpdated={(d) => { setSel(d); load(); }} />
+                    : items.length > 0 && <p className="text-sm text-[#9b9787]" data-testid="history-select-hint">Select a call to see the transcript, recording and extracted response.</p>}
             </main>
         </div>
     );

@@ -9,20 +9,24 @@ from bson import ObjectId
 
 from .store import db, get_settings, IST
 
-# Phase 2: Bolna calling has NOT been approved. Flip only with explicit owner approval.
+# Batch/automatic Bolna calling has NOT been approved. Flip only with explicit owner approval.
 BOLNA_INTEGRATION_APPROVED = False
+# Phase 4B (owner-approved): one admin-confirmed Testing-Mode call at a time via Call Now.
+SINGLE_TEST_CALL_APPROVED = True
 # Phase 2: Live Mode activation is locked in code.
 LIVE_MODE_LOCKED = True
 
-ACTIVE_JOB_STATUSES = ["claimed", "initiated", "ringing", "in-progress"]
-COUNTED_JOB_STATUSES = ACTIVE_JOB_STATUSES + ["completed", "no_answer", "failed", "call-disconnected"]
+ACTIVE_JOB_STATUSES = ["claimed", "initiated", "ringing", "in-progress", "pending_reconciliation", "needs_review"]
+COUNTED_JOB_STATUSES = ACTIVE_JOB_STATUSES + ["completed", "no_answer", "failed", "call-disconnected",
+                                              "rejected", "finished", "reviewed"]
 
 
 def server_calling_enabled() -> bool:
     return os.environ.get("AI_CALLING_ENABLED", "false").strip().lower() == "true"
 
 
-async def evaluate(*, mode: str, test_candidate_id: str, batch_id: str, phone_e164: str, mode_version: int) -> dict:
+async def evaluate(*, mode: str, test_candidate_id: str, batch_id: str, phone_e164: str, mode_version: int,
+                   single_call: bool = False) -> dict:
     s = await get_settings()
     checks = []
 
@@ -32,7 +36,10 @@ async def evaluate(*, mode: str, test_candidate_id: str, batch_id: str, phone_e1
     add("testing_mode", "Testing Mode is active", mode == "testing" and s["mode"] == "testing", f"current mode: {s['mode']}")
     add("not_live", "Job is not a Live Mode job (Live Mode locked)", mode != "live" and LIVE_MODE_LOCKED)
     add("server_enabled", "Server-side calling is enabled", server_calling_enabled(), "AI_CALLING_ENABLED env flag")
-    add("bolna_approved", "Bolna API integration approved", BOLNA_INTEGRATION_APPROVED, "locked until Phase 4 approval")
+    if single_call:
+        add("bolna_approved", "Single test call approved (Phase 4B)", SINGLE_TEST_CALL_APPROVED)
+    else:
+        add("bolna_approved", "Bolna API integration approved", BOLNA_INTEGRATION_APPROVED, "batch calling locked")
     from .provider import provider_ready
     prov = await db().ai_provider_settings.find_one({"_id": "bolna"}) or {}
     add("provider_validated", "Bolna configuration saved and validated", provider_ready(prov),
@@ -47,11 +54,18 @@ async def evaluate(*, mode: str, test_candidate_id: str, batch_id: str, phone_e1
     add("candidate_exists", "Recipient is a stored test candidate", cand is not None)
     cand = cand or {}
     add("admin_approved", "Administrator explicitly approved the recipient", cand.get("approved") is True)
-    batch = None
-    if ObjectId.is_valid(batch_id or ""):
-        batch = await db().ai_test_batches.find_one({"_id": ObjectId(batch_id)})
-    add("in_batch", "Recipient belongs to the selected test batch",
-        bool(batch) and test_candidate_id in batch.get("candidate_ids", []) and batch.get("status") != "stopped")
+    if single_call:
+        now = datetime.now(IST)
+        add("interview_upcoming", "Interview date has not passed", (cand.get("interview_date") or "") >= now.date().isoformat())
+        add("call_window", "Within the allowed calling window (IST)",
+            s["call_window_start"] <= now.strftime("%H:%M") < s["call_window_end"],
+            f"{s['call_window_start']}–{s['call_window_end']} IST")
+    else:
+        batch = None
+        if ObjectId.is_valid(batch_id or ""):
+            batch = await db().ai_test_batches.find_one({"_id": ObjectId(batch_id)})
+        add("in_batch", "Recipient belongs to the selected test batch",
+            bool(batch) and test_candidate_id in batch.get("candidate_ids", []) and batch.get("status") != "stopped")
     add("phone_matches", "Phone number matches the approved record",
         bool(phone_e164) and phone_e164 == cand.get("phone_e164") == cand.get("approved_phone"))
     add("consent", "Recipient agreed to receive test calls", cand.get("consent_confirmed") is True)

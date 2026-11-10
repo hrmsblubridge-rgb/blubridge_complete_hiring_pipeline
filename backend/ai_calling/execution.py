@@ -113,7 +113,7 @@ def normalize_execution(ex: dict) -> dict:
     return {
         "execution_id": ex.get("id") or ex.get("execution_id"), "agent_id": ex.get("agent_id"),
         "status": ex.get("status"), "terminal": ex.get("status") in TERMINAL,
-        "created_at": ex.get("created_at"), "duration_seconds": tel.get("duration") or ex.get("conversation_duration"),
+        "created_at": ex.get("created_at"), "updated_at": ex.get("updated_at"), "duration_seconds": tel.get("duration") or ex.get("conversation_duration"),
         "hangup_reason": tel.get("hangup_reason"), "to_number": tel.get("to_number") or ex.get("user_number"),
         "recording_url": tel.get("recording_url"), "transcript": ex.get("transcript"),
         "extracted_data_raw": ex.get("extracted_data"), "error_message": ex.get("error_message"),

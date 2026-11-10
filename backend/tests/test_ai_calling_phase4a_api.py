@@ -121,4 +121,4 @@ class TestWebhookAndCalls:
     def test_no_calls_and_stop_active(self, s):
         sm = s.get(f"{API}/summary").json()
         assert sm["emergency_stop"] is True and sm["calls_total"] == 0 and sm["live_mode_locked"] is True
-        assert sm["server_calling_enabled"] is False and sm["bolna_integration_approved"] is False
+        assert sm["bolna_integration_approved"] is False
