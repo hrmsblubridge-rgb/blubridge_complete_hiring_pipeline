@@ -199,10 +199,13 @@ class TestUpload:
 
 # ---- manual / approval / edit / opt-out / revoke ----
 class TestCandidateLifecycle:
-    def test_manual_validation(self, s):
+    def test_manual_validation(self, s, created):
         r = s.post(f"{API}/test-candidates", json=_cand("TEST_Bad", "abc", language="French"))
         assert r.status_code == 400
-        r = s.post(f"{API}/test-candidates", json=_cand("TEST_Dup", "9000000011"))
+        for name in ("TEST_DupBase", "TEST_Dup"):
+            r = s.post(f"{API}/test-candidates", json=_cand(name, "9000000011"))
+            if r.status_code == 200:
+                created["cands"].append(r.json()["id"])
         assert r.status_code == 409
 
     @pytest.mark.skip(reason="Phase 2 lifecycle superseded by Phase 3 API; covered in test_ai_calling_phase3.py")
@@ -308,7 +311,8 @@ class TestModeSettings:
     def test_live_status_and_calls(self, s):
         d = s.get(f"{API}/live/status").json()
         assert d["locked"] is True and d["active"] is False
-        assert s.get(f"{API}/calls").json()["items"] == []
+        items = s.get(f"{API}/calls").json()["items"]
+        assert all(c["mode"] == "testing" for c in items)  # Phase 4B's one real test call may exist; never live
         assert s.get(f"{API}/calls/{ObjectId()}").status_code == 404
 
 
@@ -316,8 +320,9 @@ class TestModeSettings:
 class TestInvariants:
     def test_no_jobs_or_calls(self):
         m = _mongo()
-        assert m.ai_call_jobs.count_documents({}) == 0
-        assert m.ai_calls.count_documents({}) == 0
+        unresolved = {"state": {"$in": ["dispatching", "accepted", "pending_reconciliation", "needs_review"]}}
+        assert m.ai_calls.count_documents({"mode": "live"}) == 0 and m.ai_call_jobs.count_documents({"mode": "live"}) == 0
+        assert m.ai_calls.count_documents(unresolved) == 0
 
     def test_summary_flags(self, s):
         d = s.get(f"{API}/summary").json()

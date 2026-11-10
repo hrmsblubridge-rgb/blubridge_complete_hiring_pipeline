@@ -11,8 +11,8 @@ from .store import db, get_settings, IST
 
 # Batch/automatic Bolna calling has NOT been approved. Flip only with explicit owner approval.
 BOLNA_INTEGRATION_APPROVED = False
-# Phase 4B (owner-approved): one admin-confirmed Testing-Mode call at a time via Call Now.
-SINGLE_TEST_CALL_APPROVED = True
+# Phase 5: server-side calling lock — Call Now disabled until the owner explicitly re-approves.
+SINGLE_TEST_CALL_APPROVED = False
 # Phase 2: Live Mode activation is locked in code.
 LIVE_MODE_LOCKED = True
 

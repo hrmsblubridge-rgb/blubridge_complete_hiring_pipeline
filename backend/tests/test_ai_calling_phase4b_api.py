@@ -38,7 +38,7 @@ def test_status(s):
     r = s.get(f"{API}/test-calls/status")
     assert r.status_code == 200
     d = r.json()
-    assert d["single_call_enabled"] is True
+    assert d["single_call_enabled"] is False  # Phase 5 server-side lock
     assert d["mode"] == "testing"
     assert d["emergency_stop"] is True
     assert d["live_mode_locked"] is True
@@ -53,7 +53,7 @@ def test_calls_list_empty(s):
     r = s.get(f"{API}/calls", params={"mode": "testing"})
     assert r.status_code == 200
     d = r.json()
-    assert "items" in d and d["items"] == []
+    assert "items" in d and all(c["mode"] == "testing" and "recording_url" not in c for c in d["items"])
 
 
 def test_recording_random_404(s):
@@ -86,8 +86,8 @@ def test_call_now_wrong_name_400(s, candidates):
     c = approved[0]
     r = s.post(f"{API}/test-candidates/{c['id']}/call-now", headers=CSRF,
                json={"idempotency_key": _key(), "confirm_name": "wrong name"})
-    assert r.status_code == 400
-    assert "exact name" in r.json().get("detail", "")
+    assert r.status_code == 423  # Phase 5 server-side lock is checked first
+    assert "locked" in r.json().get("detail", "")
 
 
 def test_call_now_missing_csrf_403(s, candidates):
@@ -102,13 +102,13 @@ def test_call_now_bad_idempotency_400(s, candidates, key):
     c = candidates[0]
     r = s.post(f"{API}/test-candidates/{c['id']}/call-now", headers=CSRF,
                json={"idempotency_key": key, "confirm_name": "wrong name"})
-    assert r.status_code == 400
+    assert r.status_code == 423
 
 
 def test_call_now_unknown_candidate_404(s):
     r = s.post(f"{API}/test-candidates/{ObjectId()}/call-now", headers=CSRF,
                json={"idempotency_key": _key(), "confirm_name": "wrong name"})
-    assert r.status_code == 404
+    assert r.status_code == 423
 
 
 # Locked controls

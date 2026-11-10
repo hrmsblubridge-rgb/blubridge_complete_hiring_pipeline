@@ -3,6 +3,8 @@ import axios from 'axios';
 import { toast } from 'sonner';
 import { X, CheckCircle, Clock, XCircle, User, EnvelopeSimple, Phone, Buildings, Briefcase } from '@phosphor-icons/react';
 
+import { ProfileCallHistory } from './ai-calling/ProfileCallHistory';
+
 const API = process.env.REACT_APP_BACKEND_URL;
 
 /**
@@ -188,6 +190,8 @@ export default function CandidateJourneyModal({ candidate, onClose }) {
                                 </div>
                             </div>
                         </section>
+
+                        <ProfileCallHistory email={data.basic.email} />
                     </div>
                 )}
             </div>

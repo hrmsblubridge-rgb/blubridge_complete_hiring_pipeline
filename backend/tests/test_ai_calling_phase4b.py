@@ -60,6 +60,7 @@ def run(monkeypatch, case, place=None):
         monkeypatch.setitem(store._state, "auth", auth)
         monkeypatch.setenv("AI_CALLING_ENABLED", "true")
         monkeypatch.setattr(provider, "provider_ready", lambda _d: True)
+        monkeypatch.setattr(gate, "SINGLE_TEST_CALL_APPROVED", True)  # scratch DB + stubbed POST /call only
         monkeypatch.setattr(dispatch, "decrypt_api_key", lambda _d: "stub-key")
         monkeypatch.setattr(dispatch, "ensure_poller", lambda: None)
         monkeypatch.setattr(bc, "place_call", fake_place)

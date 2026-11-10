@@ -76,6 +76,8 @@ async def _set_call(call_id, job_id, call_set: dict, job_status: str):
 async def call_now(cid: str, request: Request, body: dict = Body(...)):  # noqa: B008
     user = await _auth(request)
     _csrf(request)
+    if not gate.SINGLE_TEST_CALL_APPROVED:
+        raise HTTPException(423, "Outbound calling is locked on the server (Phase 5). Owner approval required to re-enable.")
     key = str(body.get("idempotency_key") or "")
     if not IDEM.fullmatch(key):
         raise HTTPException(400, "Missing or invalid idempotency key")
@@ -274,6 +276,30 @@ async def calling_status(request: Request):
             "batch_calling_enabled": gate.BOLNA_INTEGRATION_APPROVED, "dispatch_in_progress": bool(s.get("dispatch_lock")),
             "blocking_call": {"id": str(blk["_id"]), "state": blk["state"], "candidate_name": blk.get("candidate_name")} if blk else None,
             "poll_seconds": POLL_SECONDS}
+
+
+@dispatch_router.get("/registrations/lookup")
+async def registration_lookup(request: Request, email: str = ""):
+    """Resolve the profile's own bb_registrations IDs (exact email). Calls are then matched ONLY by registration ID."""
+    await _auth(request)
+    em = email.strip().lower()
+    if not em or "@" not in em:
+        raise HTTPException(400, "Valid email required")
+    docs = await db().bb_registrations.find({"email": em}, {"_id": 1}).limit(10).to_list(10)
+    return {"registration_ids": [str(d["_id"]) for d in docs]}
+
+
+@dispatch_router.get("/calls/by-registration/{registration_id}")
+async def calls_by_registration(registration_id: str, request: Request, page: int = 1, page_size: int = 10):
+    """Read-only: Live Mode calls linked to this exact registration ID. Test calls are never returned."""
+    await _auth(request)
+    if not ObjectId.is_valid(registration_id):
+        raise HTTPException(400, "Invalid registration ID")
+    page, page_size = max(1, page), min(max(1, page_size), 20)
+    q = {"mode": "live", "registration_id": registration_id}
+    total = await db().ai_calls.count_documents(q)
+    docs = await db().ai_calls.find(q).sort("created_at", -1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
+    return {"items": [public_call(d) for d in docs], "total": total, "page": page, "page_size": page_size}
 
 
 @dispatch_router.post("/test-calls/{call_id}/check")
