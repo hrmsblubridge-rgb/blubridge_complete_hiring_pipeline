@@ -92,7 +92,9 @@ async def apply_execution(call: dict, ex: dict, source: str):
                                        "extracted_data_raw", "error_message")})
         upd["response"] = n["response"]
         upd["completed_at"] = now_iso()
-    await db().ai_calls.update_one({"_id": call["_id"]}, {"$set": upd})
+    res = await db().ai_calls.update_one({"_id": call["_id"], "status": cur} if cur else {"_id": call["_id"]}, {"$set": upd})
+    if not res.matched_count:
+        return {"ignored": "concurrent_update"}
     return {"applied": n["status"]}
 
 

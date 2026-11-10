@@ -1,0 +1,27 @@
+{
+  "summary": "Re-verified Bolna webhook fixes in backend/ai_calling/calls.py. test_ai_calling_webhook.py: 7/7 passed on scratch DB (scratch DB dropped after run). Full AI-calling suite with REACT_APP_BACKEND_URL exported: 55 passed, 10 skipped (all 10 skips = test_ai_calling_provider_phase31). ai_provider_settings sha256 identical before/after (817ab7d0...033a). ai_calls=0, ai_webhook_events still holds exec_sample_completed (status completed, matched false, total events 4 unchanged), ai_call_settings mode=testing emergency_stop=true. No Bolna calls, no provider writes.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/ai-calling/webhook/bolna/{token}", "issue": "apply_execution is read-then-write: it checks status on the call doc read at request start, then runs an unconditional update_one. Two concurrent webhooks for the same execution (e.g. completed and failed arriving together) could both pass the terminal check, and the last write wins. Fix before Phase 4B: add a status filter to the update, e.g. {'_id': id, 'status': {'$nin': list(TERMINAL)}}, or match the status that was read."},
+      {"endpoint": "POST /api/ai-calling/webhook/bolna/{token}", "issue": "Unmatched events, including ones with an empty execution_id, are stored with no cap or TTL. This is low risk because the route needs the secret token. Consider a TTL index on ai_webhook_events.received_at for unmatched events."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/test_ai_calling_webhook.py", "/app/test_reports/pytest/pytest_results_iter52.xml"],
+  "action_items": ["Optional, before Phase 4B: make the apply_execution update conditional on status so concurrent webhooks cannot overwrite a terminal status"],
+  "critical_code_review_comments": [
+    "Fix 1 OK: when the re-fetch fails, the event is deleted by its own inserted _id and needs_refetch=True is set. Bolna's retry with the same payload gives the same hash, so it is processed (test ex-4).",
+    "Fix 2 OK: _record_event catches only DuplicateKeyError. Other DB errors now raise and are not treated as duplicates.",
+    "Fix 3 OK: the condition `cur in TERMINAL and n.status != cur` blocks terminal->terminal changes such as completed->failed. Re-applying the same terminal status is still allowed, which is acceptable for authoritative refetch updates.",
+    "Fix 4 OK: if the execution id or agent_id does not match, the handler sets execution_mismatch and mismatch_at and does not change status or response (ex-3, ex-6).",
+    "Fix 5 OK: needs_refetch is set back to False after a successful, matching re-fetch.",
+    "Unmatched path OK: the only write is ai_webhook_events.insert_one, and the handler returns before any ai_calls access or re-fetch. Matched paths write only to ai_webhook_events and ai_calls. No non-ai_ collections are touched."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (55 passed, 10 skipped as expected)", "frontend": "not tested (backend only)"},
+  "seed_data_creation": "None in the app DB. Webhook tests use the scratch DB ai_webhook_pytest_scratch, which is dropped afterwards (confirmed absent).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "App DB is hiring_ai_testing. Provider doc sha256 = 817ab7d0357d5261b73b64814a1274673b0fee96bb9d4a556d7d864ced03033a. Never save or clear the provider config, rotate the webhook token, set AI_TEST_ALLOW_PROVIDER_WRITES, or call Bolna. Keep emergency stop on. Note: /app/memory/test_credentials.md lists the password 'Admin User', while the review request said 'QAZwsx##123'. No login was needed for this run."
+}

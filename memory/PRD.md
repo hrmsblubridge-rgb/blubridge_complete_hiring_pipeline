@@ -1,3 +1,9 @@
+## AI Calling — Webhook verification (Nov 2026)
+- Real Bolna "Send test" received from 13.202.133.53 → ai_webhook_events (matched=false, no effect).
+- calls.py hardening: DuplicateKeyError-only dedupe, event released on re-fetch failure (retry works), terminal status frozen, conditional update vs concurrent webhooks, execution_mismatch flag, needs_refetch reset.
+- tests/test_ai_calling_webhook.py (scratch DB, stubbed re-fetch) 7/7; full AI suite 55 passed, phase31 credential-writing tests skipped by guard.
+
+
 ## AI Calling — Extraction verification fix (Nov 2026)
 - Bolna extraction fields are "dispositions" (agent.dispositions = IDs; GET /dispositions/{id}?agent_id=). Validator now reads them; verified live: all 6 in "Interview Call Results".
 - normalize_extraction supports extracted_data[category][field]{objective|subjective,status,confidence}; Yes/No/Unknown → True/False/None; unknown attendance → UNKNOWN.
