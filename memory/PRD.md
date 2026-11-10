@@ -3495,3 +3495,13 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 
 ## Feature Flags (.env)
 `ENABLE_WHATSAPP`, `ENABLE_EMAIL`, `TEST_MODE`, `TEST_PHONE`, `TEST_EMAIL`, `MONGO_URL`, `DB_NAME`, `JWT_SECRET`, `SMTP_*`
+
+
+## Phase 4B — Single controlled real test call (June 2026) — shipped, testing-agent verified (iteration_53), NO real call placed yet
+- New `backend/ai_calling/dispatch.py`: POST /test-candidates/{cid}/call-now (admin + CSRF, exact-name confirmation, idempotency key, atomic settings `dispatch_lock`, emergency stop temporarily released and re-engaged once the authorisation is consumed, one POST /call, no retries); GET /test-calls/status; POST /test-calls/{id}/check (read-only); POST /test-calls/{id}/resolve-review (type REVIEWED); GET /calls/{id}/recording (admin-only proxy, no-store, Range passthrough, Bolna URL never exposed).
+- Call states: dispatching → accepted | rejected | pending_reconciliation → finished | needs_review (after 30 min) → reviewed. Unresolved states block any new call. A read-only poller runs every 150s only while calls are accepted or pending; startup turns interrupted dispatches into pending_reconciliation.
+- gate.py: SINGLE_TEST_CALL_APPROVED=True (batch BOLNA_INTEGRATION_APPROVED stays False, LIVE_MODE_LOCKED stays True), single_call checks (interview upcoming, IST calling window). backend .env AI_CALLING_ENABLED="true".
+- Frontend: CallNowDialog, CallingControls status and lock banner, Call Now button enabled only for ready rows, Call History table plus CallDetails (extraction, transcript, secure audio, Check with Bolna, Mark reviewed).
+- Tests: tests/test_ai_calling_phase4b.py (scratch DB, POST /call stubbed) and the testing agent's tests/test_ai_calling_phase4b_api.py. Full suite: 122 passed, 16 skipped.
+- Next: the admin places the first real call manually and verifies the webhook, extraction and recording against a real execution.
+

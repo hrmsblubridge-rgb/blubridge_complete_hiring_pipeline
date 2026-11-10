@@ -1,0 +1,40 @@
+{
+  "summary": "Phase 4B single-call safety test. NO real call was placed: no matching confirm_name was ever sent, and call-now-confirm-btn was never clicked. New live-API suite tests/test_ai_calling_phase4b_api.py: 23/23 passed. Covered: status flags; empty calls list; recording 404 for random and malformed ids; 401 without auth; call-now wrong name 400, missing CSRF 403, five bad idempotency keys 400, unknown candidate 404; initiate 423; mode=live 403; existing batch start 423; resolve-review and check refusals. Full AI-calling suite: 122 passed, 16 skipped (phase31 skips; no provider writes). UI: Testing Mode shows calling-status-message, call-selected-btn is disabled, and Call Now is enabled only on the 2 'Ready for test call' rows (disabled on all 4 'Needs approval' rows, with a reason tooltip). call-now-dialog shows the warning, the name, the masked phone (+91*****0101) and the interview details. Confirm stays disabled when the box is empty, holds 'wrong name' or holds a 3-letter prefix. Cancel closes the dialog. Dry run shows would_send: false. History shows history-list and history-empty, and the Test/Live filters work. The Settings Bolna panel loads (status Verified). The DB snapshot is IDENTICAL before and after: ai_calls=0, ai_call_jobs=0, ai_call_audit=0, mode=testing, emergency_stop=true, dispatch_lock=null, provider doc sha unchanged.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "dispatch.startup_recover", "issue": "call_now sets emergency_stop=false (line 98) before the gate check and only turns it back on in a finally block. If the process crashes or restarts between those points, startup_recover clears dispatch_lock but never turns emergency_stop back on, so the system comes back with the stop released. Add an update to startup_recover that sets emergency_stop=true wherever emergency_stop_released_for exists (or always)."},
+      {"endpoint": "POST /api/ai-calling/test-candidates/{id}/call-now", "issue": "The idempotency lookup runs before the candidate and name checks. A reused key returns {duplicate:true, call_id} for any candidate id and any confirm_name. No call is placed, but scoping the lookup to test_candidate_id would be safer and clearer."},
+      {"endpoint": "GET /api/ai-calling/calls/{id}/recording", "issue": "The proxy fetches any https recording_url stored from the provider or webhook, with no host allowlist (SSRF surface). The Bolna auth header is only added for api.bolna.ai, and httpx strips it on cross-origin redirects. Consider allowlisting the Bolna/telephony recording hosts."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Call Now availability", "issue": "callBlockReason in CandidateList does not consider the IST call window (10:00-19:00) or a past interview date. The button is enabled, and the backend refuses with 412 only after briefly releasing the emergency stop. It is safe, but showing the reason in the UI would be clearer.", "affected_selectors": ["call-now-{id}"]}
+    ],
+    "design_issues": [
+      {"screen": "Settings > Bolna config", "issues": ["The Agent ID input shows the full agent id, while the helper text shows it masked (Current: ••••7a9ba5). This existed before this phase.", "The last provider test shows WARNING 'Calling number linked to this agent - number is linked to a different or no agent'. This may make the first real call fail; the owner should check it before authorising."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_ai_calling_phase4b_api.py", "/app/backend/tests/snapshot_ai_db.py", "/app/test_reports/pytest/phase4b_api.xml"],
+  "action_items": [
+    "Turn emergency_stop back on in dispatch.startup_recover (crash-safety gap)",
+    "Optional: scope the idempotency lookup to test_candidate_id",
+    "Optional: show the call-window / past-interview reason on the Call Now button",
+    "Optional: allowlist recording proxy hosts",
+    "Update /app/memory/test_credentials.md: password 'Admin User' returns 401; the working password is 'QAZwsx##123'"
+  ],
+  "critical_code_review_comments": [
+    "Safe ordering confirmed: the CSRF, idempotency-format, candidate and exact-name checks all run before the dispatch lock and before emergency_stop is released, so wrong-name requests never touch settings.",
+    "Defence in depth confirmed: the dispatch_lock compare-and-set and the gate's concurrency/daily-limit checks block a second concurrent call even if the BLOCKING pre-check races.",
+    "The timeout/unclear response path correctly locks the call as pending_reconciliation and never retries."
+  ],
+  "updated_files": ["/app/backend/tests/test_ai_calling_phase4b_api.py (new)", "/app/backend/tests/snapshot_ai_db.py (new, read-only)"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Admin User / QAZwsx##123 works. The value in /app/memory/test_credentials.md ('Admin User') is stale and returns 401.",
+  "seed_data_creation": "None. The dry-run regression adds ai_dry_runs log entries only (expected behaviour).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "DB is hiring_ai_testing. Run `python3 tests/snapshot_ai_db.py` before and after to confirm ai_calls=0, ai_call_jobs=0, emergency_stop=true and dispatch_lock=null. Approved candidates: 6aef24864d09f4478eebd3d9 and 6aef28f15b0162c01bbfd08f. NEVER send a matching confirm_name to call-now. test_ai_calling_phase4b_api.py only sends 'wrong name'."
+}
