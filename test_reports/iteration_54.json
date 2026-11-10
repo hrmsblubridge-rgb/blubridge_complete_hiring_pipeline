@@ -1,0 +1,31 @@
+{
+  "summary": "Phase 5 AI Calling History safety test. No call was placed: call-now got only random or invalid ids, plus the one real candidate with a wrong name, and the server returned 423 before any name check. No mock data was written to MongoDB. All frontend mocks used Playwright page.route. Backend: the new live-API suite tests/test_ai_calling_phase5_api.py passed 20/20. It covers: status flags (single_call_enabled=false, emergency_stop=true, mode=testing, live_mode_locked=true); call-now returns 423, 403 without CSRF and 401 without auth; by-registration returns {items:[], total:0} for a valid id, 400 for an invalid id, 401 without auth, and caps page_size at 20; lookup returns 400 for 'x', '' and spaces and [] for an unknown email; recording returns 404 for unknown or garbage ids and 401 without auth; the Phase 4B test call never shows up under by-registration; mode=live returns an empty list; call detail hides recording_url and recipient_e164. Full AI-calling suite: 145 passed, 16 skipped (125 earlier + 20 new; phase31 provider-write tests skipped). Frontend /candidate-journey (mocked): journey-basic, journey-rounds and journey-outcome render unchanged. journey-ai-calls-toggle starts collapsed (aria-expanded=false) and makes 0 lookup requests before it is expanded. Expanding shows journey-ai-calls-loading, then the profile-call-<id> list. Collapsing and expanding again does not refetch. The details show duration '73 s', reschedule Yes, virtual No, the decline reason, bulleted questions, the summary, the <audio> (src is the backend /api/ai-calling/calls/{id}/recording) and the transcript. The section has no Call Now or status-change buttons. The empty state shows 'No AI calls recorded.'. A mocked 500 shows journey-ai-calls-error, and Retry recovers. /ai-calling/history lists the Phase 4B call (Raj, Completed, 81 s). call-details shows the status, transcript, all 6 extracted fields and recording-player with a backend URL (no Bolna URL). check-bolna-btn was not clicked. /ai-calling/testing: the one call-now button is disabled with title 'Single test calls are disabled on the server', calling-status-message says the same, and call-selected-btn is disabled. No POST/PUT/DELETE was sent to /api/ai-calling from the UI. The DB snapshot is IDENTICAL before and after: ai_calls=1, ai_call_jobs=1, ai_test_candidates=1, ai_call_audit=2, bb_registrations=0, pipeline_data=0, mode=testing, emergency_stop=true, dispatch_lock=null, provider sha unchanged.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Candidate Journey > AI Calling History row", "issues": ["Status pill repeats the status ('Completed · completed'). Show ui_state only, or the provider status only when it differs.", "Status pill has light cyan text on a muted teal background in the light theme, so contrast is low."]},
+      {"screen": "Testing Mode table", "issues": ["Call readiness still says 'Ready for test call' while server calling is locked. This may mislead; consider showing 'Calling locked'."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_ai_calling_phase5_api.py", "/app/backend/tests/test_ai_calling_phase5.py", "/app/test_reports/pytest/phase5_api.xml"],
+  "action_items": [
+    "Optional: drop the duplicated status text in the ProfileCallItem status pill and improve its contrast.",
+    "Optional: update /app/memory/test_credentials.md. It lists password 'Admin User', but the working password is 'QAZwsx##123'."
+  ],
+  "critical_code_review_comments": [
+    "ProfileCallHistory fetches only page 1 (page_size 10) per registration id, with no pagination. Calls beyond 10 per registration are silently hidden.",
+    "If any one by-registration request fails (Promise.all), the whole section shows an error. This is acceptable but strict; Promise.allSettled would show partial results.",
+    "If data.basic.email is empty, the lookup returns 400 and the UI shows the error state instead of the empty state. Short-circuit to empty when there is no email.",
+    "No index on ai_calls {mode, registration_id, created_at} for the by-registration query. This is fine at the current volume.",
+    "The server-side 423 lock is checked right after auth and CSRF, before any DB read or write. Good."
+  ],
+  "updated_files": ["/app/backend/tests/test_ai_calling_phase5_api.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Admin User / QAZwsx##123 works via POST /api/login. /app/memory/test_credentials.md is stale (it lists password 'Admin User').",
+  "seed_data_creation": "None. All candidate-journey data was synthetic and supplied through Playwright route interception.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "DB hiring_ai_testing snapshot: ai_calls=1 (Phase 4B test call 6af2ebe0e5771b87daa0c746, Raj), ai_call_jobs=1, ai_test_candidates=1 (6af2eb88e5771b87daa0c744), audit=2, bb_registrations=0, pipeline_data=0, emergency_stop=true, mode=testing. Run python3 tests/snapshot_ai_db.py before and after. test_ai_calling_phase5_api.py only sends 'wrong name' to call-now. NEVER send a matching confirm_name."
+}

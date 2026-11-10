@@ -3505,3 +3505,12 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Tests: tests/test_ai_calling_phase4b.py (scratch DB, POST /call stubbed) and the testing agent's tests/test_ai_calling_phase4b_api.py. Full suite: 122 passed, 16 skipped.
 - Next: the admin places the first real call manually and verifies the webhook, extraction and recording against a real execution.
 
+
+## Phase 5: Candidate Profile AI Calling History (June 2026). Shipped and verified by the testing agent (iteration_54). Zero calls placed.
+- Server-side calling lock: gate.SINGLE_TEST_CALL_APPROVED=False. call_now returns 423 before it touches any settings. Re-enabling needs the owner's explicit approval. Testing Mode is selected, the emergency stop is on and Live Mode is locked.
+- New read-only endpoints (dispatch.py): GET /api/ai-calling/registrations/lookup?email= returns the profile's own bb_registrations ids. GET /api/ai-calling/calls/by-registration/{id} returns only mode=live calls with an exact registration_id, paginated with page_size capped at 20, using public_call (no recording_url or recipient number). Playback reuses the /calls/{id}/recording proxy.
+- Frontend: ProfileCallHistory.jsx and ProfileCallItem.jsx form a collapsible section, closed by default, that fetches only when expanded. It is added at the bottom of CandidateJourneyModal.jsx and is read-only, with loading, empty ('No AI calls recorded.') and error/retry states.
+- Tests: tests/test_ai_calling_phase5.py (scratch DB, Bolna stubbed to fail if called) and tests/test_ai_calling_phase5_api.py. Full suite: 145 passed, 16 skipped. Stale tests that assumed zero calls, or relied on leftover dev-DB fixtures, were fixed. Two leftover test candidates (TEST_Dup, TEST_m) were removed.
+- Future live calls must store `registration_id` (the bb_registrations _id as a string) for profile linking.
+
+
