@@ -1,0 +1,39 @@
+{
+  "summary": "Checked Bolna webhook processing before Phase 4B. (1) The Bolna 'Send test' sample reached hiring_ai_testing: ai_webhook_events has execution_id=exec_sample_completed, source_ip=13.202.133.53, ip_allowlisted=true, matched=false. ai_calls=0 and ai_call_jobs=0. (2) test_ai_calling_webhook.py: 6/6 passed on the scratch DB (bad token 404, non-dict/malformed 400, unmatched recorded with no effect, matched applies only re-fetched data (DECLINED body -> CONFIRMED), duplicate ignored, out-of-order ignored, agent mismatch/missing id rejected, refetch failure sets needs_refetch only, empty extraction -> UNKNOWN). The scratch DB was dropped afterwards. (3) Full AI calling suite with REACT_APP_BACKEND_URL exported: 54 passed, 10 skipped (all of phase31, skip guard works, AI_TEST_ALLOW_PROVIDER_WRITES not set). The ai_provider_settings document has the same SHA256 before and after (config_version 16, last4 3241, status verified, agent_id, caller_number and webhook_token_hash unchanged). (4) Grep of tests/*.py: the only provider write calls are webhook-token without CSRF (expects 403) and PUT provider/settings with an invalid caller (expects 400). No test makes a successful write. (5) Non-ai_ collection counts unchanged (bb_*, pipeline_data, registered_candidates, etc.). Emergency stop is still active, mode is testing, Live is locked. Logs contain no 'POST https://api.bolna.ai/call' and no Bolna POST of any kind (only GET verification calls), and the webhook token is redacted in access logs. (6) UI regression: logged in, /ai-calling/settings shows status Verified and Stored ••••••••3241. Nothing was clicked except login.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/ai-calling/webhook/bolna/{token}", "issue": "The event is inserted (marked consumed) BEFORE the re-fetch. If the re-fetch fails, Bolna's retry of the same payload counts as a duplicate and never re-fetches, so the call stays needs_refetch=true forever unless a reconciler or poller exists. Phase 4B needs a needs_refetch reconciler, or the event should only be marked processed after a successful apply."},
+      {"endpoint": "POST /api/ai-calling/webhook/bolna/{token}", "issue": "_record_event treats ANY insert exception as a duplicate (bare except), so Mongo errors are silently reported as {duplicate: true}. Catch DuplicateKeyError only."},
+      {"endpoint": "apply_execution", "issue": "Out-of-order guard uses '<', so equal-rank terminal statuses (e.g. completed -> failed, both rank 5) overwrite each other, including response and completed_at. Since only re-fetched data is applied this is low risk. Consider freezing once terminal and re-applying only the same status."},
+      {"endpoint": "POST /api/ai-calling/webhook/bolna/{token}", "issue": "source_ip takes the left-most X-Forwarded-For entry, which the client can spoof. ip_allowlisted is informational only (not enforced), so there is no security impact now. Do not enforce the allowlist on this value in 4B without using the trusted ingress hop."},
+      {"endpoint": "POST /api/ai-calling/webhook/bolna/{token}", "issue": "A rejected 'execution mismatch' leaves no flag or audit on the ai_calls doc, and the event is consumed, so it is silently dropped. Consider setting a mismatch flag for ops visibility."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/ai-calling/settings Bolna panel", "issues": ["The Agent ID input is pre-filled with the full agent id in plain text, while the helper says 'Current: ••••••••7a9ba5' (inconsistent masking). Not a secret, but it is inconsistent."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_ai_calling_webhook.py", "/app/backend/tests/snapshot_ai_state.py", "/app/test_reports/pytest/ai_calling_webhook_iter51.xml"],
+  "action_items": [
+    "Before Phase 4B: add a needs_refetch reconciler/poller, or record the webhook event as processed only after a successful re-fetch and apply, so failed re-fetches can be retried.",
+    "Narrow the except in _record_event to pymongo.errors.DuplicateKeyError.",
+    "Optional: freeze terminal status in apply_execution and flag execution-mismatch rejections on the call doc.",
+    "Test hygiene: phase4a_api dry-run adds 1 ai_dry_runs doc per run and phase3 upload adds 1 ai_upload_batches doc per run, and neither is cleaned up (only ai_ collections affected).",
+    "WARNING: tests/test_ai_calling_phase2.py (not in this suite) POSTs /emergency-stop {active:false} and toggles mode. Running it would temporarily release the emergency stop. Guard it with a skip like phase31 now that real credentials are stored."
+  ],
+  "critical_code_review_comments": [
+    "Unmatched path: bolna_webhook writes ONLY to ai_webhook_events and returns before any ai_calls access. No path writes to non-ai_ collections.",
+    "Matched path writes to ai_calls only: needs_refetch on re-fetch failure, or apply_execution with re-fetched data after the id and agent_id match. The webhook body is never applied.",
+    "Token check uses hmac.compare_digest on a sha256 hash and returns 404 when no token is configured. The isinstance(dict) guard (line 107) fixes the earlier 500 on non-dict JSON. The 500 seen in old logs comes from before that guard."
+  ],
+  "updated_files": ["/app/backend/tests/snapshot_ai_state.py (new, read-only snapshot helper)"],
+  "success_rate": {"backend": "100% (54 passed, 10 intentionally skipped)", "frontend": "100% (read-only regression)"},
+  "seed_data_creation": "None. Suite-created TEST_ test candidates were cleaned up by their fixtures. Residue: +1 ai_dry_runs, +1 ai_upload_batches.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Real Bolna creds are stored (last4 3241, config_version 16, verified). Never save/clear/rotate. Use 'python tests/snapshot_ai_state.py out.json' before and after runs and compare provider_full_repr_hash. Do not run test_ai_calling_phase2.py (it releases the emergency stop). Webhook tests run on the scratch DB ai_webhook_pytest_scratch with a stubbed re-fetch."
+}

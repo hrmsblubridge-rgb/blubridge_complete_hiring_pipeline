@@ -7,10 +7,11 @@ import re
 
 from bson import ObjectId
 from fastapi import APIRouter, HTTPException, Request
+from pymongo.errors import DuplicateKeyError
 
 from . import bolna_client as bc
 from . import gate
-from .execution import normalize_execution, rank, user_data_for
+from .execution import TERMINAL, normalize_execution, rank, user_data_for
 from .provider import _auth, _csrf, _doc, decrypt_api_key, provider_ready
 from .store import db, get_settings, mask_phone, now_iso
 
@@ -68,20 +69,22 @@ async def dry_run(cid: str, request: Request):
 # ---------------- webhook ----------------
 
 async def _record_event(execution_id: str, status: str, payload: dict, ip: str, matched: bool):
+    """Return event _id if new, None if this exact event was already processed."""
     h = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
     try:
-        await db().ai_webhook_events.insert_one({"execution_id": execution_id, "status": status, "payload_hash": h,
-                                                 "source_ip": ip, "ip_allowlisted": ip in BOLNA_IPS,
-                                                 "matched": matched, "received_at": now_iso()})
-        return True
-    except Exception:  # noqa: BLE001 — duplicate key ⇒ already processed
-        return False
+        res = await db().ai_webhook_events.insert_one({"execution_id": execution_id, "status": status, "payload_hash": h,
+                                                       "source_ip": ip, "ip_allowlisted": ip in BOLNA_IPS,
+                                                       "matched": matched, "received_at": now_iso()})
+        return res.inserted_id
+    except DuplicateKeyError:
+        return None
 
 
 async def apply_execution(call: dict, ex: dict, source: str):
     """Persist an AUTHORITATIVE execution (re-fetched from Bolna). Ignores out-of-order regressions."""
     n = normalize_execution(ex)
-    if rank(n["status"]) < rank(call.get("status", "")):
+    cur = call.get("status", "")
+    if rank(n["status"]) < rank(cur) or (cur in TERMINAL and n["status"] != cur):
         return {"ignored": "out_of_order"}
     upd = {"status": n["status"], "updated_at": now_iso(), "last_source": source}
     if n["terminal"]:
@@ -119,9 +122,12 @@ async def bolna_webhook(token: str, request: Request):
     try:
         api_key = decrypt_api_key(prov)
         ex = await bc.get_execution(api_key, ex_id)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — any re-fetch failure: release the event so Bolna's retry is processed
+        await db().ai_webhook_events.delete_one({"_id": fresh})
         await db().ai_calls.update_one({"_id": call["_id"]}, {"$set": {"needs_refetch": True}})
         return {"received": True, "matched": True, "refetch": "failed"}
     if str(ex.get("id") or "") != ex_id or ex.get("agent_id") != call.get("agent_id"):
+        await db().ai_calls.update_one({"_id": call["_id"]}, {"$set": {"execution_mismatch": True, "mismatch_at": now_iso()}})
         return {"received": True, "matched": True, "rejected": "execution mismatch"}
+    await db().ai_calls.update_one({"_id": call["_id"]}, {"$set": {"needs_refetch": False}})
     return {"received": True, "matched": True, **(await apply_execution(call, ex, "refetch"))}

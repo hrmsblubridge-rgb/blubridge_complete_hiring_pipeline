@@ -107,10 +107,23 @@ def test_agent_mismatch_missing_id_and_refetch_failure(monkeypatch):
         fetched["ex-6"] = {k: v for k, v in _completed("ex-6").items() if k != "id"}
         assert (await post(_completed("ex-6"))).json()["rejected"] == "execution mismatch"
         assert (await post(_completed("ex-4"))).json()["refetch"] == "failed"
+        fetched["ex-4"] = _completed("ex-4")  # Bolna retries the same payload after re-fetch recovers
+        assert (await post(_completed("ex-4"))).json()["applied"] == "completed"
         for e in ("ex-3", "ex-6"):
             c = await db.ai_calls.find_one({"execution_id": e})
-            assert c["status"] == "initiated" and "response" not in c
-        assert (await db.ai_calls.find_one({"execution_id": "ex-4"}))["needs_refetch"] is True
+            assert c["status"] == "initiated" and "response" not in c and c["execution_mismatch"] is True
+        assert (await db.ai_calls.find_one({"execution_id": "ex-4"}))["needs_refetch"] is False
+    run_case(monkeypatch, case)
+
+
+def test_terminal_status_frozen(monkeypatch):
+    async def case(post, db, fetched):
+        await db.ai_calls.insert_one({"execution_id": "ex-7", "agent_id": AGENT, "status": "initiated", "mode": "testing"})
+        fetched["ex-7"] = _completed("ex-7")
+        assert (await post(_completed("ex-7"))).json()["applied"] == "completed"
+        fetched["ex-7"] = {**_completed("ex-7"), "status": "failed"}
+        assert (await post({"id": "ex-7", "status": "failed"})).json()["ignored"] == "out_of_order"
+        assert (await db.ai_calls.find_one({"execution_id": "ex-7"}))["status"] == "completed"
     run_case(monkeypatch, case)
 
 
