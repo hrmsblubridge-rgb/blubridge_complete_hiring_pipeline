@@ -122,6 +122,6 @@ async def bolna_webhook(token: str, request: Request):
     except Exception:  # noqa: BLE001
         await db().ai_calls.update_one({"_id": call["_id"]}, {"$set": {"needs_refetch": True}})
         return {"received": True, "matched": True, "refetch": "failed"}
-    if str(ex.get("id") or ex_id) != ex_id or ex.get("agent_id") != call.get("agent_id"):
+    if str(ex.get("id") or "") != ex_id or ex.get("agent_id") != call.get("agent_id"):
         return {"received": True, "matched": True, "rejected": "execution mismatch"}
     return {"received": True, "matched": True, **(await apply_execution(call, ex, "refetch"))}
