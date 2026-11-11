@@ -15,10 +15,11 @@ from .store import IST, SETTINGS_ID, db, get_settings, now_iso
 
 modes_router = APIRouter()
 LIVE_DISPATCH_IMPLEMENTED = False  # Phase 7A: no live dispatch code path exists
-CONSENT_TEXT_VERSION = "2026-06-v1-draft"
-CONSENT_TEXT = ("I agree to receive an automated AI voice call from BluBridge Technologies regarding my scheduled "
-                "in-person interview at the Chennai office. I understand that the call may be recorded and that I can "
-                "withdraw my consent.")
+CONSENT_TEXT_VERSION = "2026-06-v2"
+CONSENT_TEXT = ("I agree to receive automated AI voice calls from BluBridge Technologies regarding my scheduled in-person "
+                "interview at the Chennai office. I understand that the calls may be recorded, that I can ask interview-related "
+                "questions, and that I may withdraw my consent.")
+LIVE_AUTH_PHRASE = "AUTHORIZE LIVE DISPATCH"
 
 
 def overall_test_mode() -> bool:
@@ -54,7 +55,8 @@ async def calling_status(overall: bool = None) -> dict:
     return {"overall_test_mode": overall, "ai_test_enabled": s["ai_test_enabled"], "ai_live_enabled": s["ai_live_enabled"],
             "emergency_stop": s["emergency_stop"], "server_calling_enabled": gate.server_calling_enabled(),
             "live_dispatch_authorized": bool(s.get("live_dispatch_authorized")), "live_dispatch_implemented": LIVE_DISPATCH_IMPLEMENTED,
-            "switch_version": s["mode_version"], "effective": eff,
+            "switch_version": s["mode_version"], "effective": eff, "live_auth_phrase": LIVE_AUTH_PHRASE,
+            "live_limits": {"daily": s["live_daily_call_limit"], "concurrent": s["live_max_concurrent_calls"]},
             "test": {"configured": eff["test_calls"], "can_call": eff["test_calls"] and not test_b, "blockers": test_b},
             "live": {"configured": eff["live_calls"], "can_call": eff["live_calls"] and not live_b, "blockers": live_b},
             "policy": policy_table()}
@@ -112,7 +114,7 @@ async def evaluate_live(*, registration_id: str, job_mode_version: int, now: dat
     add("booking_exists", "Booking found by exact registration ID", reg is not None)
     if reg:
         c = await consent_for(registration_id)
-        b = {**reg, "ai_call_consent": {"status": c.get("status")} if c else None, "do_not_call": c.get("do_not_call") is True}
+        b = {**reg, "ai_call_consent": {"status": c.get("consent_status")} if c else None, "do_not_call": c.get("do_not_call") is True}
         reasons = eligibility(b)
         add("eligible", "Booking eligible (status, consent, opt-out, phone…)", not reasons, ", ".join(reasons))
         p = plan_booking(b, now, s)
@@ -121,8 +123,12 @@ async def evaluate_live(*, registration_id: str, job_mode_version: int, now: dat
         dup = await db().ai_call_jobs.find_one({"mode": "live", "registration_id": registration_id, "booking_key": booking_key(reg),
                                                 "status": {"$nin": ["cancelled"]}})
         add("no_duplicate", "No call already made or queued for this booking slot", dup is None)
-    active = await db().ai_call_jobs.count_documents({"status": {"$in": gate.ACTIVE_JOB_STATUSES}})
-    add("concurrency", "Concurrency limit not exceeded", active < int(s["max_concurrent_calls"]))
+    active = await db().ai_call_jobs.count_documents({"mode": "live", "status": {"$in": gate.ACTIVE_JOB_STATUSES}})
+    add("concurrency", "Live concurrent-call limit not exceeded", active < int(s["live_max_concurrent_calls"]))
+    today = now.date().isoformat()
+    used = await db().ai_call_jobs.count_documents({"mode": "live", "created_at": {"$gte": today},
+                                                    "status": {"$in": gate.COUNTED_JOB_STATUSES}})
+    add("daily_limit", "Live daily-call limit not reached", used < int(s["live_daily_call_limit"]), f"{used}/{s['live_daily_call_limit']}")
     return {"allowed": all(c["ok"] for c in checks), "checks": checks}
 
 
@@ -140,10 +146,17 @@ async def post_switches(request: Request, body: dict = Body(...)):  # noqa: B008
 
 
 @modes_router.post("/live-dispatch/authorize")
-async def authorize_live(request: Request):
-    await _auth(request)
+async def authorize_live(request: Request, body: dict = Body(default={})):  # noqa: B008
+    """Prepared activation gate. Validates and audits, but activation stays DISABLED in Phase 7B."""
+    user = await _auth(request)
     _csrf(request)
-    raise HTTPException(423, "Live Dispatch Authorization is not available in Phase 7A")
+    st = await calling_status()
+    pre = {"typed_confirmation": body.get("confirmation") == LIVE_AUTH_PHRASE, "ai_live_on": st["ai_live_enabled"],
+           "overall_test_on": st["overall_test_mode"], "emergency_stop_off": not st["emergency_stop"],
+           "server_enabled": st["server_calling_enabled"], "dispatch_implemented": LIVE_DISPATCH_IMPLEMENTED}
+    await db().ai_call_audit.insert_one({"action": "live_dispatch_authorize_attempt", "by": user, "preconditions": pre,
+                                         "result": "refused_phase_lock", "at": now_iso()})
+    raise HTTPException(423, "Live Dispatch Authorization cannot be activated in this phase")
 
 
 @modes_router.get("/consent/preview")

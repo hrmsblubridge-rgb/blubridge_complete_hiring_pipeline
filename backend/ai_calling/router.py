@@ -108,6 +108,8 @@ class SettingsBody(BaseModel):
     call_window_end: Optional[str] = None
     default_company_name: Optional[str] = None
     default_office_address: Optional[str] = None
+    live_daily_call_limit: Optional[int] = None
+    live_max_concurrent_calls: Optional[int] = None
 
 
 @ai_router.put("/settings")
@@ -116,6 +118,10 @@ async def update_settings(body: SettingsBody, request: Request):
     upd = {k: v for k, v in body.model_dump().items() if v is not None and k in EDITABLE_SETTINGS}
     if "daily_call_limit" in upd and not (0 <= upd["daily_call_limit"] <= 200):
         raise HTTPException(400, "daily_call_limit must be 0–200")
+    if "live_daily_call_limit" in upd and not (0 <= upd["live_daily_call_limit"] <= 500):
+        raise HTTPException(400, "live_daily_call_limit must be 0–500")
+    if "live_max_concurrent_calls" in upd and not (1 <= upd["live_max_concurrent_calls"] <= 5):
+        raise HTTPException(400, "live_max_concurrent_calls must be 1–5")
     if "max_concurrent_calls" in upd and not (1 <= upd["max_concurrent_calls"] <= 5):
         raise HTTPException(400, "max_concurrent_calls must be 1–5")
     for k in ("call_window_start", "call_window_end"):
@@ -273,10 +279,13 @@ from .calls import calls_router  # noqa: E402
 from .dispatch import dispatch_router  # noqa: E402
 from .dryrun import dryrun_router  # noqa: E402
 from .modes import modes_router  # noqa: E402
+from .consent import admin_router as consent_admin_router, public_router as consent_public_router  # noqa: E402
 
 ai_router.include_router(dispatch_router)
 ai_router.include_router(dryrun_router)
 ai_router.include_router(modes_router)
+ai_router.include_router(consent_admin_router)
+ai_router.include_router(consent_public_router)
 ai_router.include_router(cand_router)
 ai_router.include_router(provider_router)
 ai_router.include_router(calls_router)

@@ -20,6 +20,7 @@ import SetHolidays from "./pages/SetHolidays";
 import VerifyOTP from "./pages/VerifyOTP";
 import PublicRegistration from "./pages/PublicRegistration";
 import InterviewSchedule from "./pages/InterviewSchedule";
+import AiConsentManage from "./pages/AiConsentManage";
 import CollegeSchedules from "./pages/CollegeSchedules";
 import CollegeRegistration from "./pages/CollegeRegistration";
 import CandidateJourney from "./pages/CandidateJourney";
@@ -81,6 +82,7 @@ function App() {
                         <Route path="/register/college" element={<CollegeRegistration />} />
                         <Route path="/register/:formId" element={<PublicRegistration />} />
                         <Route path="/schedule-interview/:token" element={<InterviewSchedule />} />
+                        <Route path="/ai-consent/:token" element={<AiConsentManage />} />
                         <Route path="/jobs/view/:openingId" element={<PublicJobView />} />
                         <Route path="/" element={<Navigate to="/home" replace />} />
                         <Route path="*" element={<Navigate to="/home" replace />} />

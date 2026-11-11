@@ -68,8 +68,11 @@ export const ModeSwitchesPanel = () => {
                 <Source name="Live candidate calls" d={st?.live} testid="source-live" />
             </div>
             <p className="text-xs text-[#6b7280] mb-2" data-testid="live-dispatch-status">
-                Live Dispatch Authorization: <b className="text-rose-700">{st?.live_dispatch_authorized ? 'GRANTED' : 'OFF'}</b>. It is a separate, explicit approval and is not available in this phase.
+                Live Dispatch Authorization: <b className="text-rose-700">{st?.live_dispatch_authorized ? 'GRANTED' : 'OFF'}</b>. It is a separate, explicit approval (typed phrase "{st?.live_auth_phrase}") and cannot be activated in this phase.
+                Live limits: <b data-testid="live-limits">{st?.live_limits?.daily} calls/day · {st?.live_limits?.concurrent} at a time</b>.
             </p>
+            <button disabled title="Activation is disabled in this phase" data-testid="live-authorize-btn"
+                className="mb-3 px-4 py-2 rounded-lg bg-rose-700 text-white text-xs font-semibold opacity-40 cursor-not-allowed">Authorize Live Dispatch (disabled)</button>
             <details className="text-xs" data-testid="policy-table">
                 <summary className="cursor-pointer font-semibold text-[#1a2332]">Show all 8 switch combinations</summary>
                 <table className="mt-2 w-full">

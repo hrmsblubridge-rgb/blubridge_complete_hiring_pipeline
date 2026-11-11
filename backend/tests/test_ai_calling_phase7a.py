@@ -174,13 +174,13 @@ def test_live_gate_never_allows_and_never_mixes_sources(monkeypatch):
         k = {c["key"]: c for c in v["checks"]}
         assert v["allowed"] is False and k["implemented"]["ok"] is False
         assert "NO_CALLING_CONSENT" in k["eligible"]["detail"]  # test-list consent never counts for a real candidate
-        await d.ai_candidate_consents.insert_one({"registration_id": str(reg), "status": "granted"})
+        await d.ai_candidate_consents.insert_one({"registration_id": str(reg), "consent_status": "granted"})
         k = {c["key"]: c for c in (await modes.evaluate_live(registration_id=str(reg), job_mode_version=1, overall=True))["checks"]}
         assert k["eligible"]["ok"] is True
-        await d.ai_candidate_consents.update_one({"registration_id": str(reg)}, {"$set": {"status": "withdrawn"}})
+        await d.ai_candidate_consents.update_one({"registration_id": str(reg)}, {"$set": {"consent_status": "withdrawn"}})
         k = {c["key"]: c for c in (await modes.evaluate_live(registration_id=str(reg), job_mode_version=1, overall=True))["checks"]}
         assert "CONSENT_WITHDRAWN" in k["eligible"]["detail"]
-        await d.ai_candidate_consents.update_one({"registration_id": str(reg)}, {"$set": {"status": "granted", "do_not_call": True}})
+        await d.ai_candidate_consents.update_one({"registration_id": str(reg)}, {"$set": {"consent_status": "granted", "do_not_call": True}})
         k = {c["key"]: c for c in (await modes.evaluate_live(registration_id=str(reg), job_mode_version=1, overall=False))["checks"]}
         assert "DO_NOT_CALL" in k["eligible"]["detail"] and k["overall_test"]["ok"] is False
         assert (await modes.evaluate_live(registration_id=str(ObjectId()), job_mode_version=1, overall=True))["allowed"] is False

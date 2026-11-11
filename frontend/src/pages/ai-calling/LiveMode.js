@@ -4,6 +4,7 @@ import { Lock, CalendarCheck, ArrowClockwise, MapPin, UserCircle } from '@phosph
 import { aiApi, errMsg } from './aiApi';
 import { AICallingHeader, Card, SectionTitle } from '../../components/ai-calling/AICallingHeader';
 import { DryRunPreview } from '../../components/ai-calling/DryRunPreview';
+import { RealBookingsPreview } from '../../components/ai-calling/RealBookingsPreview';
 
 const Rule = ({ icon: Icon, title, text }) => (
     <div className="flex gap-3">
@@ -14,6 +15,7 @@ const Rule = ({ icon: Icon, title, text }) => (
 
 export default function LiveMode() {
     const [st, setSt] = useState(null);
+    const [tab, setTab] = useState('synthetic');
     useEffect(() => { aiApi.get('/live/status').then(r => setSt(r.data)).catch(e => toast.error(errMsg(e))); }, []);
 
     return (
@@ -39,7 +41,13 @@ export default function LiveMode() {
                 <button disabled data-testid="live-activate-btn" title="Locked in this phase" className="px-5 py-2.5 rounded-lg bg-rose-700 text-white text-sm font-semibold opacity-40 cursor-not-allowed flex items-center gap-2">
                     <Lock size={16} /> Activate Live Mode (locked)
                 </button>
-                <DryRunPreview />
+                <div className="flex gap-2" role="tablist">
+                    {[['synthetic', 'Synthetic Bookings'], ['real', 'Real Bookings']].map(([k, l]) => (
+                        <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)} data-testid={`live-tab-${k}`}
+                            className={`px-4 py-2 rounded-lg text-sm font-semibold border ${tab === k ? 'bg-teal-700 text-white border-teal-700' : 'bg-white border-[#e5e3d8] text-[#1a2332]'}`}>{l}</button>
+                    ))}
+                </div>
+                {tab === 'synthetic' ? <DryRunPreview /> : <RealBookingsPreview />}
             </main>
         </div>
     );

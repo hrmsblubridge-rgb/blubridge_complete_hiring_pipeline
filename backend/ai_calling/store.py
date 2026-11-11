@@ -23,6 +23,8 @@ SETTINGS_DEFAULTS = {
     "ai_test_enabled": True,
     "ai_live_enabled": False,
     "live_dispatch_authorized": False,
+    "live_daily_call_limit": 20,
+    "live_max_concurrent_calls": 1,
     "daily_call_limit": 20,
     "max_concurrent_calls": 1,
     "call_window_start": "10:00",
@@ -34,7 +36,7 @@ SETTINGS_DEFAULTS = {
 }
 EDITABLE_SETTINGS = {
     "daily_call_limit", "max_concurrent_calls", "call_window_start", "call_window_end",
-    "default_company_name", "default_office_address",
+    "default_company_name", "default_office_address", "live_daily_call_limit", "live_max_concurrent_calls",
 }
 
 _state = {"db": None, "auth": None}
