@@ -1,0 +1,33 @@
+{
+  "summary": "Phase 7B tested (no calls were placed). Backend: a new test file test_ai_calling_phase7b_api.py with 16 tests runs against the public URL, all passing. The scratch-DB tests in test_ai_calling_phase7b.py also pass (8). The full AI-calling regression suite, excluding provider_phase31 and run with -n0, gave 234 passed and 14 skipped. Frontend, with the booking and consent APIs mocked through page.route: the booking page consent checkbox starts unchecked and shows the v2 wording. Booking with it unchecked sends granted:false, and booking with it checked sends granted:true. Both send text_version 2026-06-v2 and source booking_form, and the booking body is unchanged. Both reach schedule-success with ai-consent-outcome and manage-ai-consent-link (/ai-consent/:token). When the consent POST is mocked to return 503, the success screen still appears along with ai-consent-failed. On the consent page, the status shows; withdraw goes from granted to withdrawn; the grant button is disabled until the box is checked, then saving goes back to granted with source consent_page; a mocked 404 shows ai-consent-error. Admin UI: the Live Mode synthetic and real tabs work. The synthetic planner ran (15 bookings). The real tab shows the warning, the run button and the empty message (0 bookings, read-only). The Settings page shows live-limits '20 calls/day · 1 at a time', a disabled live-authorize-btn and live-dispatch-status OFF. The history page shows the Phase 4B Raj call.",
+  "backend_issues": {"critical": [], "minor": [
+    {"endpoint": "GET /api/ai-calling/consent/preview", "issue": "The storage description lists the fields 'status (granted|refused|withdrawn)', 'consent_at' and 'withdrawn_at'. The documents actually stored use consent_status (granted|not_given|withdrawn), consent_timestamp and consent_withdrawn_at. The description is out of date."},
+    {"endpoint": "GET /api/ai-calling/switches (live.blockers)", "issue": "The blocker text still reads 'Live dispatch is not implemented yet (Phase 7A)'. The phase label is out of date."}
+  ]},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/ai-calling/live", "issues": ["The live-locked-banner says 'No real candidate is read or called in this phase', but the new Real Bookings tab does read bb_registrations (read-only). The wording should be updated."]},
+      {"screen": "/ai-consent/:token", "issues": ["The page has no Blubridge header logo or footer, unlike the booking page it is linked from. Candidates may not trust an unbranded page."]},
+      {"screen": "/ai-calling/settings", "issues": ["The live limits are display-only. There are no inputs in Limits & defaults, so they can only be edited through the API. This is fine if intended.", "The disabled 'Authorize Live Dispatch (disabled)' button is pink text on a pink background with very low contrast (intentionally disabled)."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_ai_calling_phase7b_api.py", "/app/backend/tests/test_ai_calling_phase7b.py", "/app/test_reports/pytest/pytest_phase7b.xml", "/app/scripts/ai_snapshot.py"],
+  "action_items": [
+    "Consider what happens on a reschedule: a candidate who already granted consent sees the checkbox unchecked by default, and rebooking then silently overwrites 'granted' with 'not_given' (and cancels their pending live jobs). Either pre-check or label the current status, or skip the POST when the box is unchecked and consent was already granted.",
+    "Update the out-of-date text: 'Phase 7A' in the live blockers, the Live Mode banner sentence about no real candidate being read, and the consent/preview storage field names.",
+    "Optional: hardcode text_version '2026-06-v2' or fall back to it. If the consent GET fails on page load, the checkbox stays disabled and the POST sends undefined, which always returns 409 and shows the 'failed' state."
+  ],
+  "critical_code_review_comments": [
+    "consent.py record_consent: for status 'not_given', consent_withdrawn_at from an earlier withdrawal is not cleared. This is minor.",
+    "The public consent endpoints have no rate limiting. The tokens carry 64 bits of entropy and require at least 16 characters, so enumeration risk is low.",
+    "Safety confirmed: authorize_live always raises 423 after writing an audit entry; real_preview only reads; withdrawal only updates live pending jobs with the exact registration_id and never touches bb_registrations."
+  ],
+  "updated_files": ["/app/backend/tests/test_ai_calling_phase7b_api.py", "/app/scripts/ai_snapshot.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "None. Nothing was inserted into bb_registrations or pipeline_data. Final DB state: ai_calls=1, ai_call_jobs=1, ai_test_candidates=1, ai_candidate_consents=0, bb_registrations=0, provider hash 33d786568c9026ae (unchanged), emergency_stop=true, ai_test ON, ai_live OFF. Expected side effects: new ai_call_audit rows (authorize attempts and switch toggles from the 7A regression), mode_version moved from 67 to 71, and live_daily_call_limit/live_max_concurrent_calls are now explicitly saved as 20/1 (before they were unset and defaulted to the same values). The synthetic dry-run plan was re-run (only the ai_dry_run_* collections changed).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run python3 /app/scripts/ai_snapshot.py before and after for counts and the provider hash. Run the API tests with REACT_APP_BACKEND_URL exported and -n0, excluding provider_phase31. For booking and consent UI tests, mock **/api/pub/schedule/** and **/api/ai-calling/public/consent/** with page.route; never book for real."
+}

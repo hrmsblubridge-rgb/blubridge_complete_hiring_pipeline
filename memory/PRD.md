@@ -3568,3 +3568,32 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
   - a decision on the missing cancellation status;
   - the owner re-enabling Call Now and releasing the emergency stop for any test call.
 
+
+
+## Phase 7B: Optional candidate AI-call consent and real-booking dry-run preview (June 2026). Verified by the testing agent (iteration_57). ZERO calls.
+- Booking page (InterviewSchedule.js):
+  - Optional unchecked checkbox (wording version 2026-06-v2) above the Schedule button.
+  - The existing POST /api/pub/schedule/{token} is UNCHANGED. Only after it succeeds does the page POST /api/ai-calling/public/consent/{token} {granted, text_version, source}.
+  - If that fails, the booking stands and the success screen says the preference counts as NOT given.
+  - The success screen links to "Manage AI calling consent".
+- `backend/ai_calling/consent.py`:
+  - Public routes (no login, access via the existing secret `schedule_token`, 64-bit random): GET/POST /public/consent/{token} and POST /public/consent/{token}/withdraw.
+  - The booking decision requires an existing booking and the current text_version. The latest explicit decision wins; unchecked is stored as not_given.
+  - Stored in ai_candidate_consents (unique registration_id) with consent_status, source, consent_timestamp, consent_text_version, consent_withdrawn_at, do_not_call, updated_at and history.
+  - A persist failure returns 503 and writes an audit entry (consent_persist_failed); it never claims the consent was saved.
+  - A status other than granted cancels pending live ai_call_jobs for that registration_id only. The interview is never touched.
+  - Admin GET /dry-run/real-preview: read-only plan over bb_registrations bookings that reuses plan_booking/eligibility. It writes nothing and creates no jobs.
+- New page AiConsentManage.js at /ai-consent/:token (withdraw, or grant later).
+- Live Mode page: Synthetic Bookings / Real Bookings tabs (RealBookingsPreview.jsx).
+- modes.py:
+  - authorize_live validates the preconditions (typed phrase "AUTHORIZE LIVE DISPATCH", AI Live ON, Overall Test ON, stop OFF, server enabled, dispatch implemented) and audits the attempt, but always returns 423.
+  - evaluate_live adds live daily and concurrent limits (settings live_daily_call_limit 20 [0–500], live_max_concurrent_calls 1 [1–5]).
+- Tests: test_ai_calling_phase7b.py (8) and test_ai_calling_phase7b_api.py (16). Full suite: 234 passed, 14 skipped.
+- Before Phase 7C:
+  - Owner approval of the consent wording and of reusing the non-expiring schedule_token for consent management;
+  - production deploy of the booking checkbox;
+  - building the live dispatch worker (claim → evaluate_live → place_call) with registration_id and booking_key on jobs and calls;
+  - the Live Dispatch Authorization activation flow;
+  - a decision on the missing cancellation status;
+  - a do_not_call admin control on candidate profiles.
+
