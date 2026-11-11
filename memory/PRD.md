@@ -3541,3 +3541,30 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
   - daily limits;
   - an owner-approved activation.
 
+
+
+## Phase 7A: Independent AI Test/Live switches, consent-only test recipients, live gate prep (June 2026). Verified by the testing agent (iteration_56). ZERO calls.
+- New `backend/ai_calling/modes.py`:
+  - `effective()` implements the 8-row policy: test = AI Test; live = AI Live AND Overall Test Mode. Overall Test Mode is read-only via messaging.is_test_mode.
+  - `calling_status()` lists the blockers for each source.
+  - `set_switches()` uses optimistic concurrency via mode_version (409 when stale). Switching a source OFF cancels its pending jobs and turning Live OFF revokes live_dispatch_authorized; switching ON never enqueues anything.
+  - `evaluate_live()` is the future pre-dispatch gate. It matches bookings by exact registration ID, reuses the dryrun eligibility/plan logic, reads consent from `ai_candidate_consents` (unique on registration_id), checks duplicates on booking_key, and always fails while LIVE_DISPATCH_IMPLEMENTED=False.
+  - Endpoints: GET/POST /switches, POST /live-dispatch/authorize (423), GET /consent/preview (draft text version 2026-06-v1-draft).
+- Settings: ai_test_enabled (default True), ai_live_enabled (False), live_dispatch_authorized (False), emergency_stop default True. A one-time startup migration applied these. `mode` is now derived (testing when AI Test is ON). The legacy POST /mode only sets AI Test and refuses live.
+- Test recipients: approval removed (approve/revoke/bulk-approve/bulk-revoke endpoints deleted).
+  - Consent fields: consent_status granted|not_granted|withdrawn, consent_phone, consent_at, consent_by, consent_source (manual_entry|sheet_upload|legacy_admin_approval).
+  - Consent is recorded via the manual checkbox, the sheet column consent_for_test_call (the legacy approved_for_test_call is still accepted), or POST /test-candidates/{id}/consent {granted}.
+  - A phone change resets consent unless fresh consent is given. Opt-out (Do Not Call) clears consent.
+  - Readiness: ready | no_consent | opted_out | interview_passed.
+  - Raj was migrated from legacy approval to consent granted.
+- Gate: consent_status=granted and phone == consent_phone replace approval. call_now now REQUIRES emergency_stop OFF and ai_test_enabled (no auto release/re-engage). Call Now is still locked (SINGLE_TEST_CALL_APPROVED=False) and AI_CALLING_ENABLED="false".
+- Frontend: ModeSwitchesPanel.jsx and ConsentPreview.jsx on Settings. CandidateList, ManualCandidateForm, EditCandidateDialog and CandidateFilters updated for consent; Dashboard shows the Consented stat. ApproveDialog.jsx is unused.
+- Tests: test_ai_calling_phase7a.py (17) and test_ai_calling_phase7a_api.py (12). Old approval tests were skipped or migrated. Full suite: 210 passed, 14 skipped.
+- Blockers before Phase 7B:
+  - Owner approval of the consent wording, then adding it to the real booking form (write to ai_candidate_consents keyed by registration_id);
+  - a live dispatch worker (claim → evaluate_live → place_call) with live daily limits;
+  - storing registration_id and booking_key on live jobs and calls;
+  - a Live Dispatch Authorization flow;
+  - a decision on the missing cancellation status;
+  - the owner re-enabling Call Now and releasing the emergency stop for any test call.
+

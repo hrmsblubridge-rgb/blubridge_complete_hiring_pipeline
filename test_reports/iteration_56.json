@@ -1,0 +1,37 @@
+{
+  "summary": "Phase 7A tested end to end (dry run, no calls placed). Backend: added test_ai_calling_phase7a_api.py with 12 live-URL tests plus the existing 17 scratch-DB unit tests, all 29 passing. The full AI-calling suite (minus provider_phase31) gave 210 passed, 14 skipped. Covered: the switches GET/POST with the 8-row policy, both switches ON with no jobs created, 409 on a stale expected_version, Live OFF keeps live_dispatch_authorized=false, authorize returns 423, 401 with no auth and 403 with no CSRF, consent on create (no_consent/ready), the old approve/revoke/bulk endpoints return 404/405, consent withdraw/regrant, Do Not Call clears consent, a phone change resets consent unless fresh consent is given, ?consent=granted filters, call-now is 423 (sent with a wrong name), and test-calls/status shows single_call_enabled=false. Frontend: Settings mode-switches panel (switches, label, warning, source-test/live blockers, live-dispatch-status OFF, policy table with all 8 rows correct), toggling Live ON and back updates label and blockers, Consent Preview (unchecked by default, result text, only GETs made), and estop-state ON. Testing page: manual add without consent shows 'Not recorded'; grant, withdraw and Do Not Call work; filter-consent works; call-now is disabled; the UI delete works. Dashboard stat-consented=1. History still shows the Phase 4B Raj call. Live dry-run preview and planning work. Final DB state checked: ai_calls=1, ai_call_jobs=1, ai_test_candidates=1 (Raj, consent Recorded), bb_registrations/pipeline_data untouched, emergency_stop=true, ai_test ON, ai_live OFF, live_dispatch_authorized=false, provider settings/audit hashes unchanged.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/ai-calling/test-candidates/{id}/consent, /opt-out, POST/PUT /test-candidates", "issue": "These state-changing endpoints do not call _csrf() (switches/authorize/call-now do). Not a call path, but consent is a gate input, so it should probably have the same X-CSRF-Intent protection."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/ai-calling/testing", "issues": ["Stale copy still says 'rows are never auto-approved' and 'Start Test Calls stays disabled until the Bolna API integration is approved', which refers to the removed approval model."]},
+      {"screen": "/ai-calling/live dry-run table", "issues": ["The last column (action button) is clipped at the right edge at 1920px. The table needs overflow-x-auto or narrower columns."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_ai_calling_phase7a_api.py", "/app/backend/tests/test_ai_calling_phase7a.py", "/app/test_reports/pytest/phase7a.xml", "/app/test_reports/pytest/ai_calling_all.xml"],
+  "action_items": [
+    "Optional: add _csrf(request) to the consent, opt-out and candidate create/update endpoints",
+    "Remove dead code: ApproveDialog.jsx and the 'approve' branch in BulkConfirmDialog.jsx, which still posts to the removed /bulk-approve",
+    "Update the stale 'approved' copy on the Testing page",
+    "Fix horizontal clipping of the dry-run jobs table"
+  ],
+  "critical_code_review_comments": [
+    "modes.effective(), policy_table() and the blocker lists are correct for all 8 combinations. set_switches uses an optimistic expected_version, revokes live auth when Live goes OFF, and cancels only pending jobs.",
+    "call_now still checks the 423 SINGLE_TEST_CALL_APPROVED lock first, and its atomic lock requires ai_test_enabled and emergency_stop=false. There is no auto-release.",
+    "BulkConfirmDialog.jsx still holds the approve branch (dead, since CandidateList only opens 'delete'). ApproveDialog.jsx is unused.",
+    "_csrf is not applied to the consent/opt-out/candidate CRUD routes."
+  ],
+  "updated_files": ["/app/backend/tests/test_ai_calling_phase7a_api.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "None kept. TEST_NoConsent/TEST_Consent (+919000000401..404) were created and deleted via API, and TEST_UI_Colleague (+919000000410) via the UI. The switches were toggled Live ON then OFF (mode_version 51 -> 59) and restored to Test ON / Live OFF. The dry-run plan was run once and only writes ai_dry_run_* collections.",
+  "test_credentials": "Admin User / QAZwsx##123 works. /app/memory/test_credentials.md lists the password as 'Admin User', which is outdated and should be updated.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run the API tests with REACT_APP_BACKEND_URL exported and -n0: pytest $(ls tests/test_ai_calling_*.py | grep -v provider_phase31) -n0. Never POST call-now with Raj's exact name. Snapshot script: counts plus provider hash."
+}
