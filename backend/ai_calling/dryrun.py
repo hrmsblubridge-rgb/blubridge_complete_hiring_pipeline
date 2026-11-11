@@ -242,6 +242,8 @@ async def seed_fixtures(request: Request):
     await _auth(request)
     _csrf(request)
     await db().ai_dry_run_bookings.delete_many({"synthetic": True})
+    await db().ai_dry_run_jobs.delete_many({"mode": "DRY_RUN"})  # fresh plan for the fresh synthetic set
+    await db().ai_dry_run_state.update_one({"_id": "planner"}, {"$set": {"last_run": None}})
     res = await db().ai_dry_run_bookings.insert_many(_fixtures(datetime.now(IST)))
     return {"seeded": len(res.inserted_ids)}
 

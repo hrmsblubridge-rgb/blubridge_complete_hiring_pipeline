@@ -1,0 +1,37 @@
+{
+  "summary": "Phase 6 DRY-RUN scheduler preview tested end to end. No call was placed: call-now got only a random id with a wrong name and returned 423. New live-API suite tests/test_ai_calling_phase6_api.py passed 16/16. It covers: 401 without auth on seed/plan/preview/reschedule; 403 without CSRF; 403 with a foreign Origin (manual check); seed returns {seeded:15}; plan counts (5 SCHEDULED, 9 SKIPPED, 1 NEEDS_REVIEW at 12:22 IST); preview warning, last_run, fixtures=15, all jobs mode=DRY_RUN with no _id; every expected reason F-O; A/B/C/E/D SCHEDULED; B planned 10:00 the day before, C 10:00 on the interview day, A exactly 24 h before; skipped jobs have planned_at=null; all planned times are in the future and inside 10:00-19:00 IST; plan twice gives the same job count and times_planned+1; reschedule then plan gives old job INVALIDATED/RESCHEDULED and a new SCHEDULED job with reschedule_count=1; reschedule of an unknown or garbage id returns 404; 3 concurrent plans return 200 plus 409s ([409,200,200], [409,409,200], [409,409,200]) with no duplicate (booking_id, booking_key) and the lock released. Full AI suite: 191 passed, 16 skipped (175 + 16 new). Frontend /ai-calling/live: live-locked-banner is visible; live-activate-btn is disabled; dry-run-warning shows the exact text; there is no Call Now and no call-now testid. Seed then plan fills all 5 counts (5/10/5/9/1), and dry-run-last-run shows '11 Nov 2026, 12:24 pm IST by Admin User'. The table lists 15 current jobs with badges, reasons and adjustments. Clicking dry-run-reschedule-* then plan shows the dry-run-invalidated card with RESCHEDULED. The UI sent only POSTs to dry-run/seed, plan and reschedule. /ai-calling/history still lists Raj (Completed, 81 s). DB snapshot is IDENTICAL before and after: ai_calls=1, ai_call_jobs=1, ai_test_candidates=1, audit=2, bb_registrations=0, pipeline_data=0, mode=testing, emergency_stop=true, provider sha 33d78656... unchanged. AI_CALLING_ENABLED=\"false\" in backend .env.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/ai-calling/dry-run/fixtures/seed + GET /dry-run/preview", "issue": "Re-seeding deletes the bookings and inserts new ObjectIds, but the old ai_dry_run_jobs stay. Every seed+plan cycle adds 15 INVALIDATED/BOOKING_REMOVED jobs; there are now 78 jobs, 63 of them invalidated. Preview sorts by status ascending and returns at most 500 (to_list(500)). 'INVALIDATED' sorts before NEEDS_REVIEW/SCHEDULED/SKIPPED, so after about 30 re-seeds the current jobs would be cut off the preview. Fix: in seed_fixtures, also delete_many ai_dry_run_jobs (fixture-only collection), or exclude/limit INVALIDATED jobs separately in preview."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/ai-calling/live dry-run-jobs-table (1920x1080)", "issues": ["The table is wider than its card (clientWidth 1030 vs scrollWidth 1225). The Reason column is cut off ('INSUFFIC…') and the 'Simulate reschedule' button needs a horizontal scroll. Wrap the candidate/adjustment text or reduce whitespace-nowrap so Reason and the action column are visible without scrolling."]},
+      {"screen": "/ai-calling/live dry-run-invalidated", "issues": ["The invalidated card lists every historical plan (63 rows) because of the backend accumulation above. Collapse it, or show only the last run."]},
+      {"screen": "Mobile 390px header", "issues": ["The hamburger button overlaps the TEST MODE banner text (this was already there before Phase 6)."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_ai_calling_phase6_api.py", "/app/backend/tests/test_ai_calling_phase6.py", "/app/test_reports/pytest/pytest_phase6_api.xml", "/app/test_reports/pytest/pytest_ai_full.xml"],
+  "action_items": [
+    "Seed endpoint: also clear ai_dry_run_jobs (fixture-only), or make preview robust to many INVALIDATED jobs. Today the sort by status puts INVALIDATED first and the 500 cap could hide current jobs.",
+    "Make the Reason and Simulate-reschedule columns of dry-run-jobs-table visible at 1920 width without horizontal scrolling."
+  ],
+  "critical_code_review_comments": [
+    "dryrun.py preview: sort([('status',1),('planned_at',1)]).to_list(500) combined with unbounded INVALIDATED accumulation can hide the current plan (see action item).",
+    "Fixture D/O times use strftime('%H:%M:00'), which truncates seconds; this is harmless. D's outcome depends on the current IST time; the API test allows both outcomes outside 10:00-17:00.",
+    "The 'ineligible' count includes NEEDS_REVIEW (SKIPPED+NEEDS_REVIEW). This matches the UI labels but is worth stating explicitly in the UI.",
+    "Lock: the stale-lock comparison uses UTC ISO strings on both sides (now_iso is UTC), so it is consistent. The unique index on (booking_id, booking_key) blocks duplicates even without the lock. Good.",
+    "The module does not import the Bolna client or messaging, and no bb_registrations reads were found. Safety looks sound."
+  ],
+  "updated_files": ["/app/backend/tests/test_ai_calling_phase6_api.py"],
+  "success_rate": {"backend": "100%", "frontend": "100% functional (2 design issues)"},
+  "test_credentials": "Admin User / QAZwsx##123 works. /app/memory/test_credentials.md still lists password 'Admin User', which is outdated and should be updated.",
+  "seed_data_creation": "Only the dry-run fixture endpoint was used (ai_dry_run_bookings with synthetic=True, replaced on each seed). ai_dry_run_jobs now holds 78 docs (63 INVALIDATED) from the test runs. Nothing was written to bb_registrations, pipeline_data, ai_calls, ai_call_jobs or settings.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run python3 tests/snapshot_ai_db.py before and after, and check bb_registrations/pipeline_data counts separately (the script does not print them). test_ai_calling_phase6_api.py re-seeds the fixtures and runs plan, which is safe (dry-run collections only). Run it with -p no:xdist so the module fixture is shared. NEVER send a matching confirm_name to call-now. Do not set AI_TEST_ALLOW_PROVIDER_WRITES."
+}

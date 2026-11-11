@@ -3514,3 +3514,30 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
 - Future live calls must store `registration_id` (the bb_registrations _id as a string) for profile linking.
 
 
+
+
+## Phase 6: Dry-run interview calling scheduler (June 2026). Shipped and verified by the testing agent (iteration_55). ZERO calls.
+- New `backend/ai_calling/dryrun.py` (never imports the Bolna client or messaging). It reads only `ai_dry_run_bookings` (synthetic fixtures with the same field names as bb_registrations) and writes only `ai_dry_run_jobs` and `ai_dry_run_state`.
+- Endpoints (admin + CSRF): POST /api/ai-calling/dry-run/fixtures/seed (resets the fixtures and DRY_RUN jobs), POST /dry-run/fixtures/{id}/reschedule (synthetic only), POST /dry-run/plan (manual only, atomic planner lock with 5-min stale recovery), GET /dry-run/preview.
+- Rules, verified against bb_modules.py and bg_workers.py:
+  - Only status "Interview Scheduled" with is_shortlisted=True counts as booked.
+  - Excluded: superseded, isTest, Rejected, Attended or truthy otp_verified, Missed or missed_marked, "Interview Not Scheduled", manual-alert "Scheduled" rows, invalid phone, no consent (NO_CALLING_CONSENT), refused or withdrawn consent, do_not_call, already confirmed, past interview, missing or invalid schedule.
+  - The real code has NO cancellation status; "Cancelled" is supported for the future.
+- Timing (IST):
+  - Target is interview minus 24 h. If that has passed (short notice), use the next 5-minute mark after now.
+  - Move forward into the 10:00–19:00 window.
+  - Less than 2 h before the interview becomes NEEDS_REVIEW.
+  - Retry plan is planned + 60 min, moved into the window, and only if 2 h lead time remains. It never runs.
+- Jobs are unique on (booking_id, booking_key = date|time|reschedule_count), so planning is idempotent. A reschedule invalidates the old job (RESCHEDULED). A removed booking invalidates its job (BOOKING_REMOVED). `claim_due_dry_run_job` is the atomic future claim design and only simulates.
+- Frontend: DryRunPreview.jsx and DryRunJobsTable.jsx on the Live Mode page (warning banner, buttons, counts, table, invalidated card). The Activate button is still locked.
+- backend .env AI_CALLING_ENABLED="false" (extra lock on top of SINGLE_TEST_CALL_APPROVED=False).
+- Tests: tests/test_ai_calling_phase6.py (30) and test_ai_calling_phase6_api.py (16). Full suite: 191 passed, 16 skipped.
+- Before Phase 7 live activation:
+  - a real consent capture and storage design, plus a do-not-call flag;
+  - a registration_id link on live ai_calls;
+  - a decision on the missing cancellation flow;
+  - mapping of the real bb_registrations fields;
+  - a dispatch worker behind the gate and the emergency stop;
+  - daily limits;
+  - an owner-approved activation.
+
