@@ -40,6 +40,8 @@ async def ensure_ai_indexes():
     await d.ai_call_jobs.create_index("idempotency_key", unique=True, sparse=True)
     await get_settings()
     from .dispatch import startup_recover
+    from .dryrun import ensure_dry_run_indexes
+    await ensure_dry_run_indexes()
     await startup_recover()
 
 
@@ -268,8 +270,10 @@ from .candidates import cand_router  # noqa: E402
 from .provider import provider_router  # noqa: E402
 from .calls import calls_router  # noqa: E402
 from .dispatch import dispatch_router  # noqa: E402
+from .dryrun import dryrun_router  # noqa: E402
 
 ai_router.include_router(dispatch_router)
+ai_router.include_router(dryrun_router)
 ai_router.include_router(cand_router)
 ai_router.include_router(provider_router)
 ai_router.include_router(calls_router)

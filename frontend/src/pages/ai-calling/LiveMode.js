@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import { Lock, CalendarCheck, ArrowClockwise, MapPin, UserCircle } from '@phosphor-icons/react';
 import { aiApi, errMsg } from './aiApi';
 import { AICallingHeader, Card, SectionTitle } from '../../components/ai-calling/AICallingHeader';
+import { DryRunPreview } from '../../components/ai-calling/DryRunPreview';
 
 const Rule = ({ icon: Icon, title, text }) => (
     <div className="flex gap-3">
@@ -38,6 +39,7 @@ export default function LiveMode() {
                 <button disabled data-testid="live-activate-btn" title="Locked in this phase" className="px-5 py-2.5 rounded-lg bg-rose-700 text-white text-sm font-semibold opacity-40 cursor-not-allowed flex items-center gap-2">
                     <Lock size={16} /> Activate Live Mode (locked)
                 </button>
+                <DryRunPreview />
             </main>
         </div>
     );
