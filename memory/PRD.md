@@ -3597,3 +3597,37 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
   - a decision on the missing cancellation status;
   - a do_not_call admin control on candidate profiles.
 
+
+
+
+## Phase 7C-A: Consent security, admin Do Not Call, mock live scheduler/worker (June 2026). Verified by the testing agent (iteration_58) and self-retested after fixes. ZERO calls, no messages, no deploy.
+- Consent tokens (`consent.py`):
+  - Dedicated 256-bit token. Only its SHA-256 hash is stored in `ai_consent_tokens` (purpose ai_consent_manage, registration_id, expires_at after 30 days via AI_CONSENT_TOKEN_TTL_DAYS, revoked_at).
+  - Issued once by POST /public/booking-consent/{schedule_token}, which allows one decision per booked slot (atomic). The booking token can no longer manage consent.
+  - The token is sent in the X-Consent-Token header. The link is /ai-consent#t=…, and index.html moves the token out of the URL before PostHog loads. Referrer is set to no-referrer and responses are no-store.
+  - An expired but authentic token can only withdraw or request Do Not Call. A revoked or replaced token is rejected.
+  - Rotation via /consent/manage/rotate. Admins can revoke links.
+  - Invalid tokens are rate-limited to 10 per 15 min per IP. The IP is the X-Forwarded-For entry at AI_TRUSTED_PROXY_HOPS from the right (3 in preview; must be set correctly for production).
+  - One-time-code renewal is prepared (`ai_consent_otps`, hashed, 10 min, 5 attempts). Delivery is NOT approved: /renew/request returns 501.
+- Consent wording: final draft v2026-06-v3, titled "Optional AI Voice Call Consent", subject to legal review.
+- Do Not Call:
+  - `dnc_sources` is the union of ADMIN, CANDIDATE and AI_CALL_OPT_OUT.
+  - Any admin can mark it. Only AI_TOP_LEVEL_ADMINS can remove it, and only the ADMIN source, with a reason required.
+  - Removing it never restores consent. A candidate's own Do Not Call also blocks re-granting consent.
+  - Marking it invalidates pending live and mock jobs.
+  - UI: ProfileConsentPanel, ConsentCard and DncDialog in the Candidate Journey modal.
+- `live_prep.py` (mock only):
+  - Jobs in `ai_live_mock_jobs` (dispatchable=False) with idempotent plan, reschedule/cancel/consent/Do Not Call invalidation, and a full pre-dispatch gate including the snapshot check.
+  - Atomic daily counter (cap = min(live_daily_call_limit ≤ 20, live_pilot_daily_cap 5)) and an atomic concurrency slot (1).
+  - One no-answer retry 60 min later. A timeout goes to pending_reconciliation and keeps its slot; it is never redialled or confirmed.
+  - Stale-claim recovery. Builds the six variables and an ai_calls-compatible record without inserting it.
+  - UI: Live Mode tab "Live Prep (mock)" with readiness and monitoring.
+- `place_call` refuses live payloads while LIVE_DISPATCH_IMPLEMENTED=False. Authorization is still 423, and readiness includes AI_LIVE_DEPLOYMENT_APPROVED (unset).
+- Tests: test_ai_calling_phase7ca.py (32, scratch DB) and test_ai_calling_phase7ca_api.py (16, written by the testing agent). Old Phase 7B schedule-token tests are skipped as superseded. Full AI suite: 277 passed, 30 skipped. Provider config fingerprint is unchanged.
+- Blockers before Phase 7C-B:
+  - Legal review of the wording.
+  - Approval of a delivery channel for renewal codes.
+  - The production AI_TRUSTED_PROXY_HOPS value.
+  - Recording/transcript retention policy.
+  - Owner approval to deploy the booking checkbox.
+  - Building the real worker (claim → gate_job → place_call → ai_calls) behind the switches.

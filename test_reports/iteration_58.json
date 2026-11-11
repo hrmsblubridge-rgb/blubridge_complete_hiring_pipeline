@@ -1,0 +1,45 @@
+{
+  "summary": "Phase 7C-A tested (backend + frontend). Scratch-DB suite: 259 passed / 30 skipped (matches expected). New live-API regression file test_ai_calling_phase7ca_api.py: 16/16 passed (consent-text v3 + no-store/no-referrer headers, bogus token 404, bogus booking-consent 404, renew 501, old /public/consent/{token} gone, readiness ready=false with dispatch_implemented/deployment_approved false and provider_verified/limits_set true, authorize -> 423 and live_dispatch_authorized stays false, switches (test on, live off, e-stop on, effective_daily 5, pilot 5), settings rejects 21/21/2 with 400, consent/admin 404/401, live-prep plan idempotent (2nd run unchanged=6), overview jobs all dispatchable=false/live_mock, mock-tick claimed null (nothing due), invalid outcome 400, clear works, ai_calls count unchanged, CSRF required). Frontend: Live Prep tab and all requested testids present at 1920 and 390 (no page-level horizontal overflow; table scrolls inside its card); plan/tick/clear via UI work with toasts. /ai-consent#t=<43 chars> strips the token (URL -> /ai-consent), no token in URLs/referrers, shows 'This link is invalid or has been replaced.'; /ai-consent/oldtoken also invalid. Candidate Journey ConsentCard rendered via route mocking: consent/DNC status, mark flow (cancel posts nothing; mark posts action/reason/confirm with CSRF), remove disabled when can_remove_dnc false, locked note for CANDIDATE source, remove confirm disabled until a non-whitespace reason is typed. InterviewSchedule booking consent verified by code review. One real security defect found: the consent rate limiter can be bypassed by spoofing X-Forwarded-For.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "/api/ai-calling/public/consent/* (consent.py _ip_key)", "issue": "The rate limiter keys on the FIRST X-Forwarded-For entry, and the client controls that value. Reproduced: 11 invalid attempts, each with a random X-Forwarded-For, all returned 404 and none returned 429. With a fixed spoofed value, the 11th attempt correctly returned 429. So the 10-per-15-min limit can be bypassed by rotating the header. Fix: key on the client IP the ingress appends (the last or trusted-hop entry, or X-Real-IP) instead of the first entry.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "/api/ai-calling/public/booking-consent/{token}", "issue": "The duplicate-decision check and the write are not atomic (find, then update). Two concurrent POSTs for the same booking could both save and both issue tokens; the second token rotates out the first. Low risk."},
+      {"endpoint": "/api/ai-calling/live-prep/mock-tick", "issue": "If an exception happens after _reserve('mock:concurrency') but before _release_slot, the slot leaks. With concurrency 1 that blocks all later mock dispatch until /mock-jobs/clear. Consider try/finally."},
+      {"endpoint": "/api/ai-calling/public/consent/manage/grant", "issue": "can_grant/grant ignores do_not_call. A candidate with a CANDIDATE DNC can re-grant consent while DNC stays true. Calls are still blocked by the DNC gate, but the UI could be confusing. Consider whether granting should be blocked or should prompt to lift the candidate DNC."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AiConsentManage", "issue": "The token in sessionStorage (ai_consent_token) is not cleared when the server says it is invalid or replaced. Every later visit to /ai-consent or /ai-consent/<anything> in the same tab resends the stale token. A real request was observed with the token header on /ai-consent/oldtoken. Clear sessionStorage on a 404 response.", "selector": "[data-testid='ai-consent-error']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Live Prep (mock) - plan toast", "issues": ["The success toast shows raw JSON, e.g. 'Planned: {\"planned\":5,\"needs_review\":1,...}'. Format it as readable text."]},
+      {"screen": "Mobile 390px global header", "issues": ["The hamburger button overlaps the start of the yellow 'TEST MODE ACTIVE' banner text (pre-existing layout, visible on /ai-calling/live)."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_ai_calling_phase7ca_api.py", "/app/backend/tests/test_ai_calling_phase7ca.py"],
+  "action_items": [
+    "HIGH: Fix the consent rate-limit IP derivation in consent.py _ip_key. Do not trust the client-supplied first X-Forwarded-For entry; use the ingress-appended or trusted client IP.",
+    "Clear sessionStorage 'ai_consent_token' in AiConsentManage when the server returns 404 (invalid or replaced).",
+    "Format the Live Prep plan toast as readable text instead of raw JSON.",
+    "Optional: wrap the mock-tick reserve/release in try/finally, and make the booking-consent duplicate check atomic."
+  ],
+  "critical_code_review_comments": [
+    "consent.py _ip_key: request.headers['x-forwarded-for'].split(',')[0] is client-controlled, so the rate limit can be bypassed (verified live).",
+    "consent.py booking_decision: non-atomic duplicate check (find, then update_one with $addToSet).",
+    "live_prep.py mock_tick: no try/finally around the concurrency-slot reservation.",
+    "Token design is good: SHA-256 hash only, 256-bit tokens, rotation revokes old tokens, expired tokens are withdraw-only, purpose check, no-store and no-referrer headers, and the index.html fragment-strip runs before analytics.",
+    "DNC is a union of sources; removal pulls only ADMIN and never restores consent; only top-level admins can remove, and the reason is required server-side as well as in the UI."
+  ],
+  "updated_files": ["/app/backend/tests/test_ai_calling_phase7ca_api.py"],
+  "success_rate": {"backend": "100% functional (275/275 tests); 1 security defect found by manual probe", "frontend": "100% of requested flows pass; 1 low-severity bug and 2 design nits"},
+  "test_credentials": "Admin User / QAZwsx##123 works. NOTE: /app/memory/test_credentials.md lists password 'Admin User', which is outdated. Update it to QAZwsx##123.",
+  "seed_data_creation": "None in bb_registrations or pipeline_data. Live-prep mock jobs were planned from synthetic fixtures and then cleared via /live-prep/mock-jobs/clear (this also cleared about 6 pre-existing mock jobs, which is the endpoint's intended behaviour). The rate-limit probe created two ai_consent_rate buckets for spoofed IPs (10.250.x and 10.251.x); they expire via TTL within 15 minutes.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: cd /app/backend && REACT_APP_BACKEND_URL=<url> python3 -m pytest tests/test_ai_calling_*.py -q. Expect 259 passed / 30 skipped from the scratch suites plus 16 from test_ai_calling_phase7ca_api.py (live preview API, safe: no calls, no switch toggles). Re-verify the XFF rate-limit bypass: 11 requests to /public/consent/manage with a random X-Forwarded-For each should eventually return 429. Use random spoofed IPs so your own IP is not locked. Candidate Journey consent UI has to be tested with Playwright route mocking (/api/bb/manual/applicant/search, /api/bb/candidate-journey, /api/ai-calling/registrations/lookup, /api/ai-calling/consent/admin/**).",
+  "rca of the issue": "XFF bypass: _ip_key takes split(',')[0] of X-Forwarded-For. The Kubernetes ingress appends the real client IP to any X-Forwarded-For the client sent, so the first entry is attacker-chosen. Reproduce with curl -H 'X-Forwarded-For: <random>' -H 'X-Consent-Token: <43 junk chars>' GET /api/ai-calling/public/consent/manage 11 times: you get 404 each time and never 429. Mitigation: use the right-most untrusted hop (the entry appended by the ingress) or X-Real-IP set by the ingress."
+}

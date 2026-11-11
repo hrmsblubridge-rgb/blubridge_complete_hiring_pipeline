@@ -239,14 +239,19 @@ async def mock_tick(worker: str, now: datetime = None, outcome: str = "CONFIRMED
         await db().ai_live_mock_jobs.update_one({"_id": jid}, {"$set": {"status": "planned", "reasons": ["DAILY_LIMIT"],
                                                                          "lease_until": None}})
         return {"claimed": str(jid), "result": "daily_limit", "gate": g, "recovered": recovered, "warning": WARNING}
-    b = await _load_one(job)
-    rec = live_call_record(job, b, user_data_for_registration(b, s), f"mock_{uuid.uuid4().hex[:16]}")
-    rec.update(mock=True, provider_status=outcome if outcome in ("no_answer", "failed", "timeout") else "completed",
-               extracted=_mock_extraction(outcome))
-    status = {"no_answer": "no_answer", "timeout": "pending_reconciliation", "failed": "failed"}.get(outcome, "completed")
-    rec["confirmed_attendance"] = status == "completed" and outcome == "CONFIRMED"
-    await db().ai_live_mock_jobs.update_one({"_id": jid}, {"$set": {
-        "status": status, "mock_call": rec, "last_gate": g, "provider_request_sent": False, "finished_at": now_iso(), "lease_until": None}})
+    try:
+        b = await _load_one(job)
+        rec = live_call_record(job, b, user_data_for_registration(b, s), f"mock_{uuid.uuid4().hex[:16]}")
+        rec.update(mock=True, provider_status=outcome if outcome in ("no_answer", "failed", "timeout") else "completed",
+                   extracted=_mock_extraction(outcome))
+        status = {"no_answer": "no_answer", "timeout": "pending_reconciliation", "failed": "failed"}.get(outcome, "completed")
+        rec["confirmed_attendance"] = status == "completed" and outcome == "CONFIRMED"
+        await db().ai_live_mock_jobs.update_one({"_id": jid}, {"$set": {
+            "status": status, "mock_call": rec, "last_gate": g, "provider_request_sent": False, "finished_at": now_iso(), "lease_until": None}})
+    except Exception:
+        await _release_slot()
+        await db().ai_live_mock_jobs.update_one({"_id": jid}, {"$set": {"status": "needs_review", "reasons": ["WORKER_ERROR"], "lease_until": None}})
+        raise
     if status != "pending_reconciliation":  # an uncertain call keeps its slot until reconciled; never redialled
         await _release_slot()
     retry = None

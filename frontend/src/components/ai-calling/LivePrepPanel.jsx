@@ -6,6 +6,7 @@ import { Card } from './AICallingHeader';
 import { LiveReadiness } from './LiveReadiness';
 import { fmtTime } from './callFormat';
 
+const planMsg = (r) => `Mock plan: ${r.counts.planned} planned, ${r.counts.needs_review} needs review, ${r.counts.skipped} skipped, ${r.counts.invalidated} invalidated, ${r.counts.unchanged} unchanged`;
 const OUTCOMES = ['CONFIRMED', 'RESCHEDULE_REQUESTED', 'DECLINED', 'DO_NOT_CALL', 'no_answer', 'timeout', 'failed'];
 const btn = 'px-3 py-2 rounded-lg text-sm font-semibold border disabled:opacity-40';
 
@@ -51,8 +52,8 @@ export const LivePrepPanel = () => {
             {d && <LiveReadiness readiness={d.readiness} monitoring={d.monitoring} />}
             <Card>
                 <div className="flex flex-wrap items-center gap-2 mb-4">
-                    <button disabled={busy} onClick={() => run('/live-prep/plan', { source: 'fixtures' }, r => `Planned: ${JSON.stringify(r.counts)}`)} data-testid="mock-plan-fixtures-btn" className={`${btn} bg-teal-700 text-white border-teal-700`}>Plan from synthetic bookings</button>
-                    <button disabled={busy} onClick={() => run('/live-prep/plan', { source: 'bb_registrations' }, r => `Planned: ${JSON.stringify(r.counts)}`)} data-testid="mock-plan-real-btn" className={`${btn} bg-white border-[#e5e3d8]`}>Plan from real bookings</button>
+                    <button disabled={busy} onClick={() => run('/live-prep/plan', { source: 'fixtures' }, planMsg)} data-testid="mock-plan-fixtures-btn" className={`${btn} bg-teal-700 text-white border-teal-700`}>Plan from synthetic bookings</button>
+                    <button disabled={busy} onClick={() => run('/live-prep/plan', { source: 'bb_registrations' }, planMsg)} data-testid="mock-plan-real-btn" className={`${btn} bg-white border-[#e5e3d8]`}>Plan from real bookings</button>
                     <select value={outcome} onChange={e => setOutcome(e.target.value)} data-testid="mock-outcome-select" className="px-2 py-2 rounded-lg border border-[#e5e3d8] text-sm">
                         {OUTCOMES.map(o => <option key={o} value={o}>{o}</option>)}
                     </select>

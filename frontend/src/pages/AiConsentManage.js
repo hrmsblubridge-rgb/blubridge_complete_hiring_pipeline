@@ -32,7 +32,10 @@ export default function AiConsentManage() {
     const [busy, setBusy] = useState(false);
     const cfg = { headers: { 'X-Consent-Token': token } };
     const load = () => axios.get(`${API}/manage`, cfg).then(r => setInfo(r.data))
-        .catch(e => setErr(e.response?.status === 429 ? 'Too many attempts. Please try again later.' : 'This link is invalid or has been replaced.'));
+        .catch(e => {
+            if (e.response?.status === 404) { try { sessionStorage.removeItem('ai_consent_token'); } catch { /* ignore */ } }
+            setErr(e.response?.status === 429 ? 'Too many attempts. Please try again later.' : 'This link is invalid or has been replaced.');
+        });
     useEffect(() => { if (token) load(); else setErr('This link is invalid or has been replaced.'); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const act = async (path, body = {}) => {

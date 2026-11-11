@@ -27,7 +27,7 @@ export default function LiveMode() {
                     <Lock size={22} weight="duotone" className="text-rose-700 shrink-0" />
                     <div>
                         <p className="text-sm font-bold text-rose-900">Live Mode is locked</p>
-                        <p className="text-sm text-rose-900/80">Activation is blocked on the server. No real candidate is read or called in this phase.</p>
+                        <p className="text-sm text-rose-900/80">Activation is blocked on the server. No real candidate is called in this phase — real bookings are only read for dry-run and mock previews.</p>
                     </div>
                 </div>
                 <Card>

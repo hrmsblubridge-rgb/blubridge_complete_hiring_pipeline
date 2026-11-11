@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 from fastapi import APIRouter, Body, HTTPException, Request, Response
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 from .dryrun import WARNING, _mask, booking_key, plan_booking
 from .modes import CONSENT_TEXT, CONSENT_TITLE, CONSENT_TEXT_VERSION
@@ -79,7 +80,12 @@ async def revoke_tokens(reg_id: str, reason: str) -> int:
 
 
 def _ip_key(request: Request) -> str:
-    ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "")).split(",")[0].strip()
+    """Client IP = the X-Forwarded-For entry appended by the first trusted proxy (counted from the right),
+    so client-supplied left-hand entries cannot rotate the rate-limit key."""
+    hops = int(os.environ.get("AI_TRUSTED_PROXY_HOPS") or 0)
+    chain = [x.strip() for x in (request.headers.get("x-forwarded-for") or "").split(",") if x.strip()]
+    ip = chain[-hops] if hops and len(chain) >= hops else (chain[0] if chain and not hops else "")
+    ip = ip or (request.client.host if request.client else "")
     return hashlib.sha256(f"consent-rl|{ip}".encode()).hexdigest()[:32]
 
 
@@ -214,13 +220,18 @@ async def booking_decision(schedule_token: str, request: Request, response: Resp
     if body.get("text_version") != CONSENT_TEXT_VERSION:
         raise HTTPException(409, "Consent wording changed. Your preference was not saved.")
     rid, bkey = str(reg["_id"]), booking_key(reg)
-    existing = await db().ai_candidate_consents.find_one({"registration_id": rid}, {"booking_form_keys": 1})
-    if bkey in ((existing or {}).get("booking_form_keys") or []):
-        raise HTTPException(409, "A preference was already recorded for this booking. Use your consent-management link.")
     status = "granted" if body.get("granted") is True else "not_given"
+    try:  # atomic one-decision-per-booked-slot claim (unique registration_id index)
+        await db().ai_candidate_consents.update_one(
+            {"registration_id": rid, "booking_form_keys": {"$ne": bkey}},
+            {"$addToSet": {"booking_form_keys": bkey},
+             "$setOnInsert": {"consent_status": "not_given", "do_not_call": False, "dnc_sources": [], "created_at": now_iso()}},
+            upsert=True)
+    except DuplicateKeyError:
+        raise HTTPException(409, "A preference was already recorded for this booking. Use your consent-management link.") from None
 
     async def save():
-        c = await record_consent(rid, status, "booking_form", "candidate", bkey)
+        c = await record_consent(rid, status, "booking_form", "candidate")
         return c, await issue_token(rid, "booking")
     c, token = await _safe(save, rid, status)
     return {"saved": True, "consent_status": c["consent_status"], "manage_token": token,
@@ -233,7 +244,8 @@ def _info(t: dict, c: dict) -> dict:
             "consent_status": status, "do_not_call": bool(c.get("do_not_call")),
             "candidate_dnc": "CANDIDATE" in (c.get("dnc_sources") or []), "expired": t["expired"],
             "expires_at": t["expires_at"], "can_withdraw": status == "granted",
-            "can_grant": not t["expired"] and status != "granted" and bool(t["reg"].get("schedule_date")),
+            "can_grant": not t["expired"] and status != "granted" and bool(t["reg"].get("schedule_date"))
+            and not set(c.get("dnc_sources") or []) & {"CANDIDATE", "AI_CALL_OPT_OUT"},
             "renewal_available": OTP_DELIVERY_APPROVED,
             "title": CONSENT_TITLE, "text": CONSENT_TEXT, "version": CONSENT_TEXT_VERSION}
 
@@ -274,6 +286,9 @@ async def manage_grant(request: Request, response: Response, body: dict = Body(.
         raise HTTPException(409, "No interview booking found")
     if body.get("text_version") != CONSENT_TEXT_VERSION:
         raise HTTPException(409, "Consent wording changed. Please reload.")
+    cur = await db().ai_candidate_consents.find_one({"registration_id": t["reg_id"]}, {"dnc_sources": 1}) or {}
+    if set(cur.get("dnc_sources") or []) & {"CANDIDATE", "AI_CALL_OPT_OUT"}:
+        raise HTTPException(409, "You asked not to receive AI calls. That request stays in place.")
     c = await record_consent(t["reg_id"], "granted", "consent_page", "candidate")
     return {"saved": True, "consent_status": c["consent_status"], "do_not_call": bool(c.get("do_not_call"))}
 

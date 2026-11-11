@@ -131,7 +131,7 @@ def test_persistence_failure_counts_as_not_given(monkeypatch):
         monkeypatch.setattr(consent, "record_consent", fail)
         r = await tc.post(f"/public/booking-consent/{SCHED}", json={"granted": True, "text_version": V})
         assert r.status_code == 503 and "NOT given" in r.json()["detail"]
-        assert await d.ai_candidate_consents.count_documents({}) == 0
+        assert await d.ai_candidate_consents.count_documents({"consent_status": "granted"}) == 0
         assert await d.ai_call_audit.count_documents({"action": "consent_persist_failed"}) == 1
         assert (await d.bb_registrations.find_one({}))["status"] == "Interview Scheduled"
     run(monkeypatch, case)
@@ -398,3 +398,24 @@ def test_place_call_refuses_live_payload():
         with pytest.raises(PermissionError):
             await bc.place_call(gate_result={"allowed": True, "source": "live"}, api_key="x", body={})
     asyncio.run(main())
+
+
+def test_rate_limit_ignores_spoofed_forwarded_for(monkeypatch):
+    monkeypatch.setenv("AI_TRUSTED_PROXY_HOPS", "2")
+
+    async def case(tc, d):
+        for i in range(consent.RATE_MAX_FAILURES):
+            h = {**H("C" * 43), "X-Forwarded-For": f"9.9.9.{i}, 1.2.3.4, 10.0.0.1"}
+            assert (await tc.get("/public/consent/manage", headers=h)).status_code == 404
+        h = {**H("C" * 43), "X-Forwarded-For": "8.8.8.8, 1.2.3.4, 10.0.0.1"}
+        assert (await tc.get("/public/consent/manage", headers=h)).status_code == 429
+    run(monkeypatch, case)
+
+
+def test_grant_blocked_after_candidate_dnc(monkeypatch):
+    async def case(tc, d):
+        rid, tok = await _book(tc, d, granted=False)
+        await tc.post("/public/consent/manage/do-not-call", headers=H(tok))
+        assert (await tc.get("/public/consent/manage", headers=H(tok))).json()["can_grant"] is False
+        assert (await tc.post("/public/consent/manage/grant", headers=H(tok), json={"text_version": V})).status_code == 409
+    run(monkeypatch, case)
