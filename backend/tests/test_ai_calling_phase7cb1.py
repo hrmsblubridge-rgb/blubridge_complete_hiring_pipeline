@@ -38,7 +38,7 @@ def test_renewal_wrong_digits_generic_and_lockout(monkeypatch):
         assert bad.status_code == unknown.status_code == 400 and bad.json()["detail"] == unknown.json()["detail"]
         for _ in range(consent.RENEW_MAX_FAILURES - 1):
             await _renew(tc, "1111")
-        assert (await _renew(tc, "0301")).status_code == 429  # locked even with the right digits
+        assert (await _renew(tc, "0301")).status_code == 400  # locked even with the right digits; same generic reply
         g = await d.ai_consent_renew_guard.find_one({"_id": rid})
         assert g["locked_until"] > datetime.now(timezone.utc).isoformat()
     monkeypatch.setattr(consent, "RATE_MAX_FAILURES", 100)

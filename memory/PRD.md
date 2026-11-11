@@ -3631,3 +3631,32 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
   - Recording/transcript retention policy.
   - Owner approval to deploy the booking checkbox.
   - Building the real worker (claim → gate_job → place_call → ai_calls) behind the switches.
+
+
+
+## Phase 7C-B1: Consent renewal, proposed retention, live worker hardening (June 2026). Verified by the testing agent (iteration_59), with minor fixes self-retested. ZERO calls, ZERO deletion, no messages, no deploy.
+- Renewal: POST /public/consent/renew/booking {schedule_token, phone_last4}.
+  - Requires the existing booking link plus the last 4 digits of the registered mobile. Both are checked; the 4 digits are an extra check, not strong authentication.
+  - Every failure returns the same generic 400. IP rate limit: 10 per 15 min, using the trusted proxy hop. Per-registration lockout: 5 failures → 30 min (`ai_consent_renew_guard`).
+  - Issues a new 30-day consent token (hash only) and revokes older ones. issue_token orders by _id, so concurrent renewals leave exactly one active token.
+  - Never changes consent, the booking or the booking token. Sends nothing.
+  - UI: ConsentRenewBox on the booking page when already_scheduled. The expired-link note points to it.
+- Retention (`retention.py`):
+  - Policy versions in `ai_retention_policies` (unique version): 90 days, status proposed, deletion_enabled false.
+  - Read-only preview over ai_calls uses presence flags only, so content is never loaded.
+  - Marked after 90 days: transcript, recording URL, raw extraction, questions, summary, rejection reason and field_meta. Kept: ID, registration/test reference, dates, status, attendance/reschedule/virtual outcomes, duration, audit.
+  - Legal holds in `ai_retention_holds`. Only top-level admins can propose policy or set/release holds. POST /retention/execute is always 423.
+  - Storage map: Bolna has no documented per-execution DELETE; only DELETE /v2/agent/{id} removes the whole agent. Per-call deletion is UNVERIFIED (needs Bolna support). Backups must follow the same period. Webhook events and audit hold no content.
+  - UI: RetentionPanel in Settings.
+- Worker (`live_prep.py`):
+  - MockProvider; BolnaLiveProvider refuses before any network I/O.
+  - Due jobs more than 30 min late become expired_backlog and are never dialled late.
+  - start_live_worker() always refuses and is never called at startup.
+  - GET /live-prep/worker-status. LiveWorkerStatus card on the Dashboard and the Live Prep tab with the banner "LIVE CALLING DISABLED — PREPARATION ONLY".
+- Tests: test_ai_calling_phase7cb1.py (15) and test_ai_calling_phase7cb1_api.py (13, written by the testing agent). The scratch helper uses a unique DB per test and retries on local mongod AutoReconnect (infra flake). Full AI suite: 304 passed, 30 skipped.
+- Blockers before the pilot:
+  - Legal sign-off on the wording and the 90-day period, plus a retention period for structured outcomes.
+  - Bolna confirmation of per-call deletion.
+  - Production AI_TRUSTED_PROXY_HOPS.
+  - Owner approval to deploy the booking checkbox and renewal box.
+  - Implementing the real dispatch path (LIVE_DISPATCH_IMPLEMENTED) behind authorization.

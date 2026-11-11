@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
 from fastapi import APIRouter, Body, HTTPException, Request
+from pymongo.errors import DuplicateKeyError
 
 from .consent import top_level_admins
 from .provider import _auth, _csrf
@@ -54,6 +55,7 @@ async def _admin(request: Request, top: bool = False) -> str:
 
 
 async def current_policy() -> dict:
+    await db().ai_retention_policies.create_index("version", unique=True)
     p = await db().ai_retention_policies.find_one({}, sort=[("version", -1)])
     if not p:
         p = {"version": 1, "days": PROPOSED_DAYS, "status": "proposed", "deletion_enabled": False, "created_by": "system",
@@ -84,7 +86,10 @@ async def propose_policy(request: Request, body: dict = Body(...)):  # noqa: B00
     cur = await current_policy()
     doc = {"version": cur["version"] + 1, "days": days, "status": "proposed", "deletion_enabled": False,
            "created_by": user, "created_at": now_iso(), "notes": str(body.get("notes") or "")[:300]}
-    await db().ai_retention_policies.insert_one(doc)
+    try:
+        await db().ai_retention_policies.insert_one(doc)
+    except DuplicateKeyError:
+        raise HTTPException(409, "Another proposal was saved at the same time. Reload and try again.") from None
     await db().ai_call_audit.insert_one({"action": "retention_policy_proposed", "by": user, "detail": {"version": doc["version"], "days": days}, "at": now_iso()})
     return await get_policy(request)
 
@@ -109,10 +114,13 @@ async def build_preview(now: datetime = None, days: int = None) -> dict:
     days = days or pol["days"]
     holds, rows = await _holds(), []
     counts = {"records": 0, "eligible": 0, "on_hold": 0, "not_yet_due": 0, "nothing_sensitive": 0}
-    async for c in db().ai_calls.find({}):
+    present = {f"has_{i}": {"$and": [{"$ne": [{"$ifNull": [f"${path}", None]}, None]}, {"$ne": [f"${path}", ""]},
+                                     {"$ne": [f"${path}", []]}, {"$ne": [f"${path}", {}]}]} for i, (path, _) in enumerate(SENSITIVE)}
+    proj = {"mode": 1, "candidate_name": 1, "created_at": 1, "completed_at": 1, "execution_id": 1, **present}
+    async for c in db().ai_calls.aggregate([{"$project": proj}]):  # presence flags only; content is never loaded
         counts["records"] += 1
         cid, age = str(c["_id"]), _age_days(c, now)
-        fields = [lbl for path, lbl in SENSITIVE if _present(_get(c, path))]
+        fields = [lbl for i, (_, lbl) in enumerate(SENSITIVE) if c.get(f"has_{i}")]
         if cid in holds:
             st = "on_hold"
         elif not fields:

@@ -371,7 +371,7 @@ async def renew_with_booking(request: Request, response: Response, body: dict = 
     rid = str(reg["_id"])
     g = await db().ai_consent_renew_guard.find_one({"_id": rid}) or {}
     if (g.get("locked_until") or "") > _now().isoformat():
-        raise HTTPException(429, "Too many attempts. Please try again later.")
+        await _fail(request, 400, RENEW_GENERIC)  # same response as any other failure; counts toward the IP limit
     digits = "".join(ch for ch in str(reg.get("phone") or "") if ch.isdigit())
     if len(digits) < 4 or not secrets.compare_digest(digits[-4:], last4):
         await _renew_fail(request, rid)

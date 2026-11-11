@@ -1,0 +1,40 @@
+{
+  "summary": "Phase 7C-B1 tested end to end. Backend live API: 28/28 pass (13 new in test_ai_calling_phase7cb1_api.py plus the 15 tests from the 7C-A API regression file). Scratch suite: 292 passed, 30 skipped, no AutoReconnect flake this run. Booking-link consent renewal: unknown token, malformed digits, 3-digit input and empty body all return 400 with the same generic message and no-store headers (only 4 invalid attempts sent). Retention: policy is 90 days, proposed, deletion off; Bolna note present; can_manage true. Preview is a dry run with deleted 0; the 1 real call is not_yet_due at 90 days and eligible at days=1. The ai_calls documents were byte-identical before and after preview and execute. Execute returns 423, days:10 returns 400, a hold was added and released, CSRF and unauthenticated requests are refused. worker-status: running/enabled false, provider mock, banner correct, readiness.ready false, 401 when unauthenticated. Switches unchanged (Test ON, Live OFF, Emergency Stop ON); authorize still 423; plan/mock-tick/clear still work. Frontend: dashboard banner and all 9 worker cells render. The Live Prep tab shows LiveWorkerStatus above readiness; Synthetic and Real tabs work. Settings retention panel works: warning, days, storage map, preview counts and rows, and days=1 changes the result. ConsentRenewBox was checked with route mocking: input is digits only (max 4), submit stays disabled until 4 digits, the error and success paths show correctly, the link is /ai-consent#t=… with rel noopener, and the box is hidden when already_scheduled is false. No console errors. No horizontal overflow at 390.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/ai-calling/public/consent/renew/booking", "issue": "Once a registration is locked, a VALID schedule_token returns 429 'Too many attempts' while an unknown token returns 400 generic. The different response reveals that a token is valid. The locked-path 429 is also raised directly, not via _fail, so it does not add to the IP failure counter. Low risk because the attacker already needs the booking token."},
+      {"endpoint": "POST /api/ai-calling/retention/policy", "issue": "Version = current+1 with no unique index on ai_retention_policies.version. Concurrent proposals could create duplicate versions. Minor."},
+      {"endpoint": "GET /api/ai-calling/retention/preview", "issue": "Iterates all ai_calls with no projection or pagination and loads full transcripts into memory. Fine now (1 call) but will not scale."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Settings retention panel @390", "issues": ["The preview table scrolls sideways inside its container. The Status and Fields columns start off-screen, and a tall empty area shows because the narrow Fields column wraps. Consider a stacked card layout on mobile."]},
+      {"screen": "Global @390 (pre-existing)", "issues": ["The yellow TEST MODE banner overlaps the hamburger button."]},
+      {"screen": "Booking page (pre-existing)", "issues": ["The date field uses the browser's native date picker."]},
+      {"screen": "RetentionPanel", "issues": ["The 'Run retention preview' button has no loading or disabled state. data-testid 'retention-row-status' is repeated on every row (not unique)."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_ai_calling_phase7cb1_api.py", "/app/backend/tests/test_ai_calling_phase7cb1.py", "/app/backend/tests/test_ai_calling_phase7ca_api.py", "/app/test_reports/pytest/pytest_7cb1.xml"],
+  "action_items": [
+    "Optional: on the renewal lockout, return the same 400 generic message (or 429 for unknown tokens too) so a valid token is not revealed, and count it toward the IP limit",
+    "Optional: add a unique index on ai_retention_policies.version",
+    "Optional: mobile-friendly retention preview rows and a busy state on the preview button"
+  ],
+  "critical_code_review_comments": [
+    "issue_token's rotation by _id ordering correctly ends with one active token under concurrency (verified by the scratch test)",
+    "BolnaLiveProvider refuses before any network I/O; start_live_worker always returns False; ensure_ai_indexes does not start the worker",
+    "Renew lockout check happens after token lookup, so the response differs for valid vs unknown tokens (see minor issue)",
+    "build_preview has no projection or limit"
+  ],
+  "updated_files": ["/app/backend/tests/test_ai_calling_phase7cb1_api.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Admin User / QAZwsx##123 works. /app/memory/test_credentials.md lists the password as 'Admin User', which is out of date and should be updated.",
+  "seed_data_creation": "One retention hold (reason TEST_hold) was added on the real call and then released. A released ai_retention_holds doc and audit entries remain. Nothing was written to bb_registrations; the policy is unchanged.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run the live API suite with: REACT_APP_BACKEND_URL=... pytest tests/test_ai_calling_phase7cb1_api.py tests/test_ai_calling_phase7ca_api.py. Only 1 ai_call exists (id 6af2ebe0e5771b87daa0c746, ~1 day old). The renewal UI needs page.route mocking for /api/pub/schedule/* because there are no bb_registrations. Keep invalid public renewal attempts under 10 per 15 minutes per IP."
+}

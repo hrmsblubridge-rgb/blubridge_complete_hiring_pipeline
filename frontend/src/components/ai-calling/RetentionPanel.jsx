@@ -20,8 +20,8 @@ const PreviewTable = ({ rows }) => (
                         <td className="px-2 py-2">{r.mode}</td>
                         <td className="px-2 py-2">{r.age_days ?? '—'} d</td>
                         <td className="px-2 py-2 whitespace-nowrap">{fmtTime(r.eligible_from) || '—'}</td>
-                        <td className="px-2 py-2 font-semibold" data-testid="retention-row-status">{STATUS[r.status] || r.status}</td>
-                        <td className="px-2 py-2 text-xs text-[#6b7280] max-w-[18rem]">{r.fields.join(', ') || '—'}{r.provider_copy && <div className="text-amber-700">{r.provider_copy}</div>}</td>
+                        <td className="px-2 py-2 font-semibold" data-testid={`retention-row-status-${r.call_id}`}>{STATUS[r.status] || r.status}</td>
+                        <td className="px-2 py-2 text-xs text-[#6b7280] min-w-[14rem] max-w-[18rem]">{r.fields.join(', ') || '—'}{r.provider_copy && <div className="text-amber-700">{r.provider_copy}</div>}</td>
                     </tr>
                 ))}
             </tbody>
@@ -34,9 +34,11 @@ export const RetentionPanel = () => {
     const [pol, setPol] = useState(null);
     const [pv, setPv] = useState(null);
     const [days, setDays] = useState('');
+    const [busy, setBusy] = useState(false);
     useEffect(() => { aiApi.get('/retention/policy').then(r => setPol(r.data)).catch(e => toast.error(errMsg(e))); }, []);
     const run = async () => {
-        try { setPv((await aiApi.get('/retention/preview', { params: days ? { days: Number(days) } : {} })).data); } catch (e) { toast.error(errMsg(e)); }
+        setBusy(true);
+        try { setPv((await aiApi.get('/retention/preview', { params: days ? { days: Number(days) } : {} })).data); } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
     };
     return (
         <Card data-testid="retention-panel">
@@ -63,7 +65,7 @@ export const RetentionPanel = () => {
             <div className="flex flex-wrap items-center gap-2 mb-3">
                 <input value={days} onChange={e => setDays(e.target.value.replace(/\D/g, '').slice(0, 4))} placeholder={`${pol?.policy.days ?? 90} days`}
                     data-testid="retention-days-input" className="w-28 border border-[#e5e3d8] rounded-lg px-2 py-2 text-sm" />
-                <button onClick={run} data-testid="retention-preview-btn" className="px-4 py-2 rounded-lg bg-teal-700 text-white text-sm font-semibold">Run retention preview</button>
+                <button onClick={run} disabled={busy} data-testid="retention-preview-btn" className="px-4 py-2 rounded-lg bg-teal-700 text-white text-sm font-semibold disabled:opacity-50">{busy ? 'Working…' : 'Run retention preview'}</button>
                 {pv && <span className="text-xs text-[#6b7280]" data-testid="retention-preview-counts">{pv.counts.records} calls · {pv.counts.eligible} would be cleaned · {pv.counts.not_yet_due} not yet due · {pv.counts.on_hold} on hold · deleted: {pv.deleted}</span>}
             </div>
             {pv && (pv.rows.length ? <PreviewTable rows={pv.rows} /> : <p className="text-sm text-[#9b9787]">No call records.</p>)}
