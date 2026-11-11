@@ -22,7 +22,7 @@ export const ConsentPreview = () => {
                 <div className="grid grid-cols-2 gap-2"><input disabled value="15 Jul 2026" className={inputCls} readOnly /><input disabled value="11:00 AM" className={inputCls} readOnly /></div>
                 <label className="flex items-start gap-2 text-sm text-[#1a2332]">
                     <input type="checkbox" checked={checked} onChange={e => setChecked(e.target.checked)} data-testid="consent-preview-checkbox" className="mt-1 accent-teal-700" />
-                    <span>{p?.text || '…'} <span className="text-[#9b9787]">(optional)</span></span>
+                    <span className="whitespace-pre-line"><b className="block mb-1">{p?.title}</b>{p?.text || '…'}</span>
                 </label>
                 <button onClick={() => setBooked(checked)} data-testid="consent-preview-book-btn" className="w-full py-2.5 rounded-lg bg-teal-700 text-white text-sm font-semibold">Confirm booking</button>
                 {booked !== null && (

@@ -5,12 +5,17 @@ import { formatDateDDMMYYYY as fmtDate, formatTime12H as fmtTime } from '../util
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
-const ConsentOutcome = ({ state, token }) => (
-    <div className="text-xs text-gray-600 border-t border-gray-200 pt-3" data-testid="ai-consent-outcome">
+const ConsentOutcome = ({ state, manageToken }) => (
+    <div className="text-xs text-gray-600 border-t border-gray-200 pt-3 space-y-1" data-testid="ai-consent-outcome">
         {state === 'granted' && <p>You agreed to AI voice calls about this interview.</p>}
         {state === 'not_given' && <p>You did not opt in to AI voice calls. Your interview is booked either way.</p>}
         {state === 'failed' && <p className="text-amber-700" data-testid="ai-consent-failed">Your interview is booked, but your AI call preference could not be saved, so it counts as not given.</p>}
-        <a href={`/ai-consent/${token}`} className="text-[#2563eb] underline" data-testid="manage-ai-consent-link">Manage AI calling consent</a>
+        {manageToken && (
+            <p>
+                <a href={`/ai-consent#t=${manageToken}`} target="_blank" rel="noreferrer noopener" className="text-[#2563eb] underline" data-testid="manage-ai-consent-link">Manage AI calling consent</a>
+                <span className="text-gray-400"> — private link, valid 30 days. Please bookmark it. You can always use it to withdraw consent.</span>
+            </p>
+        )}
     </div>
 );
 const TIME_SLOTS = ['10:00 AM','10:30 AM','11:00 AM','11:30 AM','12:00 PM','12:30 PM','01:00 PM','01:30 PM','02:00 PM','02:30 PM','03:00 PM','03:30 PM','04:00 PM','04:30 PM','05:00 PM'];
@@ -61,9 +66,10 @@ export default function InterviewSchedule() {
     const [aiConsent, setAiConsent] = useState(false);
     const [consentInfo, setConsentInfo] = useState(null);
     const [consentSaved, setConsentSaved] = useState(null);
+    const [manageToken, setManageToken] = useState('');
     useEffect(() => {
-        axios.get(`${API}/api/ai-calling/public/consent/${token}`).then(r => setConsentInfo(r.data)).catch(() => setConsentInfo(null));
-    }, [token]);
+        axios.get(`${API}/api/ai-calling/public/consent-text`).then(r => setConsentInfo(r.data)).catch(() => setConsentInfo(null));
+    }, []);
 
     useEffect(() => {
         axios.get(`${API}/api/pub/schedule/${token}`).then(r => {
@@ -98,7 +104,8 @@ export default function InterviewSchedule() {
             await axios.post(`${API}/api/pub/schedule/${token}`, { date, time: time24 });
             // Booking succeeded. The optional AI-call preference is saved separately and can never undo the booking.
             try {
-                await axios.post(`${API}/api/ai-calling/public/consent/${token}`, { granted: aiConsent, text_version: consentInfo?.version, source: 'booking_form' });
+                const r = await axios.post(`${API}/api/ai-calling/public/booking-consent/${token}`, { granted: aiConsent, text_version: consentInfo?.version });
+                setManageToken(r.data.manage_token || '');
                 setConsentSaved(aiConsent ? 'granted' : 'not_given');
             } catch { setConsentSaved('failed'); }
             setDone(true);
@@ -149,7 +156,7 @@ export default function InterviewSchedule() {
                                 <b>⚠ Important:</b> Please ensure you check your <b>Spam/Junk</b> folder if you don't see our email in your inbox, and mark it as "Not Spam" to stay updated.
                             </div>
                             <p className="text-gray-800 text-sm font-medium">We look forward to meeting you in person!</p>
-                            <ConsentOutcome state={consentSaved} token={token} />
+                            <ConsentOutcome state={consentSaved} manageToken={manageToken} />
                         </div>
                     </div>
                 </div>
@@ -200,7 +207,10 @@ export default function InterviewSchedule() {
                         <label className="flex items-start gap-2 text-xs text-gray-700 bg-[#f8fafc] border border-gray-200 rounded p-3" data-testid="ai-consent-row">
                             <input type="checkbox" checked={aiConsent} onChange={e => setAiConsent(e.target.checked)} disabled={!consentInfo}
                                 data-testid="ai-consent-checkbox" className="mt-0.5 accent-[#2563eb]" />
-                            <span>{consentInfo?.text || 'Loading…'} <span className="text-gray-400">(optional — booking works either way)</span></span>
+                            <span className="whitespace-pre-line">
+                                <b className="block mb-1" data-testid="ai-consent-title">{consentInfo?.title || 'Optional AI Voice Call Consent'}</b>
+                                {consentInfo?.text || 'Loading…'}
+                            </span>
                         </label>
 
                         <button onClick={handleSchedule} disabled={submitting} data-testid="schedule-btn"

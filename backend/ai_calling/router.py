@@ -47,6 +47,10 @@ async def ensure_ai_indexes():
     from .dispatch import startup_recover
     from .dryrun import ensure_dry_run_indexes
     await ensure_dry_run_indexes()
+    from .consent import ensure_consent_indexes
+    from .live_prep import ensure_live_prep_indexes
+    await ensure_consent_indexes()
+    await ensure_live_prep_indexes()
     await startup_recover()
 
 
@@ -110,6 +114,7 @@ class SettingsBody(BaseModel):
     default_office_address: Optional[str] = None
     live_daily_call_limit: Optional[int] = None
     live_max_concurrent_calls: Optional[int] = None
+    live_pilot_daily_cap: Optional[int] = None
 
 
 @ai_router.put("/settings")
@@ -118,10 +123,12 @@ async def update_settings(body: SettingsBody, request: Request):
     upd = {k: v for k, v in body.model_dump().items() if v is not None and k in EDITABLE_SETTINGS}
     if "daily_call_limit" in upd and not (0 <= upd["daily_call_limit"] <= 200):
         raise HTTPException(400, "daily_call_limit must be 0–200")
-    if "live_daily_call_limit" in upd and not (0 <= upd["live_daily_call_limit"] <= 500):
-        raise HTTPException(400, "live_daily_call_limit must be 0–500")
-    if "live_max_concurrent_calls" in upd and not (1 <= upd["live_max_concurrent_calls"] <= 5):
-        raise HTTPException(400, "live_max_concurrent_calls must be 1–5")
+    if "live_daily_call_limit" in upd and not (0 <= upd["live_daily_call_limit"] <= 20):
+        raise HTTPException(400, "live_daily_call_limit must be 0–20")
+    if "live_pilot_daily_cap" in upd and not (0 <= upd["live_pilot_daily_cap"] <= 20):
+        raise HTTPException(400, "live_pilot_daily_cap must be 0–20")
+    if "live_max_concurrent_calls" in upd and upd["live_max_concurrent_calls"] != 1:
+        raise HTTPException(400, "live_max_concurrent_calls must be 1")
     if "max_concurrent_calls" in upd and not (1 <= upd["max_concurrent_calls"] <= 5):
         raise HTTPException(400, "max_concurrent_calls must be 1–5")
     for k in ("call_window_start", "call_window_end"):
@@ -281,6 +288,9 @@ from .dryrun import dryrun_router  # noqa: E402
 from .modes import modes_router  # noqa: E402
 from .consent import admin_router as consent_admin_router, public_router as consent_public_router  # noqa: E402
 
+from .live_prep import live_prep_router  # noqa: E402
+
+ai_router.include_router(live_prep_router)
 ai_router.include_router(dispatch_router)
 ai_router.include_router(dryrun_router)
 ai_router.include_router(modes_router)

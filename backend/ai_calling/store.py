@@ -25,6 +25,7 @@ SETTINGS_DEFAULTS = {
     "live_dispatch_authorized": False,
     "live_daily_call_limit": 20,
     "live_max_concurrent_calls": 1,
+    "live_pilot_daily_cap": 5,
     "daily_call_limit": 20,
     "max_concurrent_calls": 1,
     "call_window_start": "10:00",
@@ -37,6 +38,7 @@ SETTINGS_DEFAULTS = {
 EDITABLE_SETTINGS = {
     "daily_call_limit", "max_concurrent_calls", "call_window_start", "call_window_end",
     "default_company_name", "default_office_address", "live_daily_call_limit", "live_max_concurrent_calls",
+    "live_pilot_daily_cap",
 }
 
 _state = {"db": None, "auth": None}

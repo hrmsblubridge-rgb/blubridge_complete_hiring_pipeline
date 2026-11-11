@@ -5,6 +5,7 @@ import { aiApi, errMsg } from './aiApi';
 import { AICallingHeader, Card, SectionTitle } from '../../components/ai-calling/AICallingHeader';
 import { DryRunPreview } from '../../components/ai-calling/DryRunPreview';
 import { RealBookingsPreview } from '../../components/ai-calling/RealBookingsPreview';
+import { LivePrepPanel } from '../../components/ai-calling/LivePrepPanel';
 
 const Rule = ({ icon: Icon, title, text }) => (
     <div className="flex gap-3">
@@ -42,12 +43,12 @@ export default function LiveMode() {
                     <Lock size={16} /> Activate Live Mode (locked)
                 </button>
                 <div className="flex gap-2" role="tablist">
-                    {[['synthetic', 'Synthetic Bookings'], ['real', 'Real Bookings']].map(([k, l]) => (
+                    {[['synthetic', 'Synthetic Bookings'], ['real', 'Real Bookings'], ['prep', 'Live Prep (mock)']].map(([k, l]) => (
                         <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)} data-testid={`live-tab-${k}`}
                             className={`px-4 py-2 rounded-lg text-sm font-semibold border ${tab === k ? 'bg-teal-700 text-white border-teal-700' : 'bg-white border-[#e5e3d8] text-[#1a2332]'}`}>{l}</button>
                     ))}
                 </div>
-                {tab === 'synthetic' ? <DryRunPreview /> : <RealBookingsPreview />}
+                {tab === 'synthetic' ? <DryRunPreview /> : tab === 'real' ? <RealBookingsPreview /> : <LivePrepPanel />}
             </main>
         </div>
     );

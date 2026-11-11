@@ -29,23 +29,24 @@ def s():
     pytest.skip("login failed")
 
 
-# --- public consent endpoints (no auth, token-scoped)
-def test_public_consent_get_unknown_404():
-    r = requests.get(f"{API}/public/consent/{_tok()}")
-    assert r.status_code == 404 and "Invalid" in r.json()["detail"]
+# --- public consent endpoints (Phase 7C-A: dedicated hashed token in X-Consent-Token header)
+def test_public_consent_manage_unknown_404():
+    r = requests.get(f"{API}/public/consent/manage", headers={"X-Consent-Token": _tok() * 2})
+    assert r.status_code in (404, 429)
 
 
-def test_public_consent_post_unknown_404():
-    r = requests.post(f"{API}/public/consent/{_tok()}", json={"granted": True, "text_version": "2026-06-v2", "source": "booking_form"})
-    assert r.status_code == 404
+def test_public_booking_consent_unknown_404():
+    r = requests.post(f"{API}/public/booking-consent/{_tok()}", json={"granted": True, "text_version": "2026-06-v3"})
+    assert r.status_code in (404, 429)
 
 
 def test_public_consent_withdraw_unknown_404():
-    assert requests.post(f"{API}/public/consent/{_tok()}/withdraw").status_code == 404
+    assert requests.post(f"{API}/public/consent/manage/withdraw", headers={"X-Consent-Token": "x" * 43}).status_code in (404, 429)
 
 
-def test_public_consent_short_token_404():
-    assert requests.get(f"{API}/public/consent/abc").status_code == 404
+def test_public_consent_text():
+    d = requests.get(f"{API}/public/consent-text").json()
+    assert d["version"] == "2026-06-v3" and d["title"] == "Optional AI Voice Call Consent" and d["default_checked"] is False
 
 
 # --- real bookings preview (read-only)
@@ -76,19 +77,19 @@ def test_live_authorize_no_auth_401():
 # --- switches expose live limits + phrase
 def test_switches_live_limits(s):
     d = s.get(f"{API}/switches").json()
-    assert d["live_limits"] == {"daily": 20, "concurrent": 1}
+    assert d["live_limits"]["daily"] == 20 and d["live_limits"]["concurrent"] == 1 and d["live_limits"]["effective_daily"] == 5
     assert d["live_auth_phrase"] == "AUTHORIZE LIVE DISPATCH"
     assert d["ai_test_enabled"] is True and d["ai_live_enabled"] is False and d["emergency_stop"] is True
 
 
 def test_consent_preview_v2(s):
     d = s.get(f"{API}/consent/preview").json()
-    assert d["version"] == "2026-06-v2" and d["default_checked"] is False and "withdraw" in d["text"]
+    assert d["version"] == "2026-06-v3" and d["default_checked"] is False and "withdraw" in d["text"]
 
 
 # --- settings validation for live limits
-@pytest.mark.parametrize("body", [{"live_daily_call_limit": 999}, {"live_daily_call_limit": -1},
-                                  {"live_max_concurrent_calls": 0}, {"live_max_concurrent_calls": 6}])
+@pytest.mark.parametrize("body", [{"live_daily_call_limit": 21}, {"live_daily_call_limit": -1},
+                                  {"live_max_concurrent_calls": 0}, {"live_max_concurrent_calls": 2}, {"live_pilot_daily_cap": 21}])
 def test_settings_live_limits_invalid_400(s, body):
     assert s.put(f"{API}/settings", json=body, headers=H).status_code == 400
 
@@ -96,7 +97,7 @@ def test_settings_live_limits_invalid_400(s, body):
 def test_settings_live_limits_valid_restore(s):
     r = s.put(f"{API}/settings", json={"live_daily_call_limit": 20, "live_max_concurrent_calls": 1}, headers=H)
     assert r.status_code == 200, r.text
-    assert s.get(f"{API}/switches").json()["live_limits"] == {"daily": 20, "concurrent": 1}
+    assert s.get(f"{API}/switches").json()["live_limits"]["daily"] == 20
 
 
 # --- regression

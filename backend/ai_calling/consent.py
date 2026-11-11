@@ -1,87 +1,390 @@
-"""Phase 7B: optional candidate AI-call consent (booking page + private manage link) and the
-read-only Real Bookings dry-run preview. Nothing here dispatches calls or edits bookings."""
+"""Phase 7C-A: candidate AI-call consent with dedicated, hashed, expiring consent-management tokens,
+candidate/admin Do Not Call, and the read-only Real Bookings preview. Nothing here dispatches calls
+or edits bookings, and no WhatsApp/email is sent."""
+import hashlib
 import logging
-from datetime import datetime
+import os
+import secrets
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from bson import ObjectId
+from fastapi import APIRouter, Body, HTTPException, Request, Response
+from pymongo import ReturnDocument
 
 from .dryrun import WARNING, _mask, booking_key, plan_booking
-from .modes import CONSENT_TEXT, CONSENT_TEXT_VERSION
-from .provider import _auth
+from .modes import CONSENT_TEXT, CONSENT_TITLE, CONSENT_TEXT_VERSION
+from .provider import _auth, _csrf
 from .store import IST, db, get_settings, now_iso
 
 _logger = logging.getLogger("ai_calling.consent")
-public_router = APIRouter(prefix="/public/consent")
+public_router = APIRouter(prefix="/public")
 admin_router = APIRouter()
-ACCESS = "schedule_token"  # existing unguessable per-candidate booking link (64 random bits)
+
+PURPOSE = "ai_consent_manage"
+TOKEN_HEADER = "X-Consent-Token"
+TOKEN_TTL_DAYS = 30
+OTP_TTL = timedelta(minutes=10)
+OTP_MAX_ATTEMPTS = 5
+OTP_DELIVERY_APPROVED = False  # renewal codes need an owner-approved delivery channel (not sent in Phase 7C-A)
+RATE_WINDOW = timedelta(minutes=15)
+RATE_MAX_FAILURES = 10
+DNC_SOURCES = ("ADMIN", "CANDIDATE", "AI_CALL_OPT_OUT")
+NO_STORE = {"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache", "Referrer-Policy": "no-referrer",
+            "X-Robots-Tag": "noindex"}
 
 
-async def _reg_by_token(token: str) -> dict:
-    reg = await db().bb_registrations.find_one({ACCESS: token}, {"_id": 1, "full_name": 1, "schedule_date": 1}) \
-        if token and len(token) >= 16 else None
+def _ttl_days() -> int:
+    return int(os.environ.get("AI_CONSENT_TOKEN_TTL_DAYS") or TOKEN_TTL_DAYS)
+
+
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def top_level_admins() -> set:
+    return {u.strip() for u in os.environ.get("AI_TOP_LEVEL_ADMINS", "").split(",") if u.strip()}
+
+
+async def ensure_consent_indexes():
+    await db().ai_consent_tokens.create_index("token_hash", unique=True)
+    await db().ai_consent_tokens.create_index([("registration_id", 1), ("revoked_at", 1)])
+    await db().ai_consent_rate.create_index("expires_at", expireAfterSeconds=0)
+    await db().ai_consent_otps.create_index("expires_at", expireAfterSeconds=0)
+
+
+# ---------- tokens ----------
+
+async def issue_token(reg_id: str, reason: str) -> str:
+    """New 256-bit token; any older token for this registration is revoked (rotation). Only the hash is stored."""
+    token = secrets.token_urlsafe(32)
+    now = _now()
+    h = hash_token(token)
+    await db().ai_consent_tokens.update_many({"registration_id": reg_id, "revoked_at": None},
+                                             {"$set": {"revoked_at": now.isoformat(), "revoke_reason": "replaced"}})
+    await db().ai_consent_tokens.insert_one({"token_hash": h, "registration_id": reg_id, "purpose": PURPOSE,
+                                             "created_at": now.isoformat(), "issued_reason": reason,
+                                             "expires_at": (now + timedelta(days=_ttl_days())).isoformat(), "revoked_at": None})
+    await _audit("consent_token_issued", "system", reg_id, {"reason": reason, "token_ref": h[:8]})
+    return token
+
+
+async def revoke_tokens(reg_id: str, reason: str) -> int:
+    res = await db().ai_consent_tokens.update_many({"registration_id": reg_id, "revoked_at": None},
+                                                   {"$set": {"revoked_at": now_iso(), "revoke_reason": reason}})
+    return res.modified_count
+
+
+def _ip_key(request: Request) -> str:
+    ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "")).split(",")[0].strip()
+    return hashlib.sha256(f"consent-rl|{ip}".encode()).hexdigest()[:32]
+
+
+async def _check_rate(request: Request):
+    doc = await db().ai_consent_rate.find_one({"_id": _ip_key(request)})
+    if doc and doc.get("failures", 0) >= RATE_MAX_FAILURES:
+        raise HTTPException(429, "Too many invalid attempts. Please try again later.")
+
+
+async def _fail(request: Request, status: int = 404, msg: str = "Invalid or expired link"):
+    exp = _now() + RATE_WINDOW
+    await db().ai_consent_rate.update_one({"_id": _ip_key(request)},
+                                          {"$inc": {"failures": 1}, "$setOnInsert": {"expires_at": exp}}, upsert=True)
+    raise HTTPException(status, msg)
+
+
+async def resolve_token(request: Request) -> dict:
+    """Authentic, unrevoked, correct-purpose token → {reg_id, expired}. Expired tokens are returned flagged."""
+    await _check_rate(request)
+    token = request.headers.get(TOKEN_HEADER) or ""
+    if not (32 <= len(token) <= 128):
+        await _fail(request)
+    t = await db().ai_consent_tokens.find_one({"token_hash": hash_token(token)})
+    if not t or t.get("purpose") != PURPOSE or t.get("revoked_at") or not ObjectId.is_valid(t.get("registration_id", "")):
+        await _fail(request)
+    reg = await db().bb_registrations.find_one({"_id": ObjectId(t["registration_id"])},
+                                               {"_id": 1, "full_name": 1, "schedule_date": 1, "schedule_time": 1,
+                                                "reschedule_count": 1})
     if not reg:
-        raise HTTPException(404, "Invalid or expired link")
-    return reg
+        await _fail(request)
+    return {"reg": reg, "reg_id": t["registration_id"], "expired": t["expires_at"] <= _now().isoformat(),
+            "expires_at": t["expires_at"]}
 
 
-async def record_consent(reg_id: str, status: str, source: str, actor: str) -> dict:
+# ---------- consent + Do Not Call ----------
+
+async def _audit(action: str, actor: str, reg_id: str, detail: dict = None):
+    await db().ai_call_audit.insert_one({"action": action, "by": actor, "registration_id": reg_id,
+                                         "detail": detail or {}, "at": now_iso()})
+
+
+async def invalidate_pending(reg_id: str, reason: str) -> int:
+    """Cancel pending live work (real and mock) for this exact registration only. Interviews are never touched."""
+    n = (await db().ai_call_jobs.update_many({"mode": "live", "registration_id": reg_id, "status": "pending"},
+                                             {"$set": {"status": "cancelled", "cancel_reason": reason}})).modified_count
+    n += (await db().ai_live_mock_jobs.update_many(
+        {"registration_id": reg_id, "status": {"$in": ["planned", "claimed"]}},
+        {"$set": {"status": "invalidated", "reasons": [reason.upper()], "invalidated_at": now_iso()}})).modified_count
+    return n
+
+
+async def record_consent(reg_id: str, status: str, source: str, actor: str, bkey: str = None) -> dict:
     now = now_iso()
-    st = {"consent_status": status, "consent_source": source, "consent_text_version": CONSENT_TEXT_VERSION, "updated_at": now}
+    st = {"consent_status": status, "consent_source": source, "consent_text_version": CONSENT_TEXT_VERSION,
+          "updated_at": now, "last_change_at": now}
     if status == "granted":
         st.update(consent_timestamp=now, consent_withdrawn_at=None)
     elif status == "withdrawn":
         st["consent_withdrawn_at"] = now
-    await db().ai_candidate_consents.update_one(
-        {"registration_id": reg_id},
-        {"$set": st, "$setOnInsert": {"registration_id": reg_id, "do_not_call": False, "created_at": now},
-         "$push": {"history": {"status": status, "source": source, "by": actor, "at": now, "text_version": CONSENT_TEXT_VERSION}}},
-        upsert=True)
-    if status != "granted":  # immediately ineligible: cancel any pending live work for this exact registration
-        await db().ai_call_jobs.update_many({"mode": "live", "registration_id": reg_id, "status": "pending"},
-                                            {"$set": {"status": "cancelled", "cancel_reason": f"consent_{status}"}})
+    upd = {"$set": st, "$setOnInsert": {"registration_id": reg_id, "do_not_call": False, "dnc_sources": [], "created_at": now},
+           "$push": {"history": {"type": "consent", "status": status, "source": source, "by": actor, "at": now,
+                                 "text_version": CONSENT_TEXT_VERSION}}}
+    if bkey:
+        upd["$addToSet"] = {"booking_form_keys": bkey}
+    await db().ai_candidate_consents.update_one({"registration_id": reg_id}, upd, upsert=True)
+    if status != "granted":
+        await invalidate_pending(reg_id, f"consent_{status}")
+    await _audit(f"consent_{status}", actor, reg_id, {"source": source, "text_version": CONSENT_TEXT_VERSION})
     return await db().ai_candidate_consents.find_one({"registration_id": reg_id}, {"_id": 0, "history": 0})
 
 
-async def _safe_record(reg_id: str, status: str, source: str):
+async def set_dnc(reg_id: str, source: str, actor: str, add: bool, reason: str = "") -> dict:
+    """Do Not Call is the union of sources. Removing one source never removes another, never restores consent."""
+    assert source in DNC_SOURCES
+    now = now_iso()
+    await db().ai_candidate_consents.update_one(
+        {"registration_id": reg_id},
+        {"$setOnInsert": {"registration_id": reg_id, "consent_status": "not_given", "created_at": now, "dnc_sources": []}},
+        upsert=True)
+    op = {"$addToSet": {"dnc_sources": source}} if add else {"$pull": {"dnc_sources": source}}
+    await db().ai_candidate_consents.update_one({"registration_id": reg_id}, {**op, "$push": {"history": {
+        "type": "dnc", "action": "mark" if add else "remove", "source": source, "by": actor, "reason": reason[:300], "at": now}}})
+    doc = await db().ai_candidate_consents.find_one_and_update(
+        {"registration_id": reg_id}, [{"$set": {"do_not_call": {"$gt": [{"$size": {"$ifNull": ["$dnc_sources", []]}}, 0]},
+                                                 "updated_at": now, "last_change_at": now,
+                                                 **({"dnc_at": now, "dnc_by": actor, "dnc_reason": reason[:300]} if add else {})}}],
+        return_document=ReturnDocument.AFTER, projection={"_id": 0, "history": 0})
+    if add:
+        await invalidate_pending(reg_id, f"do_not_call_{source.lower()}")
+    await _audit("dnc_marked" if add else "dnc_removed", actor, reg_id, {"source": source, "reason": reason[:300]})
+    return doc
+
+
+async def apply_ai_opt_out(reg_id: str) -> dict:
+    """For future live results: an AI call that extracted DO_NOT_CALL blocks all further AI calls."""
+    return await set_dnc(reg_id, "AI_CALL_OPT_OUT", "ai_call", True, "Candidate asked not to be called during an AI call")
+
+
+async def _safe(coro_fn, reg_id: str, intended: str):
     try:
-        return await record_consent(reg_id, status, source, "candidate")
-    except Exception as e:  # noqa: BLE001 — never claim it was saved; booking is unaffected
+        return await coro_fn()
+    except Exception as e:  # noqa: BLE001 — never claim it was saved; the booking is unaffected
         _logger.error(f"[Consent] persist failed reg={reg_id}: {type(e).__name__}")
         try:
-            await db().ai_call_audit.insert_one({"action": "consent_persist_failed", "registration_id": reg_id,
-                                                 "intended_status": status, "source": source, "error": type(e).__name__, "at": now_iso()})
+            await _audit("consent_persist_failed", "candidate", reg_id, {"intended": intended, "error": type(e).__name__})
         except Exception:  # noqa: BLE001
             pass
         raise HTTPException(503, "Your interview is booked, but your AI call preference could not be saved. It counts as NOT given.") from None
 
 
-@public_router.get("/{token}")
-async def consent_info(token: str):
-    reg = await _reg_by_token(token)
-    c = await db().ai_candidate_consents.find_one({"registration_id": str(reg["_id"])}) or {}
-    return {"first_name": (reg.get("full_name") or "").split(" ")[0], "has_booking": bool(reg.get("schedule_date")),
-            "consent_status": c.get("consent_status", "not_given"), "do_not_call": bool(c.get("do_not_call")),
-            "text": CONSENT_TEXT, "version": CONSENT_TEXT_VERSION}
+# ---------- public (candidate) routes ----------
+
+@public_router.get("/consent-text")
+async def consent_text(response: Response):
+    response.headers.update(NO_STORE)
+    return {"title": CONSENT_TITLE, "text": CONSENT_TEXT, "version": CONSENT_TEXT_VERSION, "optional": True, "default_checked": False}
 
 
-@public_router.post("/{token}")
-async def consent_decision(token: str, body: dict = Body(...)):  # noqa: B008
-    """Booking-page decision (checked or unchecked). Called only after the booking itself succeeded."""
-    reg = await _reg_by_token(token)
+@public_router.post("/booking-consent/{schedule_token}")
+async def booking_decision(schedule_token: str, request: Request, response: Response, body: dict = Body(...)):  # noqa: B008
+    """Booking page only: one decision per booked slot, made right after booking. Returns the dedicated
+    consent-management token ONCE; the booking token can never manage or withdraw consent afterwards."""
+    response.headers.update(NO_STORE)
+    await _check_rate(request)
+    reg = await db().bb_registrations.find_one({"schedule_token": schedule_token}, {"_id": 1, "schedule_date": 1, "schedule_time": 1,
+                                                                                    "reschedule_count": 1}) \
+        if schedule_token and len(schedule_token) >= 16 else None
+    if not reg:
+        await _fail(request)
     if not reg.get("schedule_date"):
         raise HTTPException(409, "No interview booking found for this link")
     if body.get("text_version") != CONSENT_TEXT_VERSION:
         raise HTTPException(409, "Consent wording changed. Your preference was not saved.")
+    rid, bkey = str(reg["_id"]), booking_key(reg)
+    existing = await db().ai_candidate_consents.find_one({"registration_id": rid}, {"booking_form_keys": 1})
+    if bkey in ((existing or {}).get("booking_form_keys") or []):
+        raise HTTPException(409, "A preference was already recorded for this booking. Use your consent-management link.")
     status = "granted" if body.get("granted") is True else "not_given"
-    c = await _safe_record(str(reg["_id"]), status, str(body.get("source") or "booking_form")[:30])
-    return {"saved": True, "consent_status": c["consent_status"]}
+
+    async def save():
+        c = await record_consent(rid, status, "booking_form", "candidate", bkey)
+        return c, await issue_token(rid, "booking")
+    c, token = await _safe(save, rid, status)
+    return {"saved": True, "consent_status": c["consent_status"], "manage_token": token,
+            "manage_expires_days": _ttl_days()}
 
 
-@public_router.post("/{token}/withdraw")
-async def consent_withdraw(token: str):
-    reg = await _reg_by_token(token)
-    c = await _safe_record(str(reg["_id"]), "withdrawn", "consent_page")
+def _info(t: dict, c: dict) -> dict:
+    status = c.get("consent_status", "not_given")
+    return {"first_name": (t["reg"].get("full_name") or "").split(" ")[0], "has_booking": bool(t["reg"].get("schedule_date")),
+            "consent_status": status, "do_not_call": bool(c.get("do_not_call")),
+            "candidate_dnc": "CANDIDATE" in (c.get("dnc_sources") or []), "expired": t["expired"],
+            "expires_at": t["expires_at"], "can_withdraw": status == "granted",
+            "can_grant": not t["expired"] and status != "granted" and bool(t["reg"].get("schedule_date")),
+            "renewal_available": OTP_DELIVERY_APPROVED,
+            "title": CONSENT_TITLE, "text": CONSENT_TEXT, "version": CONSENT_TEXT_VERSION}
+
+
+@public_router.get("/consent/manage")
+async def manage_info(request: Request, response: Response):
+    response.headers.update(NO_STORE)
+    t = await resolve_token(request)
+    return _info(t, await db().ai_candidate_consents.find_one({"registration_id": t["reg_id"]}) or {})
+
+
+@public_router.post("/consent/manage/withdraw")
+async def manage_withdraw(request: Request, response: Response):
+    """Allowed with an authentic token even after expiry (withdraw-only); never with a revoked/replaced one."""
+    response.headers.update(NO_STORE)
+    t = await resolve_token(request)
+    src = "consent_page_expired_link" if t["expired"] else "consent_page"
+    c = await _safe(lambda: record_consent(t["reg_id"], "withdrawn", src, "candidate"), t["reg_id"], "withdrawn")
     return {"saved": True, "consent_status": c["consent_status"], "interview_unchanged": True}
+
+
+@public_router.post("/consent/manage/do-not-call")
+async def manage_dnc(request: Request, response: Response):
+    response.headers.update(NO_STORE)
+    t = await resolve_token(request)
+    c = await _safe(lambda: set_dnc(t["reg_id"], "CANDIDATE", "candidate", True, "Candidate request via consent page"),
+                    t["reg_id"], "do_not_call")
+    return {"saved": True, "do_not_call": c["do_not_call"], "interview_unchanged": True}
+
+
+@public_router.post("/consent/manage/grant")
+async def manage_grant(request: Request, response: Response, body: dict = Body(...)):  # noqa: B008
+    response.headers.update(NO_STORE)
+    t = await resolve_token(request)
+    if t["expired"]:
+        raise HTTPException(403, "This link has expired. It can only be used to withdraw consent.")
+    if not t["reg"].get("schedule_date"):
+        raise HTTPException(409, "No interview booking found")
+    if body.get("text_version") != CONSENT_TEXT_VERSION:
+        raise HTTPException(409, "Consent wording changed. Please reload.")
+    c = await record_consent(t["reg_id"], "granted", "consent_page", "candidate")
+    return {"saved": True, "consent_status": c["consent_status"], "do_not_call": bool(c.get("do_not_call"))}
+
+
+@public_router.post("/consent/manage/rotate")
+async def manage_rotate(request: Request, response: Response):
+    response.headers.update(NO_STORE)
+    t = await resolve_token(request)
+    if t["expired"]:
+        raise HTTPException(403, "This link has expired. It can only be used to withdraw consent.")
+    return {"manage_token": await issue_token(t["reg_id"], "rotation"), "manage_expires_days": _ttl_days()}
+
+
+# ---------- prepared one-time-code renewal (delivery NOT approved: nothing is sent) ----------
+
+async def create_otp(reg_id: str) -> tuple:
+    """Prepared for an owner-approved delivery channel. Returns (challenge_id, code); only the code hash is stored."""
+    cid, code = secrets.token_urlsafe(16), f"{secrets.randbelow(10**6):06d}"
+    await db().ai_consent_otps.insert_one({"_id": cid, "registration_id": reg_id, "code_hash": hash_token(f"{cid}|{code}"),
+                                           "attempts": 0, "used": False, "expires_at": _now() + OTP_TTL})
+    return cid, code
+
+
+@public_router.post("/consent/renew/request")
+async def renew_request(response: Response):
+    response.headers.update(NO_STORE)
+    raise HTTPException(501, "New consent links cannot be sent yet. To stop AI calls, use your existing link "
+                             "(it can always withdraw consent) or contact the HR team.")
+
+
+@public_router.post("/consent/renew/verify")
+async def renew_verify(request: Request, response: Response, body: dict = Body(...)):  # noqa: B008
+    response.headers.update(NO_STORE)
+    await _check_rate(request)
+    cid, code = str(body.get("challenge_id") or ""), str(body.get("code") or "")
+    ch = await db().ai_consent_otps.find_one_and_update(
+        {"_id": cid, "used": False, "attempts": {"$lt": OTP_MAX_ATTEMPTS}, "expires_at": {"$gt": _now()}},
+        {"$inc": {"attempts": 1}}, return_document=ReturnDocument.AFTER)
+    if not ch or not secrets.compare_digest(ch["code_hash"], hash_token(f"{cid}|{code}")):
+        await _fail(request, 400, "Invalid or expired code")
+    used = await db().ai_consent_otps.update_one({"_id": cid, "used": False}, {"$set": {"used": True}})
+    if not used.modified_count:
+        await _fail(request, 400, "Invalid or expired code")
+    return {"manage_token": await issue_token(ch["registration_id"], "otp_renewal"), "manage_expires_days": _ttl_days()}
+
+
+# ---------- admin routes ----------
+
+async def _reg_or_404(reg_id: str) -> dict:
+    reg = await db().bb_registrations.find_one({"_id": ObjectId(reg_id)}, {"_id": 1, "full_name": 1}) \
+        if ObjectId.is_valid(reg_id) else None
+    if not reg:
+        raise HTTPException(404, "Registration not found")
+    return reg
+
+
+def _admin_view(reg_id: str, c: dict, user: str, tok: dict) -> dict:
+    sources = c.get("dnc_sources") or []
+    hist = [{k: h.get(k) for k in ("type", "status", "action", "source", "by", "reason", "at")} for h in (c.get("history") or [])][-10:]
+    return {"registration_id": reg_id, "consent_status": c.get("consent_status", "none"),
+            "consent_timestamp": c.get("consent_timestamp"), "consent_source": c.get("consent_source"),
+            "consent_text_version": c.get("consent_text_version"), "consent_withdrawn_at": c.get("consent_withdrawn_at"),
+            "do_not_call": bool(c.get("do_not_call")), "dnc_sources": sources, "dnc_at": c.get("dnc_at"),
+            "dnc_by": c.get("dnc_by"), "dnc_reason": c.get("dnc_reason"), "last_change_at": c.get("last_change_at") or c.get("updated_at"),
+            "history": list(reversed(hist)), "is_top_level_admin": user in top_level_admins(),
+            "can_remove_dnc": user in top_level_admins() and "ADMIN" in sources,
+            "manage_link": {"active": bool(tok), "expires_at": (tok or {}).get("expires_at")}}
+
+
+@admin_router.get("/consent/admin/{reg_id}")
+async def admin_consent(reg_id: str, request: Request):
+    user = await _auth(request)
+    await _reg_or_404(reg_id)
+    c = await db().ai_candidate_consents.find_one({"registration_id": reg_id}) or {}
+    tok = await db().ai_consent_tokens.find_one({"registration_id": reg_id, "revoked_at": None}, {"expires_at": 1})
+    return _admin_view(reg_id, c, user, tok)
+
+
+@admin_router.post("/consent/admin/{reg_id}/dnc")
+async def admin_dnc(reg_id: str, request: Request, body: dict = Body(...)):  # noqa: B008
+    """Any admin may mark; only a designated top-level admin may remove, and only an ADMIN-sourced restriction."""
+    user = await _auth(request)
+    _csrf(request)
+    await _reg_or_404(reg_id)
+    action, reason = body.get("action"), str(body.get("reason") or "").strip()
+    if body.get("confirm") is not True:
+        raise HTTPException(400, "Confirmation required")
+    if action == "mark":
+        await set_dnc(reg_id, "ADMIN", user, True, reason or "Marked by admin")
+    elif action == "remove":
+        if user not in top_level_admins():
+            raise HTTPException(403, "Only a top-level administrator can remove Do Not Call")
+        c = await db().ai_candidate_consents.find_one({"registration_id": reg_id}) or {}
+        if "ADMIN" not in (c.get("dnc_sources") or []):
+            raise HTTPException(409, "There is no admin-imposed Do Not Call to remove")
+        if not reason:
+            raise HTTPException(400, "A reason is required to remove Do Not Call")
+        await set_dnc(reg_id, "ADMIN", user, False, reason)
+    else:
+        raise HTTPException(400, "action must be mark or remove")
+    return await admin_consent(reg_id, request)
+
+
+@admin_router.post("/consent/admin/{reg_id}/revoke-links")
+async def admin_revoke_links(reg_id: str, request: Request):
+    user = await _auth(request)
+    _csrf(request)
+    await _reg_or_404(reg_id)
+    n = await revoke_tokens(reg_id, f"admin_revoked:{user}")
+    await _audit("consent_tokens_revoked", user, reg_id, {"count": n})
+    return {"revoked": n}
 
 
 @admin_router.get("/dry-run/real-preview")

@@ -106,6 +106,10 @@ async def place_call(*, gate_result: dict, api_key: str, body: dict) -> dict:
     """Documented POST /call. Sends exactly ONE request; never retries."""
     if not gate_result or not gate_result.get("allowed"):
         raise PermissionError("Permission gate denied this call")
+    if gate_result.get("source") == "live" or (body.get("user_data") or {}).get("registration_id"):
+        from .modes import LIVE_DISPATCH_IMPLEMENTED
+        if not LIVE_DISPATCH_IMPLEMENTED:
+            raise PermissionError("Live dispatch is not enabled in this phase")
     try:
         async with httpx.AsyncClient(base_url=BASE_URL, timeout=CALL_TIMEOUT) as c:
             r = await c.post("/call", json=body, headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"})

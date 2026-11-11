@@ -4,6 +4,16 @@
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="theme-color" content="#000000" />
+        <script>
+            // AI consent links carry their secret in the #fragment. Move it out of the URL before analytics loads.
+            (function () {
+                if (location.pathname.indexOf("/ai-consent") !== 0) return;
+                var m = document.createElement("meta"); m.name = "referrer"; m.content = "no-referrer"; document.head.appendChild(m);
+                var h = location.hash.match(/[#&]t=([A-Za-z0-9_-]{32,128})/);
+                if (h) { try { sessionStorage.setItem("ai_consent_token", h[1]); } catch (e) {} }
+                if (h || location.pathname !== "/ai-consent") history.replaceState(null, "", "/ai-consent");
+            })();
+        </script>
         <meta name="description" content="Smart recruitment & interview management platform — automate hiring forms, interview schedules, candidate scoring, and WhatsApp/email alerts." />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

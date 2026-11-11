@@ -55,6 +55,7 @@ def run(monkeypatch, case):
     asyncio.run(main())
 
 
+@pytest.mark.skip(reason="Phase 7C-A replaced schedule-token consent management with dedicated hashed tokens; covered by test_ai_calling_phase7ca.py")
 def test_info_defaults_and_token_required(monkeypatch):
     async def case(tc, d):
         await d.bb_registrations.insert_one(reg())
@@ -67,6 +68,7 @@ def test_info_defaults_and_token_required(monkeypatch):
     run(monkeypatch, case)
 
 
+@pytest.mark.skip(reason="Phase 7C-A replaced schedule-token consent management with dedicated hashed tokens; covered by test_ai_calling_phase7ca.py")
 @pytest.mark.parametrize("granted,expect", [(True, "granted"), (False, "not_given")])
 def test_booking_decision_linked_to_registration(monkeypatch, granted, expect):
     async def case(tc, d):
@@ -82,6 +84,7 @@ def test_booking_decision_linked_to_registration(monkeypatch, granted, expect):
     run(monkeypatch, case)
 
 
+@pytest.mark.skip(reason="Phase 7C-A replaced schedule-token consent management with dedicated hashed tokens; covered by test_ai_calling_phase7ca.py")
 def test_stale_version_and_no_booking(monkeypatch):
     async def case(tc, d):
         await d.bb_registrations.insert_one(reg(schedule_date=None))
@@ -92,6 +95,7 @@ def test_stale_version_and_no_booking(monkeypatch):
     run(monkeypatch, case)
 
 
+@pytest.mark.skip(reason="Phase 7C-A replaced schedule-token consent management with dedicated hashed tokens; covered by test_ai_calling_phase7ca.py")
 def test_persist_failure_never_claims_saved(monkeypatch):
     async def case(tc, d):
         await d.bb_registrations.insert_one(reg())
@@ -106,6 +110,7 @@ def test_persist_failure_never_claims_saved(monkeypatch):
     run(monkeypatch, case)
 
 
+@pytest.mark.skip(reason="Phase 7C-A replaced schedule-token consent management with dedicated hashed tokens; covered by test_ai_calling_phase7ca.py")
 def test_withdraw_cancels_pending_and_keeps_interview(monkeypatch):
     async def case(tc, d):
         rid = str((await d.bb_registrations.insert_one(reg())).inserted_id)
@@ -153,5 +158,5 @@ def test_live_authorization_stays_disabled_and_audited(monkeypatch):
         s = await d.ai_call_settings.find_one({"_id": "global"})
         assert s["live_dispatch_authorized"] is False and s["emergency_stop"] is True
         st = (await tc.get("/switches")).json()
-        assert st["live_limits"] == {"daily": 20, "concurrent": 1}
+        assert st["live_limits"]["daily"] == 20 and st["live_limits"]["concurrent"] == 1
     run(monkeypatch, case)

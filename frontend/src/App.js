@@ -82,7 +82,8 @@ function App() {
                         <Route path="/register/college" element={<CollegeRegistration />} />
                         <Route path="/register/:formId" element={<PublicRegistration />} />
                         <Route path="/schedule-interview/:token" element={<InterviewSchedule />} />
-                        <Route path="/ai-consent/:token" element={<AiConsentManage />} />
+                        <Route path="/ai-consent" element={<AiConsentManage />} />
+                        <Route path="/ai-consent/*" element={<AiConsentManage />} />
                         <Route path="/jobs/view/:openingId" element={<PublicJobView />} />
                         <Route path="/" element={<Navigate to="/home" replace />} />
                         <Route path="*" element={<Navigate to="/home" replace />} />

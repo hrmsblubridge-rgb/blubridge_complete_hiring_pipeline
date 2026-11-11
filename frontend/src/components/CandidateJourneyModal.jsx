@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { X, CheckCircle, Clock, XCircle, User, EnvelopeSimple, Phone, Buildings, Briefcase } from '@phosphor-icons/react';
 
 import { ProfileCallHistory } from './ai-calling/ProfileCallHistory';
+import { ProfileConsentPanel } from './ai-calling/ProfileConsentPanel';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
@@ -192,6 +193,7 @@ export default function CandidateJourneyModal({ candidate, onClose }) {
                         </section>
 
                         <ProfileCallHistory email={data.basic.email} />
+                        <ProfileConsentPanel email={data.basic.email} />
                     </div>
                 )}
             </div>
