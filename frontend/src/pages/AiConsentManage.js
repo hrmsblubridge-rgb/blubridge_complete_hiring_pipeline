@@ -8,7 +8,7 @@ const btn = 'w-full py-2.5 rounded-lg text-sm font-semibold disabled:opacity-40'
 
 const ExpiredNote = () => (
     <p className="text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded p-2" data-testid="ai-consent-expired">
-        This link has expired. It can still be used to withdraw consent or stop AI calls, but not to give consent. New links cannot be sent yet — contact the HR team if you need one.
+        This link has expired. It can still be used to withdraw consent or stop AI calls, but not to give consent. To get a new link, open your interview booking link and choose “Need a new AI calling consent link?”.
     </p>
 );
 

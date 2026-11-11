@@ -4,6 +4,7 @@ Jobs live in `ai_live_mock_jobs` (dispatchable=False) and are never visible to t
 This module never imports bolna_client.place_call and never sends POST /call. Nothing runs in the
 background: planning and worker ticks happen only when an admin clicks (or a test calls them).
 """
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -28,6 +29,34 @@ EXTRACTION_FIELDS = ("attendance_status", "wants_reschedule", "requested_virtual
                      "candidate_questions", "call_summary")
 GLOBAL_KEYS = ("dispatch_implemented", "server_enabled", "emergency_stop_off", "effective_live", "authorized",
                "deployment_approved")
+STALE_AFTER = timedelta(minutes=30)  # a due job older than this is backlog: never dialled, must be re-planned
+
+
+class MockProvider:
+    """Simulates Bolna. Never touches the network."""
+    name = "mock"
+
+    async def place(self, gate: dict, body: dict, outcome: str) -> dict:
+        return {"execution_id": f"mock_{uuid.uuid4().hex[:16]}", "status": outcome, "request_sent": False}
+
+
+class BolnaLiveProvider:
+    """Future real provider. Refuses before any network I/O unless every gate allows a real Live call."""
+    name = "bolna"
+
+    async def place(self, gate: dict, body: dict, outcome: str = None) -> dict:
+        if not (LIVE_DISPATCH_IMPLEMENTED and gate.get("allowed_live")):
+            raise PermissionError("Live dispatch is disabled in this phase")
+        raise PermissionError("Real Live dispatch is not implemented (Phase 7C-B1)")
+
+
+def worker_enabled() -> bool:
+    return LIVE_DISPATCH_IMPLEMENTED and os.environ.get("AI_LIVE_WORKER_ENABLED", "false").strip().lower() == "true"
+
+
+def start_live_worker() -> bool:
+    """Never called on startup. Phase 7C-B1: always refuses (no real worker loop exists)."""
+    return False
 
 
 async def ensure_live_prep_indexes():
@@ -127,7 +156,9 @@ async def plan_live(user: str, source: str = "bb_registrations", now: datetime =
             {"source": source, "registration_id": {"$nin": seen}, "status": {"$in": ["planned", "claimed", "needs_review"]}},
             {"$set": {"status": "invalidated", "reasons": ["BOOKING_REMOVED"], "invalidated_at": now_iso()}})
         counts["invalidated"] += res.modified_count
-        return {"run_id": run_id, "source": source, "counts": counts, "at": now_iso(), "warning": WARNING}
+        out = {"run_id": run_id, "source": source, "counts": counts, "at": now_iso(), "by": user, "warning": WARNING}
+        await db().ai_dry_run_state.update_one({"_id": "live_prep_planner"}, {"$set": {"last_run": {k: v for k, v in out.items() if k != "warning"}}})
+        return out
     finally:
         await db().ai_dry_run_state.update_one({"_id": "live_prep_planner", "lock.id": run_id}, {"$set": {"lock": None}})
 
@@ -208,18 +239,28 @@ def _mock_extraction(outcome: str) -> dict:
             "call_summary": f"Simulated outcome: {outcome}"}
 
 
-async def mock_tick(worker: str, now: datetime = None, outcome: str = "CONFIRMED", overall: bool = None) -> dict:
-    """One worker iteration: recover → claim → gate → reserve limits → MOCK dispatch → record. Never dials."""
+async def expire_backlog(now: datetime) -> int:
+    """Jobs that became due long ago (e.g. while stopped) are never dialled late; they need a fresh plan."""
+    return (await db().ai_live_mock_jobs.update_many(
+        {"status": "planned", "planned_at": {"$lt": _iso(now - STALE_AFTER)}},
+        {"$set": {"status": "expired_backlog", "reasons": ["STALE_BACKLOG"], "expired_at": now_iso()}})).modified_count
+
+
+async def mock_tick(worker: str, now: datetime = None, outcome: str = "CONFIRMED", overall: bool = None,
+                    provider=None) -> dict:
+    """One worker iteration: recover → expire backlog → claim → gate → reserve limits → (mock) dispatch → record."""
     if outcome not in OUTCOMES:
         raise HTTPException(400, f"outcome must be one of {', '.join(OUTCOMES)}")
+    provider = provider or MockProvider()
     now = (now or datetime.now(IST)).astimezone(IST)
     recovered = await recover_stale(now)
+    expired = await expire_backlog(now)
     job = await db().ai_live_mock_jobs.find_one_and_update(
         {"mode": "live_mock", "dispatchable": False, "status": "planned", "planned_at": {"$lte": _iso(now)}},
         {"$set": {"status": "claimed", "claimed_by": worker, "claimed_at": now_iso(), "lease_until": _iso(now + LEASE)}},
         sort=[("planned_at", 1)], return_document=ReturnDocument.AFTER)
     if not job:
-        return {"claimed": None, "recovered": recovered, "warning": WARNING}
+        return {"claimed": None, "recovered": recovered, "expired_backlog": expired, "warning": WARNING}
     jid = job["_id"]
     g = await gate_job(job, now, overall)
     if not g["booking_ok"]:
@@ -241,7 +282,9 @@ async def mock_tick(worker: str, now: datetime = None, outcome: str = "CONFIRMED
         return {"claimed": str(jid), "result": "daily_limit", "gate": g, "recovered": recovered, "warning": WARNING}
     try:
         b = await _load_one(job)
-        rec = live_call_record(job, b, user_data_for_registration(b, s), f"mock_{uuid.uuid4().hex[:16]}")
+        ud = user_data_for_registration(b, s)
+        res = await provider.place(g, {"user_data": {**ud, "registration_id": job["registration_id"]}}, outcome)
+        rec = live_call_record(job, b, ud, res["execution_id"])
         rec.update(mock=True, provider_status=outcome if outcome in ("no_answer", "failed", "timeout") else "completed",
                    extracted=_mock_extraction(outcome))
         status = {"no_answer": "no_answer", "timeout": "pending_reconciliation", "failed": "failed"}.get(outcome, "completed")
@@ -252,7 +295,7 @@ async def mock_tick(worker: str, now: datetime = None, outcome: str = "CONFIRMED
         await _release_slot()
         await db().ai_live_mock_jobs.update_one({"_id": jid}, {"$set": {"status": "needs_review", "reasons": ["WORKER_ERROR"], "lease_until": None}})
         raise
-    if status != "pending_reconciliation":  # an uncertain call keeps its slot until reconciled; never redialled
+    if status != "pending_reconciliation":
         await _release_slot()
     retry = None
     if status == "no_answer":
@@ -325,6 +368,30 @@ async def monitoring() -> dict:
             "limits": {"daily_cap": live_daily_cap(s), "daily_limit": s["live_daily_call_limit"], "pilot_cap": s["live_pilot_daily_cap"],
                        "concurrent": s["live_max_concurrent_calls"], "no_answer_retries": s["live_retry_no_answer"],
                        "mock_used_today": daily.get("count", 0), "mock_active": conc.get("active", 0)}}
+
+
+async def worker_status() -> dict:
+    """Read-only status for the dashboard. The live worker is never running in this phase."""
+    d, now = db(), datetime.now(IST)
+    by = {r["_id"]: r["n"] async for r in d.ai_live_mock_jobs.aggregate([{"$group": {"_id": "$status", "n": {"$sum": 1}}}])}
+    due = await d.ai_live_mock_jobs.count_documents({"status": "planned", "planned_at": {"$lte": _iso(now)}})
+    regs = await d.bb_registrations.find({"schedule_date": {"$nin": [None, ""]}}, {"_id": 1}).to_list(5000)
+    cons = {c["registration_id"]: c async for c in d.ai_candidate_consents.find({"registration_id": {"$in": [str(r["_id"]) for r in regs]}})}
+    no_consent = sum(1 for r in regs if (cons.get(str(r["_id"])) or {}).get("consent_status") != "granted")
+    dnc = sum(1 for c in cons.values() if c.get("do_not_call"))
+    state = await d.ai_dry_run_state.find_one({"_id": "live_prep_planner"}) or {}
+    return {"banner": "LIVE CALLING DISABLED — PREPARATION ONLY", "enabled": worker_enabled(), "running": False,
+            "provider": MockProvider.name, "started_on_startup": False, "jobs_by_status": by, "due_now": due,
+            "pending": by.get("planned", 0), "unresolved": by.get("pending_reconciliation", 0) + by.get("needs_review", 0),
+            "exclusions": {"bookings": len(regs), "no_valid_consent": no_consent, "do_not_call": dnc},
+            "last_run": state.get("last_run")}
+
+
+@live_prep_router.get("/worker-status")
+async def worker_status_route(request: Request):
+    await _auth(request)
+    from .modes import live_readiness
+    return {**await worker_status(), "monitoring": await monitoring(), "readiness": await live_readiness()}
 
 
 @live_prep_router.post("/plan")

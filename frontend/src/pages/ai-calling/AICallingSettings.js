@@ -6,6 +6,7 @@ import { AICallingHeader, Card, SectionTitle } from '../../components/ai-calling
 import { BolnaConfigPanel } from '../../components/ai-calling/BolnaConfigPanel';
 import { ModeSwitchesPanel } from '../../components/ai-calling/ModeSwitchesPanel';
 import { ConsentPreview } from '../../components/ai-calling/ConsentPreview';
+import { RetentionPanel } from '../../components/ai-calling/RetentionPanel';
 
 const inputCls = 'w-full bg-white border border-[#e5e3d8] rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-teal-500';
 const FIELDS = [
@@ -59,6 +60,7 @@ export default function AICallingSettings() {
                 </Card>
                 <BolnaConfigPanel />
                 <ConsentPreview />
+                <RetentionPanel />
                 <Card>
                     <SectionTitle icon={Key}>Server locks</SectionTitle>
                     <p className="text-xs text-[#6b7280]">Server calling (AI_CALLING_ENABLED): <b data-testid="server-calling-state">{s?.server_calling_enabled ? 'enabled' : 'disabled'}</b> · Batch calling: <b>{s?.bolna_integration_approved ? 'approved' : 'locked'}</b></p>

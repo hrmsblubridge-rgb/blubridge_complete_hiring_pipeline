@@ -4,6 +4,7 @@ import { Warning } from '@phosphor-icons/react';
 import { aiApi, errMsg } from '../../pages/ai-calling/aiApi';
 import { Card } from './AICallingHeader';
 import { LiveReadiness } from './LiveReadiness';
+import { LiveWorkerStatus } from './LiveWorkerStatus';
 import { fmtTime } from './callFormat';
 
 const planMsg = (r) => `Mock plan: ${r.counts.planned} planned, ${r.counts.needs_review} needs review, ${r.counts.skipped} skipped, ${r.counts.invalidated} invalidated, ${r.counts.unchanged} unchanged`;
@@ -49,6 +50,7 @@ export const LivePrepPanel = () => {
                 <Warning size={26} weight="fill" className="text-amber-700 shrink-0" />
                 <p className="text-base font-extrabold tracking-wide text-amber-900">MOCK ONLY — NO PHONE CALLS WILL BE PLACED.</p>
             </div>
+            <LiveWorkerStatus />
             {d && <LiveReadiness readiness={d.readiness} monitoring={d.monitoring} />}
             <Card>
                 <div className="flex flex-wrap items-center gap-2 mb-4">

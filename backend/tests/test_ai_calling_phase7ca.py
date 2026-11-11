@@ -1,6 +1,7 @@
 """Phase 7C-A: hashed expiring consent tokens, withdrawal/renewal, Do Not Call, mock live scheduler/worker.
 SCRATCH DB only; Bolna and messaging are monkeypatched to fail if touched."""
 import asyncio
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -8,9 +9,10 @@ import pytest
 from bson import ObjectId
 from fastapi import FastAPI
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import AutoReconnect
 
 from ai_calling import bolna_client as bc
-from ai_calling import consent, live_prep, modes, store
+from ai_calling import consent, live_prep, modes, retention, store
 from ai_calling.store import IST, SETTINGS_DEFAULTS
 
 SCRATCH = "ai_phase7ca_pytest_scratch"
@@ -33,8 +35,8 @@ def run(monkeypatch, case, user="pytest-admin", top="pytest-admin"):
 
     async def main():
         client = AsyncIOMotorClient("mongodb://localhost:27017")
-        d = client[SCRATCH]
-        await client.drop_database(SCRATCH)
+        name = f"{SCRATCH}_{uuid.uuid4().hex[:8]}"
+        d = client[name]
         await d.ai_call_settings.insert_one({"_id": "global", **SETTINGS_DEFAULTS})
         await d.ai_candidate_consents.create_index("registration_id", unique=True)
 
@@ -55,16 +57,23 @@ def run(monkeypatch, case, user="pytest-admin", top="pytest-admin"):
         await consent.ensure_consent_indexes()
         await live_prep.ensure_live_prep_indexes()
         app = FastAPI()
-        for r in (consent.public_router, consent.admin_router, modes.modes_router, live_prep.live_prep_router):
+        for r in (consent.public_router, consent.admin_router, modes.modes_router, live_prep.live_prep_router,
+                  retention.retention_router):
             app.include_router(r)
         try:
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
                                          headers={"X-CSRF-Intent": "ai-calling"}) as tc:
                 await case(tc, d)
         finally:
-            await client.drop_database(SCRATCH)
+            await client.drop_database(name)
             client.close()
-    asyncio.run(main())
+    for attempt in range(3):  # local mongod occasionally drops a fresh connection (infra flake, not app logic)
+        try:
+            asyncio.run(main())
+            break
+        except AutoReconnect:
+            if attempt == 2:
+                raise
     assert calls["bolna"] == 0
 
 

@@ -60,15 +60,18 @@ async def ensure_consent_indexes():
 # ---------- tokens ----------
 
 async def issue_token(reg_id: str, reason: str) -> str:
-    """New 256-bit token; any older token for this registration is revoked (rotation). Only the hash is stored."""
+    """New 256-bit token; every OLDER active token for this registration is revoked (rotation).
+    Ordering by _id makes concurrent issuance converge on exactly one active token. Only the hash is stored."""
     token = secrets.token_urlsafe(32)
     now = _now()
     h = hash_token(token)
-    await db().ai_consent_tokens.update_many({"registration_id": reg_id, "revoked_at": None},
+    res = await db().ai_consent_tokens.insert_one({"token_hash": h, "registration_id": reg_id, "purpose": PURPOSE,
+                                                   "created_at": now.isoformat(), "issued_reason": reason,
+                                                   "expires_at": (now + timedelta(days=_ttl_days())).isoformat(), "revoked_at": None})
+    await db().ai_consent_tokens.update_many({"registration_id": reg_id, "revoked_at": None, "_id": {"$lt": res.inserted_id}},
                                              {"$set": {"revoked_at": now.isoformat(), "revoke_reason": "replaced"}})
-    await db().ai_consent_tokens.insert_one({"token_hash": h, "registration_id": reg_id, "purpose": PURPOSE,
-                                             "created_at": now.isoformat(), "issued_reason": reason,
-                                             "expires_at": (now + timedelta(days=_ttl_days())).isoformat(), "revoked_at": None})
+    if await db().ai_consent_tokens.count_documents({"registration_id": reg_id, "revoked_at": None, "_id": {"$gt": res.inserted_id}}):
+        await db().ai_consent_tokens.update_one({"_id": res.inserted_id}, {"$set": {"revoked_at": now_iso(), "revoke_reason": "replaced"}})
     await _audit("consent_token_issued", "system", reg_id, {"reason": reason, "token_ref": h[:8]})
     return token
 
@@ -333,6 +336,48 @@ async def renew_verify(request: Request, response: Response, body: dict = Body(.
     if not used.modified_count:
         await _fail(request, 400, "Invalid or expired code")
     return {"manage_token": await issue_token(ch["registration_id"], "otp_renewal"), "manage_expires_days": _ttl_days()}
+
+
+# ---------- renewal via the existing private booking link + last 4 mobile digits ----------
+RENEW_MAX_FAILURES = 5
+RENEW_LOCKOUT = timedelta(minutes=30)
+RENEW_GENERIC = "We could not verify these details. Please check and try again."
+
+
+async def _renew_fail(request: Request, rid: str = None):
+    if rid:
+        g = await db().ai_consent_renew_guard.find_one_and_update(
+            {"_id": rid}, {"$inc": {"failures": 1}, "$set": {"last_failure_at": now_iso()}}, upsert=True,
+            return_document=ReturnDocument.AFTER)
+        if g["failures"] >= RENEW_MAX_FAILURES:
+            await db().ai_consent_renew_guard.update_one(
+                {"_id": rid}, {"$set": {"failures": 0, "locked_until": (_now() + RENEW_LOCKOUT).isoformat()}})
+            await _audit("consent_renewal_locked", "candidate", rid, {})
+    await _fail(request, 400, RENEW_GENERIC)
+
+
+@public_router.post("/consent/renew/booking")
+async def renew_with_booking(request: Request, response: Response, body: dict = Body(...)):  # noqa: B008
+    """Booking link (something they were sent) + last 4 digits of the registered mobile (something they know).
+    Issues a NEW consent token only; never changes consent, the booking, or the booking token. Sends nothing."""
+    response.headers.update(NO_STORE)
+    await _check_rate(request)
+    stoken, last4 = str(body.get("schedule_token") or ""), str(body.get("phone_last4") or "")
+    if not (16 <= len(stoken) <= 128) or not (len(last4) == 4 and last4.isdigit()):
+        await _renew_fail(request)
+    reg = await db().bb_registrations.find_one({"schedule_token": stoken}, {"_id": 1, "phone": 1, "schedule_date": 1})
+    if not reg or not reg.get("schedule_date"):
+        await _renew_fail(request)
+    rid = str(reg["_id"])
+    g = await db().ai_consent_renew_guard.find_one({"_id": rid}) or {}
+    if (g.get("locked_until") or "") > _now().isoformat():
+        raise HTTPException(429, "Too many attempts. Please try again later.")
+    digits = "".join(ch for ch in str(reg.get("phone") or "") if ch.isdigit())
+    if len(digits) < 4 or not secrets.compare_digest(digits[-4:], last4):
+        await _renew_fail(request, rid)
+    await db().ai_consent_renew_guard.update_one({"_id": rid}, {"$set": {"failures": 0}})
+    token = await issue_token(rid, "booking_link_renewal")
+    return {"manage_token": token, "manage_expires_days": _ttl_days(), "consent_changed": False}
 
 
 # ---------- admin routes ----------

@@ -289,7 +289,9 @@ from .modes import modes_router  # noqa: E402
 from .consent import admin_router as consent_admin_router, public_router as consent_public_router  # noqa: E402
 
 from .live_prep import live_prep_router  # noqa: E402
+from .retention import retention_router  # noqa: E402
 
+ai_router.include_router(retention_router)
 ai_router.include_router(live_prep_router)
 ai_router.include_router(dispatch_router)
 ai_router.include_router(dryrun_router)

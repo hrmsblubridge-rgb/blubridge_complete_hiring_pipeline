@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
+import { ConsentRenewBox } from '../components/ConsentRenewBox';
 import { formatDateDDMMYYYY as fmtDate, formatTime12H as fmtTime } from '../utils/dateFormat';
 
 const API = process.env.REACT_APP_BACKEND_URL;
@@ -212,6 +213,8 @@ export default function InterviewSchedule() {
                                 {consentInfo?.text || 'Loading…'}
                             </span>
                         </label>
+
+                        {info?.already_scheduled && <ConsentRenewBox token={token} />}
 
                         <button onClick={handleSchedule} disabled={submitting} data-testid="schedule-btn"
                             className="w-full py-3 bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-bold rounded-lg disabled:opacity-50 tracking-wide">

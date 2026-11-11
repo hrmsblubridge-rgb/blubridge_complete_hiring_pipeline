@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { Flask, Lock, ShieldCheck, Warning, PhoneSlash, CheckCircle, XCircle } from '@phosphor-icons/react';
 import { aiApi, errMsg } from './aiApi';
 import { AICallingHeader, Card, SectionTitle } from '../../components/ai-calling/AICallingHeader';
+import { LiveWorkerStatus } from '../../components/ai-calling/LiveWorkerStatus';
 
 const Stat = ({ label, value, testid }) => (
     <Card className="!p-4">
@@ -39,6 +40,7 @@ export default function AICallingDashboard() {
                     <Stat label="Test batches" value={s?.batches ?? '–'} testid="stat-batches" />
                     <Stat label="Calls recorded" value={s?.calls_total ?? '–'} testid="stat-calls" />
                 </div>
+                <LiveWorkerStatus />
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
                     <Card>
                         <SectionTitle icon={ShieldCheck}>Safety status</SectionTitle>
