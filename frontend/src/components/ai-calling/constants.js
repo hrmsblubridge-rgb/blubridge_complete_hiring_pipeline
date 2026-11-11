@@ -1,7 +1,7 @@
 export const COLS = [
     ['candidate_name', 'Name'], ['phone_number', 'Phone'], ['job_role', 'Role'], ['interview_date', 'Date'],
     ['interview_time', 'Time (HH)'], ['language', 'Language'], ['company_name', 'Company'],
-    ['office_address', 'Office address'], ['approved_for_test_call', 'Sheet flag'],
+    ['office_address', 'Office address'], ['consent_for_test_call', 'Consent'],
 ];
 
 export const CATEGORY_LABELS = {
@@ -17,8 +17,8 @@ export const CATEGORY_LABELS = {
 };
 
 export const READINESS = {
-    ready_calling_disabled: ['Ready for test call', 'bg-teal-50 text-teal-800'],
-    not_approved: ['Needs approval', 'bg-amber-100 text-amber-800'],
+    ready: ['Ready for test call', 'bg-teal-50 text-teal-800'],
+    no_consent: ['No consent recorded', 'bg-amber-50 text-amber-800'],
     opted_out: ['Opted out', 'bg-zinc-200 text-zinc-700'],
     interview_passed: ['Interview date passed', 'bg-rose-50 text-rose-700'],
 };

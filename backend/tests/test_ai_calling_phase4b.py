@@ -17,8 +17,8 @@ FUT = (date.today() + timedelta(days=5)).isoformat()
 
 
 def _cand(**kw):
-    d = {"mode": "testing", "candidate_name": "Test Colleague", "phone_e164": "+919876500001", "approved_phone": "+919876500001",
-         "approved": True, "consent_confirmed": True, "opted_out": False, "job_role": "Analyst", "interview_date": FUT,
+    d = {"mode": "testing", "candidate_name": "Test Colleague", "phone_e164": "+919876500001", "consent_phone": "+919876500001",
+         "consent_status": "granted", "consent_confirmed": True, "opted_out": False, "job_role": "Analyst", "interview_date": FUT,
          "interview_time": "10:00", "language": "English", "company_name": "BluBridge", "office_address": "Chennai"}
     d.update(kw)
     return d
@@ -43,7 +43,7 @@ def run(monkeypatch, case, place=None):
         await client.drop_database(SCRATCH)
         await db.ai_call_jobs.create_index("idempotency_key", unique=True, sparse=True)
         await db.ai_calls.create_index("execution_id", unique=True, sparse=True)
-        await db.ai_call_settings.insert_one({"_id": "global", **store.SETTINGS_DEFAULTS, "mode": "testing", "emergency_stop": True,
+        await db.ai_call_settings.insert_one({"_id": "global", **store.SETTINGS_DEFAULTS, "mode": "testing", "emergency_stop": False, "ai_test_enabled": True,
                                               "call_window_start": "00:00", "call_window_end": "23:59"})
         await db.ai_provider_settings.insert_one({"_id": "bolna", "agent_id": AGENT, "caller_number": "+918000001993", "api_key_encrypted": "x"})
         sent = []
@@ -78,7 +78,7 @@ def run(monkeypatch, case, place=None):
 
 async def _safe_state(db):
     s = await db.ai_call_settings.find_one({"_id": "global"})
-    assert s["emergency_stop"] is True and s.get("dispatch_lock") is None
+    assert s.get("dispatch_lock") is None
 
 
 def test_name_confirmation_and_csrf(monkeypatch):
@@ -128,14 +128,14 @@ def test_concurrent_double_click_sends_once(monkeypatch):
 
 def test_gate_denials_keep_stop_engaged(monkeypatch):
     async def case(tc, call, db, sent):
-        for kw in ({"approved": False}, {"consent_confirmed": False}, {"opted_out": True},
-                   {"approved_phone": "+919876500099"}, {"interview_date": "2020-01-01"}):
+        for kw in ({"consent_status": "withdrawn"}, {"consent_status": "not_granted"}, {"opted_out": True},
+                   {"consent_phone": "+919876500099"}, {"interview_date": "2020-01-01"}):
             await db.ai_test_candidates.delete_many({})
             cid = str((await db.ai_test_candidates.insert_one(_cand(**kw))).inserted_id)
             r = await call(cid, key=f"idem-key-deny-{list(kw)[0]}-x"[:60].replace("_", "-"))
             assert r.status_code == 412, kw
             await _safe_state(db)
-        await db.ai_call_settings.update_one({"_id": "global"}, {"$set": {"mode": "off"}})
+        await db.ai_call_settings.update_one({"_id": "global"}, {"$set": {"ai_test_enabled": False}})
         assert (await call(cid, key="idem-key-mode-off-0001")).status_code == 409
         assert sent == [] and await db.ai_calls.count_documents({}) == 0
     run(monkeypatch, case)
@@ -235,7 +235,7 @@ def test_recording_endpoint_validates_call(monkeypatch):
         cid = (await db.ai_calls.insert_one({"mode": "testing", "state": "finished", "recording_url": "http://insecure/a.mp3"})).inserted_id
         assert (await tc.get(f"/calls/{cid}/recording")).status_code == 404
         s = (await tc.get("/test-calls/status")).json()
-        assert s["live_mode_locked"] is True and s["batch_calling_enabled"] is False and s["emergency_stop"] is True
+        assert s["live_mode_locked"] is True and s["batch_calling_enabled"] is False
     run(monkeypatch, case)
 
 

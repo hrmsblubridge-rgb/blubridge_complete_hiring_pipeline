@@ -27,15 +27,15 @@ export default function AICallingDashboard() {
 
     return (
         <div className="min-h-screen" data-testid="ai-calling-dashboard">
-            <AICallingHeader title="AI Calling" subtitle="Interview confirmation calls — Testing Mode only in this phase" mode={s?.mode} emergencyStop={s?.emergency_stop} />
+            <AICallingHeader title="AI Calling" subtitle="Interview confirmation calls — AI Test and AI Live switches" mode={s?.mode} emergencyStop={s?.emergency_stop} />
             <main className="max-w-6xl mx-auto px-6 lg:px-10 py-6 space-y-5">
                 <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-2xl p-4" data-testid="ai-phase-notice">
                     <Warning size={20} weight="duotone" className="text-amber-700 shrink-0 mt-0.5" />
-                    <p className="text-sm text-amber-900">No calls can be placed yet. Bolna integration is not approved and Live Mode is locked. Uploading or approving test candidates never starts a call.</p>
+                    <p className="text-sm text-amber-900">No calls can be placed in this phase: the emergency stop is on, server calling is off and Live dispatch is not authorised. Saving or uploading test recipients never starts a call.</p>
                 </div>
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                     <Stat label="Test candidates" value={s?.test_candidates ?? '–'} testid="stat-test-candidates" />
-                    <Stat label="Approved" value={s?.approved_candidates ?? '–'} testid="stat-approved" />
+                    <Stat label="Consented" value={s?.consented_candidates ?? '–'} testid="stat-consented" />
                     <Stat label="Test batches" value={s?.batches ?? '–'} testid="stat-batches" />
                     <Stat label="Calls recorded" value={s?.calls_total ?? '–'} testid="stat-calls" />
                 </div>
@@ -45,7 +45,7 @@ export default function AICallingDashboard() {
                         <ul className="space-y-2">
                             <Flag ok={!s?.server_calling_enabled} label={`Server-side calling ${s?.server_calling_enabled ? 'ENABLED' : 'disabled'}`} testid="flag-server" />
                             <Flag ok={!s?.bolna_integration_approved} label={`Bolna integration ${s?.bolna_integration_approved ? 'approved' : 'not approved (no API calls)'}`} testid="flag-bolna" />
-                            <Flag ok={s?.live_mode_locked} label="Live Mode locked" testid="flag-live" />
+                            <Flag ok={s?.live_mode_locked} label="Live dispatch locked" testid="flag-live" />
                             <Flag ok={!s?.emergency_stop} label={s?.emergency_stop ? 'Emergency stop ACTIVE' : 'Emergency stop not active'} testid="flag-estop" />
                         </ul>
                     </Card>

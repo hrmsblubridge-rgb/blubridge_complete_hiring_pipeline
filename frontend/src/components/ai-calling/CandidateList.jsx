@@ -5,15 +5,14 @@ import { DryRunDialog } from './DryRunDialog';
 import { CallNowDialog } from './CallNowDialog';
 import { aiApi, errMsg } from '../../pages/ai-calling/aiApi';
 import { Card, SectionTitle } from './AICallingHeader';
-import { ApproveDialog } from './ApproveDialog';
 import { EditCandidateDialog } from './EditCandidateDialog';
 import { BulkConfirmDialog } from './BulkConfirmDialog';
 import { CandidateFilters } from './CandidateFilters';
 import { READINESS } from './constants';
 
-const Approval = ({ c }) => c.opted_out ? <span className="text-xs text-zinc-600 font-semibold">Opted out</span>
-    : c.approved ? <span className="text-xs text-emerald-700 font-semibold" title={`by ${c.approved_by} at ${c.approved_at}`}>Approved</span>
-        : <span className="text-xs text-amber-700 font-semibold">Pending</span>;
+const Consent = ({ c }) => c.opted_out ? <span className="text-xs text-zinc-600 font-semibold" data-testid={`consent-${c.id}`}>Do Not Call</span>
+    : c.consent_status === 'granted' ? <span className="text-xs text-emerald-700 font-semibold" data-testid={`consent-${c.id}`} title={`${c.consent_source} by ${c.consent_by} at ${c.consent_at}`}>Recorded</span>
+        : <span className="text-xs text-amber-700 font-semibold" data-testid={`consent-${c.id}`}>{c.consent_status === 'withdrawn' ? 'Withdrawn' : 'Not recorded'}</span>;
 
 const Btn = ({ title, onClick, children, testid, danger, disabled }) => (
     <button title={title} onClick={onClick} disabled={disabled} data-testid={testid}
@@ -25,10 +24,10 @@ const BulkBtn = ({ children, ...p }) => <button {...p} className="px-3 py-1.5 ro
 export const CandidateList = ({ data, q, setQ, selected, setSelected, reload, callStatus }) => {
     const [calling, setCalling] = useState(null);
     const callBlockReason = (c) => !callStatus?.single_call_enabled ? 'Single test calls are disabled on the server'
-        : callStatus?.mode !== 'testing' ? 'Activate Testing Mode first'
+        : !callStatus?.ai_test_enabled ? 'AI Test Mode is OFF'
+            : callStatus?.emergency_stop ? 'Emergency stop is ON'
             : callStatus?.blocking_call ? 'Another test call is still unresolved'
-                : c.readiness !== 'ready_calling_disabled' ? 'Candidate must be approved, consented and not opted out' : '';
-    const [approving, setApproving] = useState(null);
+                : c.readiness !== 'ready' ? 'Consent must be recorded and the recipient must not be Do Not Call' : '';
     const [editing, setEditing] = useState(null);
     const [bulk, setBulk] = useState(null);
     const [dryRun, setDryRun] = useState(null);
@@ -39,7 +38,6 @@ export const CandidateList = ({ data, q, setQ, selected, setSelected, reload, ca
     const toggle = (c) => setSelected(s => { const n = { ...s }; n[c.id] ? delete n[c.id] : (n[c.id] = c); return n; });
     const pageAll = items.length > 0 && items.every(c => selected[c.id]);
     const togglePage = () => setSelected(s => { const n = { ...s }; items.forEach(c => pageAll ? delete n[c.id] : (n[c.id] = c)); return n; });
-    const bulkRevoke = () => act(() => aiApi.post('/test-candidates/bulk-revoke', { ids: selIds }), `Revoked ${selIds.length}`);
     const done = () => { setBulk(null); setSelected({}); reload(); };
 
     return (
@@ -48,8 +46,6 @@ export const CandidateList = ({ data, q, setQ, selected, setSelected, reload, ca
             <CandidateFilters q={q} setQ={setQ} />
             <div className="flex flex-wrap items-center gap-2 mb-3" data-testid="bulk-bar">
                 <span className="text-xs text-[#6b7280]" data-testid="selected-count">{selIds.length} selected</span>
-                <BulkBtn disabled={!selIds.length} onClick={() => setBulk('approve')} data-testid="bulk-approve-btn">Bulk approve</BulkBtn>
-                <BulkBtn disabled={!selIds.length} onClick={bulkRevoke} data-testid="bulk-revoke-btn">Bulk revoke</BulkBtn>
                 <BulkBtn disabled={!selIds.length} onClick={() => setBulk('delete')} data-testid="bulk-delete-btn">Delete selected</BulkBtn>
                 <BulkBtn disabled={!selIds.length} onClick={() => setSelected({})} data-testid="clear-selection-btn">Clear selection</BulkBtn>
             </div>
@@ -59,7 +55,7 @@ export const CandidateList = ({ data, q, setQ, selected, setSelected, reload, ca
                         <thead className="text-[11px] uppercase tracking-wider text-[#9b9787]">
                             <tr>
                                 <th className="px-2 py-2 text-left"><input type="checkbox" checked={pageAll} onChange={togglePage} data-testid="select-page" className="accent-teal-700" /></th>
-                                {['Name', 'Phone', 'Role', 'Interview (IST)', 'Lang', 'Source', 'Approval', 'Call readiness', 'Actions'].map(h => <th key={h} className="px-2 py-2 text-left font-semibold whitespace-nowrap">{h}</th>)}
+                                {['Name', 'Phone', 'Role', 'Interview (IST)', 'Lang', 'Source', 'Consent', 'Call readiness', 'Actions'].map(h => <th key={h} className="px-2 py-2 text-left font-semibold whitespace-nowrap">{h}</th>)}
                             </tr>
                         </thead>
                         <tbody>
@@ -73,15 +69,15 @@ export const CandidateList = ({ data, q, setQ, selected, setSelected, reload, ca
                                         <td className="px-2 py-2">{c.job_role}</td>
                                         <td className="px-2 py-2 whitespace-nowrap">{c.interview_date} {c.interview_time}</td>
                                         <td className="px-2 py-2">{c.language}</td>
-                                        <td className="px-2 py-2 text-xs text-[#6b7280]">{c.source}{c.source === 'upload' && c.sheet_approved_flag ? ' (sheet: YES)' : ''}</td>
-                                        <td className="px-2 py-2"><Approval c={c} /></td>
+                                        <td className="px-2 py-2 text-xs text-[#6b7280]">{c.source}</td>
+                                        <td className="px-2 py-2"><Consent c={c} /></td>
                                         <td className="px-2 py-2"><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold whitespace-nowrap ${rc}`} data-testid={`readiness-${c.id}`}>{rl}</span></td>
                                         <td className="px-2 py-2">
                                             <div className="flex gap-1">
-                                                {!c.approved && !c.opted_out && <Btn title="Approve" testid={`approve-${c.id}`} onClick={() => setApproving(c)}><SealCheck size={14} /></Btn>}
-                                                {c.approved && <Btn title="Revoke approval" testid={`revoke-${c.id}`} onClick={() => act(() => aiApi.post(`/test-candidates/${c.id}/revoke`), 'Approval revoked')}><ArrowCounterClockwise size={14} /></Btn>}
+                                                {c.consent_status !== 'granted' && !c.opted_out && <Btn title="Record consent (colleague agreed)" testid={`consent-grant-${c.id}`} onClick={() => window.confirm(`Confirm ${c.candidate_name} agreed to receive AI test calls on ${c.phone_masked}?`) && act(() => aiApi.post(`/test-candidates/${c.id}/consent`, { granted: true }), 'Consent recorded. No call was placed.')}><SealCheck size={14} /></Btn>}
+                                                {c.consent_status === 'granted' && <Btn title="Withdraw consent" testid={`consent-withdraw-${c.id}`} onClick={() => act(() => aiApi.post(`/test-candidates/${c.id}/consent`, { granted: false }), 'Consent withdrawn')}><ArrowCounterClockwise size={14} /></Btn>}
                                                 <Btn title="Edit" testid={`edit-${c.id}`} onClick={() => setEditing(c)}><PencilSimple size={14} /></Btn>
-                                                <Btn title={c.opted_out ? 'Clear opt-out' : 'Mark opted out'} testid={`optout-${c.id}`} onClick={() => act(() => aiApi.post(`/test-candidates/${c.id}/opt-out`, { opted_out: !c.opted_out }), 'Updated')}><Prohibit size={14} /></Btn>
+                                                <Btn title={c.opted_out ? 'Clear Do Not Call' : 'Mark Do Not Call'} testid={`optout-${c.id}`} onClick={() => act(() => aiApi.post(`/test-candidates/${c.id}/opt-out`, { opted_out: !c.opted_out }), 'Updated')}><Prohibit size={14} /></Btn>
                                                 <Btn title="Dry run (preview request, nothing sent)" testid={`dry-run-${c.id}`} onClick={() => setDryRun(c)}><Flask size={14} /></Btn>
                                                 <Btn title={callBlockReason(c) || 'Call Now — one real test call'} testid={`call-now-${c.id}`} disabled={!!callBlockReason(c)} onClick={() => setCalling(c)}><PhoneOutgoing size={14} /></Btn>
                                                 <Btn danger title="Delete" testid={`delete-${c.id}`} onClick={() => window.confirm(`Delete ${c.candidate_name}?`) && act(() => aiApi.delete(`/test-candidates/${c.id}`), 'Deleted')}><Trash size={14} /></Btn>
@@ -103,7 +99,6 @@ export const CandidateList = ({ data, q, setQ, selected, setSelected, reload, ca
             </div>
             <DryRunDialog candidate={dryRun} onClose={closeDry} />
             <CallNowDialog key={calling?.id || 'none-call'} candidate={calling} onClose={() => setCalling(null)} onDone={() => { setCalling(null); reload(); }} />
-            <ApproveDialog key={approving?.id || 'none'} candidate={approving} onClose={() => setApproving(null)} onDone={() => { setApproving(null); reload(); }} />
             <EditCandidateDialog candidate={editing} onClose={() => setEditing(null)} onDone={() => { setEditing(null); reload(); }} />
             <BulkConfirmDialog key={bulk || 'none'} action={bulk} items={Object.values(selected)} onClose={() => setBulk(null)} onDone={done} />
         </Card>

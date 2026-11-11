@@ -8,7 +8,7 @@ import { CandidateList } from '../../components/ai-calling/CandidateList';
 import { CallingControls } from '../../components/ai-calling/CallingControls';
 import { BatchPanel } from '../../components/ai-calling/BatchPanel';
 
-const Q0 = { search: '', approval: 'all', source: '', language: '', ready: '', page: 1 };
+const Q0 = { search: '', consent: 'all', source: '', language: '', ready: '', page: 1 };
 
 export default function TestingMode() {
     const [settings, setSettings] = useState(null);
@@ -40,12 +40,12 @@ export default function TestingMode() {
 
     return (
         <div className="min-h-screen" data-testid="ai-testing-page">
-            <AICallingHeader title="Testing Mode" subtitle="Approved test recipients only — never reads real candidate records" mode={settings?.mode} emergencyStop={settings?.emergency_stop} />
+            <AICallingHeader title="Testing Mode" subtitle="Consented test recipients only — never reads real candidate records" mode={settings?.mode} emergencyStop={settings?.emergency_stop} />
             <main className="max-w-6xl mx-auto px-6 lg:px-10 py-6 space-y-5">
                 <div className="flex flex-wrap items-center gap-3 bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl p-4">
-                    <p className="flex-1 text-sm text-[#1a2332]">Testing Mode is <b data-testid="testing-mode-state">{settings?.mode === 'testing' ? 'ACTIVE' : 'inactive'}</b>. Activating it does not place calls.</p>
+                    <p className="flex-1 text-sm text-[#1a2332]">AI Test Mode is <b data-testid="testing-mode-state">{settings?.ai_test_enabled ? 'ON' : 'OFF'}</b>. Turning it on never places calls. The AI Live switch is on the Settings page.</p>
                     <button onClick={activate} data-testid="toggle-testing-mode-btn" className="px-4 py-2 rounded-lg border border-teal-300 bg-teal-50 text-teal-800 text-sm font-semibold hover:bg-teal-100">
-                        {settings?.mode === 'testing' ? 'Turn Testing Mode off' : 'Activate Testing Mode'}
+                        {settings?.ai_test_enabled ? 'Turn AI Test Mode off' : 'Turn AI Test Mode on'}
                     </button>
                 </div>
                 <SampleSheetUpload onImported={load} />

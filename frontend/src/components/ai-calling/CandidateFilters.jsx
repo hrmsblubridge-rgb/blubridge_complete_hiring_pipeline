@@ -11,8 +11,8 @@ export const CandidateFilters = ({ q, setQ }) => {
                 <MagnifyingGlass size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#9b9787]" />
                 <input value={q.search} onChange={set('search')} placeholder="Search name, role, ID or phone digits" data-testid="candidate-search" className={`${sel} w-full pl-9`} />
             </div>
-            <select value={q.approval} onChange={set('approval')} data-testid="filter-approval" className={sel}>
-                <option value="all">All approvals</option><option value="approved">Approved</option><option value="pending">Pending approval</option><option value="opted_out">Opted out</option>
+            <select value={q.consent} onChange={set('consent')} data-testid="filter-consent" className={sel}>
+                <option value="all">All consent states</option><option value="granted">Consent recorded</option><option value="not_granted">No consent</option><option value="opted_out">Do Not Call</option>
             </select>
             <select value={q.source} onChange={set('source')} data-testid="filter-source" className={sel}>
                 <option value="">All sources</option><option value="manual">Manual</option><option value="upload">Upload</option>

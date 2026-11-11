@@ -38,6 +38,11 @@ async def ensure_ai_indexes():
     await d.ai_calls.create_index([("mode", 1), ("created_at", -1)])
     await d.ai_calls.create_index("state")
     await d.ai_call_jobs.create_index("idempotency_key", unique=True, sparse=True)
+    await d.ai_candidate_consents.create_index("registration_id", unique=True)
+    await d.ai_call_settings.update_one(  # Phase 7A one-time switch migration: AI Test ON, AI Live OFF, stop ON
+        {"_id": SETTINGS_ID, "ai_test_enabled": {"$exists": False}},
+        {"$set": {"ai_test_enabled": True, "ai_live_enabled": False, "live_dispatch_authorized": False,
+                  "emergency_stop": True, "switches_migrated_at": now_iso()}, "$inc": {"mode_version": 1}})
     await get_settings()
     from .dispatch import startup_recover
     from .dryrun import ensure_dry_run_indexes
@@ -76,7 +81,8 @@ async def summary(request: Request):
         "single_test_call_approved": gate.SINGLE_TEST_CALL_APPROVED,
         "live_mode_locked": gate.LIVE_MODE_LOCKED,
         "test_candidates": await c.count_documents({}),
-        "approved_candidates": await c.count_documents({"approved": True}),
+        "consented_candidates": await c.count_documents({"consent_status": "granted", "opted_out": {"$ne": True}}),
+        "ai_test_enabled": s["ai_test_enabled"], "ai_live_enabled": s["ai_live_enabled"],
         "opted_out": await c.count_documents({"opted_out": True}),
         "batches": await db().ai_test_batches.count_documents({}),
         "calls_total": await db().ai_calls.count_documents({}),
@@ -89,7 +95,8 @@ async def summary(request: Request):
 async def read_settings(request: Request):
     await _auth(request)
     s = await get_settings()
-    return {**s, "server_calling_enabled": gate.server_calling_enabled(),
+    from .modes import overall_test_mode
+    return {**s, "server_calling_enabled": gate.server_calling_enabled(), "overall_test_mode": overall_test_mode(),
             "bolna_integration_approved": gate.BOLNA_INTEGRATION_APPROVED,
             "live_mode_locked": gate.LIVE_MODE_LOCKED}
 
@@ -130,16 +137,10 @@ async def set_mode(body: ModeBody, request: Request):
     user = await _auth(request)
     if body.mode not in MODES:
         raise HTTPException(400, "mode must be off, testing or live")
-    if body.mode == "live" and gate.LIVE_MODE_LOCKED:
-        raise HTTPException(403, "Live Mode activation is locked in this phase")
-    s = await get_settings()
-    if s["mode"] != body.mode:
-        # Single `mode` field ⇒ Testing and Live can never be active together.
-        # Version bump invalidates every job created under the previous mode.
-        await db().ai_call_settings.update_one({"_id": SETTINGS_ID}, {
-            "$set": {"mode": body.mode, "mode_changed_by": user, "mode_changed_at": now_iso()},
-            "$inc": {"mode_version": 1}})
-        await db().ai_call_jobs.update_many({"status": "pending"}, {"$set": {"status": "cancelled", "cancel_reason": "mode_changed"}})
+    if body.mode == "live":
+        raise HTTPException(403, "Use the AI Live Mode switch (POST /switches); this legacy endpoint only sets AI Test Mode")
+    from .modes import set_switches
+    await set_switches(user, ai_test=body.mode == "testing")  # legacy: testing ⇒ AI Test ON, off ⇒ AI Test OFF
     return await read_settings(request)
 
 
@@ -178,11 +179,11 @@ async def create_batch(body: BatchBody, request: Request):
     user = await _auth(request)
     ids = list(dict.fromkeys(body.candidate_ids))
     if not ids:
-        raise HTTPException(400, "Select at least one approved test candidate")
+        raise HTTPException(400, "Select at least one consented test candidate")
     oids = [_oid(i) for i in ids]
-    approved = await db().ai_test_candidates.count_documents({"_id": {"$in": oids}, "approved": True, "opted_out": {"$ne": True}})
-    if approved != len(ids):
-        raise HTTPException(400, "Only approved, non-opted-out test candidates can be added to a batch")
+    ok = await db().ai_test_candidates.count_documents({"_id": {"$in": oids}, "consent_status": "granted", "opted_out": {"$ne": True}})
+    if ok != len(ids):
+        raise HTTPException(400, "Only consented, non-opted-out test candidates can be added to a batch")
     s = await get_settings()
     doc = {"name": body.name.strip() or f"Test batch {now_iso()[:16]}", "candidate_ids": ids, "mode": "testing",
            "status": "draft", "mode_version": s["mode_version"], "created_by": user, "created_at": now_iso()}
@@ -259,7 +260,7 @@ async def get_call(call_id: str, request: Request):
 async def live_status(request: Request):
     await _auth(request)
     s = await get_settings()
-    return {"locked": gate.LIVE_MODE_LOCKED, "active": s["mode"] == "live",
+    return {"locked": gate.LIVE_MODE_LOCKED, "active": s["ai_live_enabled"], "dispatch_authorized": s["live_dispatch_authorized"],
             "call_hours_before": s["live_call_hours_before"], "no_answer_retries": s["live_retry_no_answer"],
             "source": "bb_registrations (read-only, not accessed in this phase)",
             "interview_location": "Offline — Chennai office"}
@@ -271,9 +272,11 @@ from .provider import provider_router  # noqa: E402
 from .calls import calls_router  # noqa: E402
 from .dispatch import dispatch_router  # noqa: E402
 from .dryrun import dryrun_router  # noqa: E402
+from .modes import modes_router  # noqa: E402
 
 ai_router.include_router(dispatch_router)
 ai_router.include_router(dryrun_router)
+ai_router.include_router(modes_router)
 ai_router.include_router(cand_router)
 ai_router.include_router(provider_router)
 ai_router.include_router(calls_router)

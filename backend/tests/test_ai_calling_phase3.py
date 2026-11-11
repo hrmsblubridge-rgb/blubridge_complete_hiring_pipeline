@@ -11,21 +11,21 @@ import requests
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL').rstrip('/')
 API = f"{BASE_URL}/api/ai-calling"
 COLUMNS = ["candidate_name", "phone_number", "job_role", "interview_date", "interview_time",
-           "language", "company_name", "office_address", "approved_for_test_call"]
+           "language", "company_name", "office_address", "consent_for_test_call"]
 FUT = (date.today() + timedelta(days=20)).isoformat()
 CREATED = []
 
 
 def _row(name, phone, **kw):
     r = dict(candidate_name=name, phone_number=phone, job_role="QA", interview_date=FUT, interview_time="10",
-             language="English", company_name="BluBridge", office_address="Chennai", approved_for_test_call="YES")
+             language="English", company_name="BluBridge", office_address="Chennai", consent_for_test_call="YES")
     r.update(kw)
     return r
 
 
 def _manual(name, phone, **kw):
     r = _row(name, phone, **kw)
-    r.pop("approved_for_test_call")
+    r.pop("consent_for_test_call")
     return r
 
 
@@ -105,7 +105,7 @@ class TestUpload:
             _row("TEST_badlang", "+919000000205", language="Hindi"),
             _row("", "+919000000206"),
             _row("TEST_existing", "+919000000011"),
-            _row("TEST_flag", "+919000000207", approved_for_test_call="maybe"),
+            _row("TEST_flag", "+919000000207", consent_for_test_call="maybe"),
             _row("TEST_past", "+919000000208", interview_date="2020-01-01"),
         ]
         csv = ",".join(COLUMNS) + "\n" + "\n".join(",".join(r[c] for c in COLUMNS) for r in rows)
@@ -141,7 +141,7 @@ class TestUpload:
         CREATED.extend(ids.values())
         items = s.get(f"{API}/test-candidates", params={"search": "TEST_imp0"}).json()["items"]
         it = items[0]
-        assert it["source"] == "upload" and it["approved"] is False and it["interview_timezone"] == "Asia/Kolkata"
+        assert it["source"] == "upload" and it["consent_status"] == "granted" and it["interview_timezone"] == "Asia/Kolkata"
         assert it["upload_batch_id"] == d["upload_batch_id"] and it["test_candidate_id"].startswith("TC-")
         assert it["language"] == "English" and it["interview_time"] == "10:00"
         assert "*****" in it["phone_masked"]
@@ -163,7 +163,7 @@ class TestList:
         assert d["total"] == 11 and all(i["language"] == "Tamil" for i in d["items"])
         d = s.get(f"{API}/test-candidates", params={"search": "TEST_imp", "source": "manual"}).json()
         assert d["total"] == 0
-        d = s.get(f"{API}/test-candidates", params={"search": "TEST_imp", "ready": "not_approved"}).json()
+        d = s.get(f"{API}/test-candidates", params={"search": "TEST_imp", "ready": "ready"}).json()
         assert d["total"] == 22
         d = s.get(f"{API}/test-candidates", params={"search": "9000000215"}).json()
         assert d["total"] == 1
@@ -184,6 +184,7 @@ class TestCrud:
             CREATED.append(r.json()["id"])
         assert r.status_code == 409
 
+    @pytest.mark.skip(reason="Approval workflow removed in Phase 7A; consent flow covered by test_ai_calling_phase7a.py")
     def test_manual_approve_edit_flow(self, s):
         r = s.post(f"{API}/test-candidates", json=_manual("TEST_manual", "9000000240", interview_time="15:30"))
         assert r.status_code == 200
@@ -202,6 +203,7 @@ class TestCrud:
         assert ed["approved"] is False and ed["readiness"] == "not_approved"
         assert ed["approval_audit"][-1]["action"] == "approval_invalidated"
 
+    @pytest.mark.skip(reason="Approval workflow removed in Phase 7A; consent flow covered by test_ai_calling_phase7a.py")
     def test_bulk(self, s):
         ids = list(_ids_by_phone(s, {f"+9190000002{10 + i}" for i in range(3)}).values())
         assert s.post(f"{API}/test-candidates/bulk-approve", json={"ids": ids, "consent_confirmed": True, "confirmation": "approve"}).status_code == 400

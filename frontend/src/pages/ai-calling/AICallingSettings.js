@@ -4,6 +4,8 @@ import { GearSix, Siren, Key } from '@phosphor-icons/react';
 import { aiApi, errMsg } from './aiApi';
 import { AICallingHeader, Card, SectionTitle } from '../../components/ai-calling/AICallingHeader';
 import { BolnaConfigPanel } from '../../components/ai-calling/BolnaConfigPanel';
+import { ModeSwitchesPanel } from '../../components/ai-calling/ModeSwitchesPanel';
+import { ConsentPreview } from '../../components/ai-calling/ConsentPreview';
 
 const inputCls = 'w-full bg-white border border-[#e5e3d8] rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-teal-500';
 const FIELDS = [
@@ -33,10 +35,11 @@ export default function AICallingSettings() {
         <div className="min-h-screen" data-testid="ai-settings-page">
             <AICallingHeader title="AI Calling Settings" subtitle="Limits, defaults and safety switches" mode={s?.mode} emergencyStop={s?.emergency_stop} />
             <main className="max-w-6xl mx-auto px-6 lg:px-10 py-6 space-y-5">
+                <ModeSwitchesPanel />
                 <Card>
                     <SectionTitle icon={Siren}>Emergency stop</SectionTitle>
                     <div className="flex flex-wrap items-center gap-3">
-                        <p className="flex-1 text-sm text-[#1a2332]">When active, every call is blocked, pending jobs are cancelled and running batches stop.</p>
+                        <p className="flex-1 text-sm text-[#1a2332]">Overrides every switch: while active, no new call of any kind can start and pending jobs are cancelled. Currently <b data-testid="estop-state">{s?.emergency_stop ? 'ON' : 'OFF'}</b>.</p>
                         <button onClick={estop} data-testid="estop-toggle-btn" className={`px-4 py-2.5 rounded-lg text-sm font-bold ${s?.emergency_stop ? 'bg-white border border-rose-300 text-rose-700' : 'bg-rose-700 text-white hover:bg-rose-800'}`}>
                             {s?.emergency_stop ? 'Release emergency stop' : 'Activate emergency stop'}
                         </button>
@@ -55,9 +58,10 @@ export default function AICallingSettings() {
                     <div className="flex justify-end mt-4"><button onClick={save} data-testid="settings-save-btn" className="px-5 py-2.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold">Save settings</button></div>
                 </Card>
                 <BolnaConfigPanel />
+                <ConsentPreview />
                 <Card>
-                    <SectionTitle icon={Key}>Calling switches</SectionTitle>
-                    <p className="text-xs text-[#6b7280]">Integration approval: <b>{s?.bolna_integration_approved ? 'approved' : 'not approved'}</b> · Server calling: <b>{s?.server_calling_enabled ? 'enabled' : 'disabled'}</b></p>
+                    <SectionTitle icon={Key}>Server locks</SectionTitle>
+                    <p className="text-xs text-[#6b7280]">Server calling (AI_CALLING_ENABLED): <b data-testid="server-calling-state">{s?.server_calling_enabled ? 'enabled' : 'disabled'}</b> · Batch calling: <b>{s?.bolna_integration_approved ? 'approved' : 'locked'}</b></p>
                 </Card>
             </main>
         </div>

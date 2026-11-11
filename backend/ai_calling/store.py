@@ -12,14 +12,17 @@ MODES = ("off", "testing", "live")
 
 COLUMNS = [
     "candidate_name", "phone_number", "job_role", "interview_date", "interview_time",
-    "language", "company_name", "office_address", "approved_for_test_call",
+    "language", "company_name", "office_address", "consent_for_test_call",
 ]
 LANGUAGES = {"english": "English", "tamil": "Tamil"}
 
 SETTINGS_DEFAULTS = {
     "mode": "off",
     "mode_version": 1,
-    "emergency_stop": False,
+    "emergency_stop": True,
+    "ai_test_enabled": True,
+    "ai_live_enabled": False,
+    "live_dispatch_authorized": False,
     "daily_call_limit": 20,
     "max_concurrent_calls": 1,
     "call_window_start": "10:00",
@@ -58,7 +61,9 @@ async def get_settings() -> dict:
         {"_id": SETTINGS_ID}, {"$setOnInsert": {**SETTINGS_DEFAULTS, "created_at": now_iso()}}, upsert=True
     )
     doc = await db().ai_call_settings.find_one({"_id": SETTINGS_ID})
-    return {**SETTINGS_DEFAULTS, **{k: v for k, v in doc.items() if k != "_id"}}
+    out = {**SETTINGS_DEFAULTS, **{k: v for k, v in doc.items() if k != "_id"}}
+    out["mode"] = "testing" if out["ai_test_enabled"] else "off"  # legacy display field, derived from AI Test Mode
+    return out
 
 
 def mask_phone(p: str) -> str:
@@ -164,9 +169,10 @@ def validate_row(row: dict, require_flag: bool = False) -> tuple:
     out["company_name"] = _clean(row.get("company_name"))
     out["office_address"] = _clean(row.get("office_address"))
     out["interview_timezone"] = TIMEZONE
-    flag = parse_yes_no(row.get("approved_for_test_call"))
+    raw = row.get("consent_for_test_call", row.get("approved_for_test_call"))
+    flag = parse_yes_no(raw)
     if require_flag and flag is None:
-        errors.append(_err("approved_for_test_call", "invalid_value", "approved_for_test_call must be YES or NO"))
-    out["sheet_approved_flag"] = bool(flag)
+        errors.append(_err("consent_for_test_call", "invalid_value", "consent_for_test_call must be YES or NO"))
+    out["sheet_consent"] = bool(flag)
     return out, errors
 

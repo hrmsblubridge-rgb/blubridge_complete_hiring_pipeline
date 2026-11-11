@@ -42,9 +42,9 @@ async def dry_run(cid: str, request: Request):
     s = await get_settings()
     prov = await _doc()
     checks = [
-        {"key": "testing_mode", "ok": s["mode"] == "testing", "label": "Testing Mode is active"},
-        {"key": "approved", "ok": cand.get("approved") is True and cand.get("approved_phone") == cand.get("phone_e164"), "label": "Recipient approved for this exact number"},
-        {"key": "consent", "ok": cand.get("consent_confirmed") is True, "label": "Recipient consent confirmed"},
+        {"key": "ai_test_on", "ok": s["ai_test_enabled"], "label": "AI Test Mode is ON"},
+        {"key": "consent", "ok": cand.get("consent_status") == "granted" and cand.get("consent_phone") == cand.get("phone_e164"),
+         "label": "Recipient consent recorded for this exact number"},
         {"key": "not_opted_out", "ok": not cand.get("opted_out"), "label": "Recipient has not opted out"},
         {"key": "provider_validated", "ok": provider_ready(prov), "label": "Bolna configuration verified (Test Connection)"},
         {"key": "emergency_stop", "ok": not s["emergency_stop"], "label": "Emergency stop inactive", "informational": True},

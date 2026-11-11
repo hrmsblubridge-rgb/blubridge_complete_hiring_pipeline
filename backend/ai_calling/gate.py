@@ -1,7 +1,7 @@
 """Centralised permission gate. EVERY outbound AI call must pass evaluate() first.
 
 The destination number is never taken from a request body: it is read from the
-approved ai_test_candidates record and cross-checked against the job.
+consented ai_test_candidates record and cross-checked against the job.
 """
 import os
 from datetime import datetime, timedelta
@@ -33,8 +33,8 @@ async def evaluate(*, mode: str, test_candidate_id: str, batch_id: str, phone_e1
     def add(key, label, ok, detail=""):
         checks.append({"key": key, "label": label, "ok": bool(ok), "detail": detail})
 
-    add("testing_mode", "Testing Mode is active", mode == "testing" and s["mode"] == "testing", f"current mode: {s['mode']}")
-    add("not_live", "Job is not a Live Mode job (Live Mode locked)", mode != "live" and LIVE_MODE_LOCKED)
+    add("ai_test_on", "AI Test Mode is ON", mode == "testing" and s["ai_test_enabled"])
+    add("not_live", "Job is a test-list job (live dispatch uses its own gate)", mode != "live")
     add("server_enabled", "Server-side calling is enabled", server_calling_enabled(), "AI_CALLING_ENABLED env flag")
     if single_call:
         add("bolna_approved", "Single test call approved (Phase 4B)", SINGLE_TEST_CALL_APPROVED)
@@ -53,7 +53,6 @@ async def evaluate(*, mode: str, test_candidate_id: str, batch_id: str, phone_e1
         cand = await db().ai_test_candidates.find_one({"_id": ObjectId(test_candidate_id), "mode": "testing"})
     add("candidate_exists", "Recipient is a stored test candidate", cand is not None)
     cand = cand or {}
-    add("admin_approved", "Administrator explicitly approved the recipient", cand.get("approved") is True)
     if single_call:
         now = datetime.now(IST)
         add("interview_upcoming", "Interview date has not passed", (cand.get("interview_date") or "") >= now.date().isoformat())
@@ -66,9 +65,9 @@ async def evaluate(*, mode: str, test_candidate_id: str, batch_id: str, phone_e1
             batch = await db().ai_test_batches.find_one({"_id": ObjectId(batch_id)})
         add("in_batch", "Recipient belongs to the selected test batch",
             bool(batch) and test_candidate_id in batch.get("candidate_ids", []) and batch.get("status") != "stopped")
-    add("phone_matches", "Phone number matches the approved record",
-        bool(phone_e164) and phone_e164 == cand.get("phone_e164") == cand.get("approved_phone"))
-    add("consent", "Recipient agreed to receive test calls", cand.get("consent_confirmed") is True)
+    add("phone_matches", "Phone number is the saved number the consent was given for",
+        bool(phone_e164) and phone_e164 == cand.get("phone_e164") == cand.get("consent_phone"))
+    add("consent", "Recipient agreed to receive test calls", cand.get("consent_status") == "granted")
     add("not_opted_out", "Recipient has not opted out", not cand.get("opted_out"))
 
     day_start = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)

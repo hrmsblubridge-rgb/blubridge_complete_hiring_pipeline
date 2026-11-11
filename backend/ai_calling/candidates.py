@@ -27,8 +27,13 @@ cand_router = APIRouter()
 CALLING_DISABLED_MSG = "AI Calling will be enabled after Bolna API integration and testing are completed."
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 MAX_UPLOAD_ROWS = 500
-INVALIDATE = {"approved": False, "approved_phone": None, "approved_by": None, "approved_at": None,
-              "consent_confirmed": False, "consent_status": "not_confirmed"}
+CONSENT_RESET = {"consent_confirmed": False, "consent_status": "not_granted", "consent_phone": None,
+                 "consent_at": None, "consent_by": None, "consent_source": None}
+
+
+def _consent_granted(user: str, source: str, phone: str) -> dict:
+    return {"consent_confirmed": True, "consent_status": "granted", "consent_phone": phone, "consent_at": now_iso(),
+            "consent_by": user, "consent_source": source, "consent_withdrawn_at": None}
 
 
 async def _auth(request: Request) -> str:
@@ -49,38 +54,46 @@ def _audit(action: str, user: str, phone: str = "", note: str = "") -> dict:
 def readiness(d: dict) -> str:
     if d.get("opted_out"):
         return "opted_out"
-    if not d.get("approved") or d.get("approved_phone") != d.get("phone_e164") or not d.get("consent_confirmed"):
-        return "not_approved"
+    if d.get("consent_status") != "granted" or d.get("consent_phone") != d.get("phone_e164"):
+        return "no_consent"
     if (d.get("interview_date") or "") < datetime.now(IST).date().isoformat():
         return "interview_passed"
-    return "ready_calling_disabled"
+    return "ready"
 
 
 def _public(doc: dict) -> dict:
     d = serialize(doc)
     d["phone_masked"] = mask_phone(d.get("phone_e164", ""))
     d["readiness"] = readiness(doc)
-    d.pop("approved_phone", None)
+    for k in ("approved_phone", "consent_phone", "approved", "approved_by", "approved_at"):
+        d.pop(k, None)
     return d
 
 
-def _new_doc(clean: dict, source: str, user: str, upload_batch_id=None) -> dict:
+def _new_doc(clean: dict, source: str, user: str, upload_batch_id=None, consent: bool = False) -> dict:
     now = now_iso()
+    granted = _consent_granted(user, "sheet_upload" if source == "upload" else "manual_entry", clean["phone_e164"])
     return {
         **clean, "test_candidate_id": "TC-" + uuid.uuid4().hex[:10].upper(), "mode": "testing",
         "interview_timezone": TIMEZONE, "source": source, "upload_batch_id": upload_batch_id,
-        **INVALIDATE, "opted_out": False, "approval_audit": [],
+        **(granted if consent else CONSENT_RESET), "opted_out": False,
+        "approval_audit": [_audit("consent_recorded" if consent else "saved_without_consent", user, clean["phone_e164"], source)],
         "created_by": user, "created_at": now, "updated_at": now,
     }
 
 
 async def backfill_candidates():
-    """Give Phase 2 test records the Phase 3 fields (test collection only)."""
+    """Test collection only: Phase 2 fields, and Phase 7A consent model (legacy approval → recorded consent)."""
     async for d in db().ai_test_candidates.find({"test_candidate_id": {"$exists": False}}):
         await db().ai_test_candidates.update_one({"_id": d["_id"]}, {"$set": {
             "test_candidate_id": "TC-" + uuid.uuid4().hex[:10].upper(), "interview_timezone": TIMEZONE,
-            "consent_status": "confirmed" if d.get("consent_confirmed") else "not_confirmed",
             "upload_batch_id": d.get("upload_ref") or None, "approval_audit": d.get("approval_audit", [])}})
+    async for d in db().ai_test_candidates.find({"consent_phone": {"$exists": False}}):
+        legacy = d.get("approved") is True and d.get("consent_confirmed") is True and d.get("approved_phone") == d.get("phone_e164")
+        upd = ({"consent_confirmed": True, "consent_status": "granted", "consent_phone": d["phone_e164"],
+                "consent_at": d.get("approved_at"), "consent_by": d.get("approved_by"), "consent_source": "legacy_admin_approval"}
+               if legacy else CONSENT_RESET)
+        await db().ai_test_candidates.update_one({"_id": d["_id"]}, {"$set": upd})
 
 
 # ---------------- template ----------------
@@ -95,8 +108,8 @@ INSTRUCTIONS = [
     "interview_time: HH in 24-hour IST, e.g. 10 or 14 (HH:MM also accepted).",
     "language: English or Tamil.",
     "company_name and office_address: required (interviews are offline at the Chennai office).",
-    "approved_for_test_call: YES or NO. Informational only — an administrator must still approve every",
-    "  recipient in the app. Uploading a sheet NEVER approves anyone and NEVER starts calls.",
+    "consent_for_test_call: YES only if this colleague has agreed to receive AI test calls; NO otherwise.",
+    "  NO (or blank) saves the row but it can never be called until consent is recorded. Uploading NEVER starts calls.",
     f"Limits: .xlsx or .csv, up to {MAX_UPLOAD_ROWS} rows, up to 2 MB.",
 ]
 
@@ -240,7 +253,8 @@ async def import_rows(body: RowsBody, request: Request):
     docs = []
     for r in res["rows"]:
         clean, _ = validate_row(r["values"], require_flag=True)
-        docs.append(_new_doc(clean, "upload", user, ubid))
+        consent = clean.pop("sheet_consent", False)
+        docs.append(_new_doc(clean, "upload", user, ubid, consent=consent))
     await db().ai_test_candidates.insert_many(docs)
     await db().ai_upload_batches.insert_one({
         "upload_batch_id": ubid, "filename": body.filename, "imported": len(docs),
@@ -252,7 +266,7 @@ async def import_rows(body: RowsBody, request: Request):
 # ---------------- list / manual CRUD ----------------
 
 @cand_router.get("/test-candidates")
-async def list_candidates(request: Request, search: str = "", approval: str = "all", source: str = "",
+async def list_candidates(request: Request, search: str = "", consent: str = "all", source: str = "",
                           language: str = "", ready: str = "", page: int = 1, page_size: int = 20):
     await _auth(request)
     q = {}
@@ -264,11 +278,11 @@ async def list_candidates(request: Request, search: str = "", approval: str = "a
         if len(digits) >= 4:
             ors.append({"phone_e164": {"$regex": digits[-10:]}})
         q["$or"] = ors
-    if approval == "approved":
-        q.update({"approved": True, "opted_out": {"$ne": True}})
-    elif approval == "pending":
-        q.update({"approved": {"$ne": True}, "opted_out": {"$ne": True}})
-    elif approval == "opted_out":
+    if consent == "granted":
+        q.update({"consent_status": "granted", "opted_out": {"$ne": True}})
+    elif consent == "not_granted":
+        q.update({"consent_status": {"$ne": "granted"}, "opted_out": {"$ne": True}})
+    elif consent == "opted_out":
         q["opted_out"] = True
     if source in ("manual", "upload"):
         q["source"] = source
@@ -294,18 +308,20 @@ class CandidateBody(BaseModel):
     language: str = ""
     company_name: str = ""
     office_address: str = ""
+    consent_for_test_call: bool = False
 
 
 @cand_router.post("/test-candidates")
 async def create_candidate(body: CandidateBody, request: Request):
+    """Save only. Never calls."""
     user = await _auth(request)
     clean, errors = validate_row(body.model_dump())
     if errors:
         raise HTTPException(400, error_text(errors))
     if await db().ai_test_candidates.find_one({"phone_e164": clean["phone_e164"]}):
         raise HTTPException(409, "A test candidate with this phone number already exists")
-    clean["sheet_approved_flag"] = False
-    doc = _new_doc(clean, "manual", user)
+    clean.pop("sheet_consent", None)
+    doc = _new_doc(clean, "manual", user, consent=body.consent_for_test_call)
     doc["_id"] = (await db().ai_test_candidates.insert_one(doc)).inserted_id
     return _public(doc)
 
@@ -319,13 +335,14 @@ async def update_candidate(cid: str, body: CandidateBody, request: Request):
         raise HTTPException(400, error_text(errors))
     if await db().ai_test_candidates.find_one({"phone_e164": clean["phone_e164"], "_id": {"$ne": cur["_id"]}}):
         raise HTTPException(409, "A test candidate with this phone number already exists")
-    clean.pop("sheet_approved_flag", None)
+    clean.pop("sheet_consent", None)
     upd = {**clean, "updated_at": now_iso()}
     op = {"$set": upd}
-    changed = [f for f in ("phone_e164", "candidate_name") if clean[f] != cur.get(f)]
-    if changed and (cur.get("approved") or cur.get("consent_confirmed")):
-        upd.update(INVALIDATE)
-        op["$push"] = {"approval_audit": _audit("approval_invalidated", user, clean["phone_e164"], f"{', '.join(changed)} changed")}
+    if clean["phone_e164"] != cur.get("phone_e164"):
+        # A new number always needs fresh consent for that number.
+        fresh = body.consent_for_test_call and not cur.get("opted_out")
+        upd.update(_consent_granted(user, "manual_entry", clean["phone_e164"]) if fresh else CONSENT_RESET)
+        op["$push"] = {"approval_audit": _audit("consent_recorded" if fresh else "consent_reset", user, clean["phone_e164"], "phone changed")}
     await db().ai_test_candidates.update_one({"_id": cur["_id"]}, op)
     return _public(await _get(cid))
 
@@ -339,51 +356,25 @@ async def delete_candidate(cid: str, request: Request):
     return {"deleted": 1}
 
 
-# ---------------- approval ----------------
+# ---------------- consent / do-not-call (no approval step) ----------------
 
-class ApproveBody(BaseModel):
-    consent_confirmed: bool
-    phone_last4: str
-
-
-async def _approve(cur: dict, user: str) -> str:
-    """Return '' on success or a reason string."""
-    if cur.get("opted_out"):
-        return "recipient has opted out"
-    _, errors = validate_row({**cur, "phone_number": cur.get("phone_e164")})
-    if errors:
-        return "fix validation errors first: " + error_text(errors)
-    await db().ai_test_candidates.update_one({"_id": cur["_id"]}, {
-        "$set": {"approved": True, "approved_phone": cur["phone_e164"], "approved_by": user, "approved_at": now_iso(),
-                 "consent_confirmed": True, "consent_status": "confirmed", "updated_at": now_iso()},
-        "$push": {"approval_audit": _audit("approved", user, cur["phone_e164"], "consent confirmed by admin")}})
-    return ""
+class ConsentBody(BaseModel):
+    granted: bool
 
 
-async def _revoke(cur: dict, user: str, note: str = ""):
-    await db().ai_test_candidates.update_one({"_id": cur["_id"]}, {
-        "$set": {**INVALIDATE, "updated_at": now_iso()},
-        "$push": {"approval_audit": _audit("revoked", user, cur.get("phone_e164", ""), note)}})
-
-
-@cand_router.post("/test-candidates/{cid}/approve")
-async def approve_candidate(cid: str, body: ApproveBody, request: Request):
+@cand_router.post("/test-candidates/{cid}/consent")
+async def set_consent(cid: str, body: ConsentBody, request: Request):
+    """Record that the colleague agreed (granted=true) or withdrew consent. Never calls."""
     user = await _auth(request)
     cur = await _get(cid)
-    if not body.consent_confirmed:
-        raise HTTPException(400, "Confirm that the recipient agreed to receive test calls")
-    if (body.phone_last4 or "").strip() != cur["phone_e164"][-4:]:
-        raise HTTPException(400, "Last 4 digits do not match the stored phone number")
-    reason = await _approve(cur, user)
-    if reason:
-        raise HTTPException(400, reason[0].upper() + reason[1:])
-    return _public(await _get(cid))
-
-
-@cand_router.post("/test-candidates/{cid}/revoke")
-async def revoke_candidate(cid: str, request: Request):
-    user = await _auth(request)
-    await _revoke(await _get(cid), user)
+    if body.granted:
+        if cur.get("opted_out"):
+            raise HTTPException(400, "Recipient is marked Do Not Call. Clear it first.")
+        upd, action = _consent_granted(user, "manual_entry", cur["phone_e164"]), "consent_recorded"
+    else:
+        upd, action = {**CONSENT_RESET, "consent_status": "withdrawn", "consent_withdrawn_at": now_iso()}, "consent_withdrawn"
+    await db().ai_test_candidates.update_one({"_id": cur["_id"]}, {
+        "$set": {**upd, "updated_at": now_iso()}, "$push": {"approval_audit": _audit(action, user, cur["phone_e164"])}})
     return _public(await _get(cid))
 
 
@@ -393,9 +384,10 @@ class OptOutBody(BaseModel):
 
 @cand_router.post("/test-candidates/{cid}/opt-out")
 async def opt_out_candidate(cid: str, body: OptOutBody, request: Request):
+    """Do Not Call. Setting it also clears consent; clearing it does NOT restore consent."""
     user = await _auth(request)
     cur = await _get(cid)
-    upd = {"opted_out": body.opted_out, "updated_at": now_iso(), **(INVALIDATE if body.opted_out else {})}
+    upd = {"opted_out": body.opted_out, "updated_at": now_iso(), **(CONSENT_RESET if body.opted_out else {})}
     await db().ai_test_candidates.update_one({"_id": cur["_id"]}, {
         "$set": upd, "$push": {"approval_audit": _audit("opted_out" if body.opted_out else "opt_out_cleared", user, cur["phone_e164"])}})
     return _public(await _get(cid))
@@ -413,29 +405,6 @@ async def _bulk_docs(ids: list) -> list:
         raise HTTPException(400, "Select between 1 and 500 test candidates")
     oids = [ObjectId(i) for i in ids if ObjectId.is_valid(i)]
     return await db().ai_test_candidates.find({"_id": {"$in": oids}}).to_list(None)
-
-
-@cand_router.post("/test-candidates/bulk-approve")
-async def bulk_approve(body: BulkBody, request: Request):
-    user = await _auth(request)
-    if body.confirmation != "APPROVE" or not body.consent_confirmed:
-        raise HTTPException(400, "Bulk approval needs consent confirmation and the word APPROVE")
-    docs = await _bulk_docs(body.ids)
-    results = []
-    for d in docs:
-        reason = "already approved" if d.get("approved") else await _approve(d, user)
-        results.append({"id": str(d["_id"]), "candidate_name": d.get("candidate_name"), "ok": not reason, "reason": reason})
-    return {"approved": sum(r["ok"] for r in results), "skipped": [r for r in results if not r["ok"]],
-            "not_found": len(set(body.ids)) - len(docs)}
-
-
-@cand_router.post("/test-candidates/bulk-revoke")
-async def bulk_revoke(body: BulkBody, request: Request):
-    user = await _auth(request)
-    docs = await _bulk_docs(body.ids)
-    for d in docs:
-        await _revoke(d, user, "bulk revoke")
-    return {"revoked": len(docs)}
 
 
 @cand_router.post("/test-candidates/bulk-delete")

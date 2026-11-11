@@ -17,7 +17,7 @@ from . import gate
 from .calls import apply_execution
 from .execution import TERMINAL, user_data_for
 from .provider import _auth, _csrf, _doc, decrypt_api_key
-from .store import SETTINGS_ID, db, mask_phone, now_iso, serialize
+from .store import SETTINGS_ID, db, get_settings, mask_phone, now_iso, serialize
 
 _logger = logging.getLogger("ai_calling.dispatch")
 dispatch_router = APIRouter()
@@ -57,12 +57,6 @@ async def _audit(action: str, user: str, call_id: str = "", cid: str = "", detai
     _logger.info(f"[SingleCall] {action} call={call_id} candidate={cid} by={user} {detail}")
 
 
-async def _reengage_stop(auth_id: str):
-    await db().ai_call_settings.update_one({"_id": SETTINGS_ID}, {
-        "$set": {"emergency_stop": True, "emergency_stop_at": now_iso(), "emergency_stop_by": f"system:single-call:{auth_id}"},
-        "$unset": {"emergency_stop_released_for": ""}})
-
-
 async def _release_lock(auth_id: str):
     await db().ai_call_settings.update_one({"_id": SETTINGS_ID, "dispatch_lock.id": auth_id}, {"$set": {"dispatch_lock": None}})
 
@@ -96,11 +90,10 @@ async def call_now(cid: str, request: Request, body: dict = Body(...)):  # noqa:
 
     auth_id = uuid.uuid4().hex
     s = await db().ai_call_settings.find_one_and_update(
-        {"_id": SETTINGS_ID, "mode": "testing", "dispatch_lock": None},
-        {"$set": {"dispatch_lock": {"id": auth_id, "by": user, "at": now_iso()}, "emergency_stop": False,
-                  "emergency_stop_released_for": auth_id, "emergency_stop_released_at": now_iso()}})
+        {"_id": SETTINGS_ID, "ai_test_enabled": True, "emergency_stop": False, "dispatch_lock": None},
+        {"$set": {"dispatch_lock": {"id": auth_id, "by": user, "at": now_iso()}}})
     if not s:
-        raise HTTPException(409, "Testing Mode is not active or another call authorisation is in progress")
+        raise HTTPException(409, "AI Test Mode is OFF, the emergency stop is ON, or another call authorisation is in progress")
     try:
         verdict = await gate.evaluate(mode="testing", test_candidate_id=cid, batch_id="", phone_e164=cand["phone_e164"],
                                       mode_version=s["mode_version"], single_call=True)
@@ -136,8 +129,6 @@ async def call_now(cid: str, request: Request, body: dict = Body(...)):  # noqa:
     except BaseException:
         await _release_lock(auth_id)
         raise
-    finally:
-        await _reengage_stop(auth_id)
 
     try:
         res = await bc.place_call(gate_result=verdict, api_key=api_key, body=req)
@@ -269,10 +260,11 @@ async def _call_or_404(call_id: str) -> dict:
 @dispatch_router.get("/test-calls/status")
 async def calling_status(request: Request):
     await _auth(request)
-    s = await db().ai_call_settings.find_one({"_id": SETTINGS_ID}) or {}
+    s = await get_settings()
     blk = await db().ai_calls.find_one({"mode": "testing", "state": {"$in": BLOCKING}}, {"candidate_name": 1, "state": 1})
     return {"single_call_enabled": gate.SINGLE_TEST_CALL_APPROVED and gate.server_calling_enabled(),
-            "mode": s.get("mode"), "emergency_stop": s.get("emergency_stop"), "live_mode_locked": gate.LIVE_MODE_LOCKED,
+            "mode": s.get("mode"), "ai_test_enabled": s["ai_test_enabled"], "ai_live_enabled": s["ai_live_enabled"],
+            "emergency_stop": s.get("emergency_stop"), "live_mode_locked": gate.LIVE_MODE_LOCKED,
             "batch_calling_enabled": gate.BOLNA_INTEGRATION_APPROVED, "dispatch_in_progress": bool(s.get("dispatch_lock")),
             "blocking_call": {"id": str(blk["_id"]), "state": blk["state"], "candidate_name": blk.get("candidate_name")} if blk else None,
             "poll_seconds": POLL_SECONDS}

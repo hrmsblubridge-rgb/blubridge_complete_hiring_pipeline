@@ -86,11 +86,11 @@ class TestDryRun:
         assert r.status_code == 200
         d = r.json()
         assert d["prepared"] is False and d["would_send"] is False and "body" not in d
-        assert next(x for x in d["checks"] if x["key"] == "approved")["ok"] is False
+        assert next(x for x in d["checks"] if x["key"] == "consent")["ok"] is False
 
     def test_dry_run_approved_masked(self, s):
         c = _mk(s, "TEST_dry_ok", "+919000000303", time="14:00")
-        a = s.post(f"{API}/test-candidates/{c['id']}/approve", json={"consent_confirmed": True, "phone_last4": "0303"})
+        a = s.post(f"{API}/test-candidates/{c['id']}/consent", json={"granted": True})
         assert a.status_code == 200
         r = s.post(f"{API}/test-candidates/{c['id']}/dry-run", headers=CSRF)
         assert r.status_code == 200
