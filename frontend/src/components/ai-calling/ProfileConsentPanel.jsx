@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { CaretRight, ShieldCheck } from '@phosphor-icons/react';
 import { aiApi } from '../../pages/ai-calling/aiApi';
 import { ConsentCard } from './ConsentCard';
+import { AlertsPanel } from './AlertsPanel';
 
 // Admin-only AI Calling consent & Do Not Call, per exact registration ID. Never places calls.
 export const ProfileConsentPanel = ({ email }) => {
@@ -30,7 +31,12 @@ export const ProfileConsentPanel = ({ email }) => {
                     {state.loading && <p className="text-sm text-zinc-500 px-3 py-4">Loading…</p>}
                     {state.error && <p className="text-sm text-red-400 px-3 py-4" data-testid="journey-ai-consent-error">{state.error}</p>}
                     {state.items?.length === 0 && <p className="text-sm text-zinc-500 italic px-3 py-4 border border-dashed border-zinc-800" data-testid="journey-ai-consent-empty">No interview registration found for this candidate.</p>}
-                    {state.items?.map(c => <ConsentCard key={c.registration_id} c={c} onChange={update} />)}
+                    {state.items?.map(c => (
+                        <div key={c.registration_id} className="space-y-2">
+                            <ConsentCard c={c} onChange={update} />
+                            <AlertsPanel registrationId={c.registration_id} dark />
+                        </div>
+                    ))}
                 </div>
             )}
         </section>

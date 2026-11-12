@@ -13,7 +13,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from .dryrun import WARNING, _mask, booking_key, plan_booking
-from .modes import CONSENT_TEXT, CONSENT_TITLE, CONSENT_TEXT_VERSION
+from .modes import CONSENT_TEXT, CONSENT_TITLE, CONSENT_TEXT_VERSION, scope_for
 from .provider import _auth, _csrf
 from .store import IST, db, get_settings, now_iso
 
@@ -143,7 +143,7 @@ async def invalidate_pending(reg_id: str, reason: str) -> int:
 async def record_consent(reg_id: str, status: str, source: str, actor: str, bkey: str = None) -> dict:
     now = now_iso()
     st = {"consent_status": status, "consent_source": source, "consent_text_version": CONSENT_TEXT_VERSION,
-          "updated_at": now, "last_change_at": now}
+          "consent_scope": scope_for(CONSENT_TEXT_VERSION) if status == "granted" else [], "updated_at": now, "last_change_at": now}
     if status == "granted":
         st.update(consent_timestamp=now, consent_withdrawn_at=None)
     elif status == "withdrawn":
@@ -395,7 +395,9 @@ def _admin_view(reg_id: str, c: dict, user: str, tok: dict) -> dict:
     hist = [{k: h.get(k) for k in ("type", "status", "action", "source", "by", "reason", "at")} for h in (c.get("history") or [])][-10:]
     return {"registration_id": reg_id, "consent_status": c.get("consent_status", "none"),
             "consent_timestamp": c.get("consent_timestamp"), "consent_source": c.get("consent_source"),
-            "consent_text_version": c.get("consent_text_version"), "consent_withdrawn_at": c.get("consent_withdrawn_at"),
+            "consent_text_version": c.get("consent_text_version"),
+            "consent_scope": c.get("consent_scope") or (scope_for(c.get("consent_text_version")) if c.get("consent_status") == "granted" else []),
+            "consent_withdrawn_at": c.get("consent_withdrawn_at"),
             "do_not_call": bool(c.get("do_not_call")), "dnc_sources": sources, "dnc_at": c.get("dnc_at"),
             "dnc_by": c.get("dnc_by"), "dnc_reason": c.get("dnc_reason"), "last_change_at": c.get("last_change_at") or c.get("updated_at"),
             "history": list(reversed(hist)), "is_top_level_admin": user in top_level_admins(),

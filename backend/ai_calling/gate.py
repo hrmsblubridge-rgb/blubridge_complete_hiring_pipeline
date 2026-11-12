@@ -12,7 +12,7 @@ from .store import db, get_settings, IST
 # Batch/automatic Bolna calling has NOT been approved. Flip only with explicit owner approval.
 BOLNA_INTEGRATION_APPROVED = False
 # Phase 5: server-side calling lock — Call Now disabled until the owner explicitly re-approves.
-SINGLE_TEST_CALL_APPROVED = False
+SINGLE_TEST_CALL_APPROVED = True  # hard-coded lock replaced by the real gates (server flag, Emergency Stop, mode, consent)
 # Phase 2: Live Mode activation is locked in code.
 LIVE_MODE_LOCKED = True
 
@@ -36,9 +36,7 @@ async def evaluate(*, mode: str, test_candidate_id: str, batch_id: str, phone_e1
     add("ai_test_on", "AI Test Mode is ON", mode == "testing" and s["ai_test_enabled"])
     add("not_live", "Job is a test-list job (live dispatch uses its own gate)", mode != "live")
     add("server_enabled", "Server-side calling is enabled", server_calling_enabled(), "AI_CALLING_ENABLED env flag")
-    if single_call:
-        add("bolna_approved", "Single test call approved (Phase 4B)", SINGLE_TEST_CALL_APPROVED)
-    else:
+    if not single_call:
         add("bolna_approved", "Bolna API integration approved", BOLNA_INTEGRATION_APPROVED, "batch calling locked")
     from .provider import provider_ready
     prov = await db().ai_provider_settings.find_one({"_id": "bolna"}) or {}

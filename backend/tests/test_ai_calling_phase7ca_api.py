@@ -29,7 +29,7 @@ class TestPublic:
         assert r.status_code == 200
         d = r.json()
         assert d["title"] == "Optional AI Voice Call Consent"
-        assert d["version"] == "2026-06-v3"
+        assert d["version"] == "2026-06-v4"
         assert d["default_checked"] is False and d["optional"] is True
         assert "no-store" in r.headers.get("Cache-Control", "")
         assert r.headers.get("Referrer-Policy") == "no-referrer"
@@ -40,7 +40,7 @@ class TestPublic:
         assert "no-store" in r.headers.get("Cache-Control", "") or r.status_code == 429
 
     def test_booking_consent_bogus(self):
-        r = requests.post(f"{API}/public/booking-consent/bogus_token_abcdefghijkl", json={"granted": True, "text_version": "2026-06-v3"})
+        r = requests.post(f"{API}/public/booking-consent/bogus_token_abcdefghijkl", json={"granted": True, "text_version": "2026-06-v4"})
         assert r.status_code in (404, 429)
 
     def test_renew_request_501(self):
@@ -80,8 +80,8 @@ class TestAdmin:
         assert d["live_limits"]["effective_daily"] == 5
         assert d["live_limits"]["pilot_daily_cap"] == 5
 
-    @pytest.mark.parametrize("field,val", [("live_daily_call_limit", 21), ("live_pilot_daily_cap", 21),
-                                           ("live_max_concurrent_calls", 2)])
+    @pytest.mark.parametrize("field,val", [("live_daily_call_limit", 100001), ("live_pilot_daily_cap", 100001),
+                                           ("live_max_concurrent_calls", 51)])
     def test_settings_limits_rejected(self, admin, field, val):
         r = admin.put(f"{API}/settings", json={field: val}, headers=CSRF)
         assert r.status_code == 400, r.text

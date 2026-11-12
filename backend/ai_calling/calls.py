@@ -49,7 +49,6 @@ async def dry_run(cid: str, request: Request):
         {"key": "provider_validated", "ok": provider_ready(prov), "label": "Bolna configuration verified (Test Connection)"},
         {"key": "emergency_stop", "ok": not s["emergency_stop"], "label": "Emergency stop inactive", "informational": True},
         {"key": "server_enabled", "ok": gate.server_calling_enabled(), "label": "Server-side calling enabled", "informational": True},
-        {"key": "bolna_approved", "ok": gate.SINGLE_TEST_CALL_APPROVED, "label": "Single test call approved (Phase 4B)", "informational": True},
     ]
     blocking = [c for c in checks if not c["ok"] and not c.get("informational")]
     if blocking:

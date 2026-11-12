@@ -86,7 +86,7 @@ def test_call_now_wrong_name_400(s, candidates):
     c = approved[0]
     r = s.post(f"{API}/test-candidates/{c['id']}/call-now", headers=CSRF,
                json={"idempotency_key": _key(), "confirm_name": "wrong name"})
-    assert r.status_code == 423  # Phase 5 server-side lock is checked first
+    assert r.status_code == 400  # lock replaced by real gates: input validation first
     assert "locked" in r.json().get("detail", "")
 
 
@@ -102,13 +102,13 @@ def test_call_now_bad_idempotency_400(s, candidates, key):
     c = candidates[0]
     r = s.post(f"{API}/test-candidates/{c['id']}/call-now", headers=CSRF,
                json={"idempotency_key": key, "confirm_name": "wrong name"})
-    assert r.status_code == 423
+    assert r.status_code == 400
 
 
 def test_call_now_unknown_candidate_404(s):
     r = s.post(f"{API}/test-candidates/{ObjectId()}/call-now", headers=CSRF,
                json={"idempotency_key": _key(), "confirm_name": "wrong name"})
-    assert r.status_code == 423
+    assert r.status_code == 404
 
 
 # Locked controls

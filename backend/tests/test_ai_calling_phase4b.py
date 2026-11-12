@@ -99,7 +99,7 @@ def test_happy_path_one_request_idempotent_and_blocking(monkeypatch):
         assert r.status_code == 200 and r.json()["state"] == "accepted"
         assert len(sent) == 1 and sent[0]["recipient_phone_number"] == "+919876500001"
         assert sent[0]["from_phone_number"] == "+918000001993" and sent[0]["agent_id"] == AGENT
-        assert set(sent[0]["user_data"]) == {"candidate_name", "company_name", "job_role", "interview_date", "interview_time", "office_address"}
+        assert set(sent[0]["user_data"]) == {"candidate_name", "company_name", "job_role", "interview_date", "interview_time", "office_address", "call_purpose"}
         c = await db.ai_calls.find_one({})
         assert c["execution_id"] == "ex-1" and c["status"] == "queued" and c["state"] == "accepted" and c["test_candidate_id"] == cid
         assert c.get("completed_at") is None

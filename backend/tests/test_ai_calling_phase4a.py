@@ -25,7 +25,9 @@ def test_spoken_formats():
 
 def test_user_data_has_exact_variables():
     ud = user_data_for(CAND)
-    assert set(ud) == {"candidate_name", "company_name", "job_role", "interview_date", "interview_time", "office_address"}
+    assert set(ud) == {"candidate_name", "company_name", "job_role", "interview_date", "interview_time", "office_address", "call_purpose"}
+    assert ud["call_purpose"] == "interview_confirmation"
+    assert user_data_for(CAND, "missed_interview_followup")["call_purpose"] == "missed_interview_followup"
 
 
 def test_build_request_documented_fields_only():

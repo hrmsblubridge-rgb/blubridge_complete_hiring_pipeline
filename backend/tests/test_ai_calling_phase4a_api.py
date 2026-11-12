@@ -103,7 +103,7 @@ class TestDryRun:
         b = d["body"]
         assert b["recipient_phone_number"] == "+91*****0303"
         assert "*" in b["from_phone_number"]
-        assert set(b["user_data"]) == {"candidate_name", "company_name", "job_role", "interview_date", "interview_time", "office_address"}
+        assert set(b["user_data"]) == {"candidate_name", "company_name", "job_role", "interview_date", "interview_time", "office_address", "call_purpose"}
         assert b["user_data"]["interview_time"] == "2 PM IST"
         assert "," in b["user_data"]["interview_date"]
         assert "9000000303" not in r.text and "gAAAA" not in r.text

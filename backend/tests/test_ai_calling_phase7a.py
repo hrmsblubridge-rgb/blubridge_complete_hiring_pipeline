@@ -156,12 +156,12 @@ def test_test_gate_needs_consent_not_approval(monkeypatch):
         v = await gate.evaluate(mode="testing", test_candidate_id=str(oid), batch_id="", phone_e164="+919000000081", mode_version=1, single_call=True)
         keys = {c["key"]: c["ok"] for c in v["checks"]}
         assert "admin_approved" not in keys and keys["consent"] and keys["phone_matches"]
-        assert keys["no_emergency_stop"] is False and keys["bolna_approved"] is False and v["allowed"] is False
+        assert keys["no_emergency_stop"] is False and v["allowed"] is False
         await d.ai_test_candidates.update_one({"_id": oid}, {"$set": {"consent_status": "withdrawn"}})
         v = await gate.evaluate(mode="testing", test_candidate_id=str(oid), batch_id="", phone_e164="+919000000081", mode_version=1, single_call=True)
         assert {c["key"]: c["ok"] for c in v["checks"]}["consent"] is False
         r = await tc.post(f"/test-candidates/{oid}/call-now", json={"idempotency_key": "idem-key-phase7a-00001", "confirm_name": "x"}, headers=H)
-        assert r.status_code == 423  # Call Now stays locked
+        assert r.status_code == 400  # wrong confirmation name; Emergency Stop would block it next
     run(monkeypatch, case)
 
 

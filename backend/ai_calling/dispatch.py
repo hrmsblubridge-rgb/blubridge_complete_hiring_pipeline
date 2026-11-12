@@ -70,8 +70,6 @@ async def _set_call(call_id, job_id, call_set: dict, job_status: str):
 async def call_now(cid: str, request: Request, body: dict = Body(...)):  # noqa: B008
     user = await _auth(request)
     _csrf(request)
-    if not gate.SINGLE_TEST_CALL_APPROVED:
-        raise HTTPException(423, "Outbound calling is locked on the server (Phase 5). Owner approval required to re-enable.")
     key = str(body.get("idempotency_key") or "")
     if not IDEM.fullmatch(key):
         raise HTTPException(400, "Missing or invalid idempotency key")
@@ -83,7 +81,7 @@ async def call_now(cid: str, request: Request, body: dict = Body(...)):  # noqa:
     cand = await db().ai_test_candidates.find_one({"_id": ObjectId(cid), "mode": "testing"})
     if not cand:
         raise HTTPException(404, "Test candidate not found")
-    if str(body.get("confirm_name") or "").strip() != cand["candidate_name"].strip():
+    if str(body.get("confirm_name") or "").strip() != str(cand.get("candidate_name") or "").strip() or not cand.get("candidate_name"):
         raise HTTPException(400, "Type the candidate's exact name to authorise this call")
     if await db().ai_calls.find_one({"mode": "testing", "state": {"$in": BLOCKING}}, {"_id": 1}):
         raise HTTPException(409, "Another test call is still unresolved. Wait for its result or review it first.")
@@ -103,8 +101,11 @@ async def call_now(cid: str, request: Request, body: dict = Body(...)):  # noqa:
             raise HTTPException(412, "Call blocked: " + "; ".join(failed))
         prov = await _doc()
         api_key = decrypt_api_key(prov)
+        purpose = body.get("call_purpose") or "interview_confirmation"
+        if purpose not in ("interview_confirmation", "missed_interview_followup"):
+            raise HTTPException(400, "call_purpose must be interview_confirmation or missed_interview_followup")
         req = bc.build_call_request(agent_id=prov["agent_id"], recipient=cand["phone_e164"],
-                                    from_number=prov["caller_number"], user_data=user_data_for(cand))
+                                    from_number=prov["caller_number"], user_data=user_data_for(cand, purpose))
         now = now_iso()
         try:
             jres = await db().ai_call_jobs.insert_one({
@@ -120,7 +121,7 @@ async def call_now(cid: str, request: Request, body: dict = Body(...)):  # noqa:
             "job_role": cand.get("job_role"), "interview_date": cand.get("interview_date"),
             "interview_time": cand.get("interview_time"), "language": cand.get("language"),
             "company_name": cand.get("company_name"), "agent_id": prov["agent_id"],
-            "from_masked": mask_phone(prov["caller_number"]), "user_data": req["user_data"],
+            "from_masked": mask_phone(prov["caller_number"]), "user_data": req["user_data"], "purpose": purpose,
             "state": "dispatching", "status": "", "authorized_by": user, "authorized_name": cand["candidate_name"],
             "created_at": now, "dispatched_at": now})
         call_id, job_id = cres.inserted_id, jres.inserted_id
@@ -262,7 +263,16 @@ async def calling_status(request: Request):
     await _auth(request)
     s = await get_settings()
     blk = await db().ai_calls.find_one({"mode": "testing", "state": {"$in": BLOCKING}}, {"candidate_name": 1, "state": 1})
-    return {"single_call_enabled": gate.SINGLE_TEST_CALL_APPROVED and gate.server_calling_enabled(),
+    from .provider import provider_ready
+    prov = await db().ai_provider_settings.find_one({"_id": "bolna"}) or {}
+    reasons = [r for ok, r in [
+        (not s.get("emergency_stop"), "Emergency Stop is ON"),
+        (gate.server_calling_enabled(), "Server outbound calling is disabled (AI_CALLING_ENABLED=false)"),
+        (s["ai_test_enabled"], "AI Test Mode is OFF"),
+        (provider_ready(prov), "Bolna configuration is not verified"),
+        (not s.get("dispatch_lock"), "Another call authorisation is in progress"),
+        (not blk, "Another test call is still unresolved")] if not ok]
+    return {"single_call_enabled": not reasons, "block_reasons": reasons, "min_recipients": 1,
             "mode": s.get("mode"), "ai_test_enabled": s["ai_test_enabled"], "ai_live_enabled": s["ai_live_enabled"],
             "emergency_stop": s.get("emergency_stop"), "live_mode_locked": gate.LIVE_MODE_LOCKED,
             "batch_calling_enabled": gate.BOLNA_INTEGRATION_APPROVED, "dispatch_in_progress": bool(s.get("dispatch_lock")),

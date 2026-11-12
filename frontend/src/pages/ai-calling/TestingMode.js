@@ -7,6 +7,7 @@ import { ManualCandidateForm } from '../../components/ai-calling/ManualCandidate
 import { CandidateList } from '../../components/ai-calling/CandidateList';
 import { CallingControls } from '../../components/ai-calling/CallingControls';
 import { BatchPanel } from '../../components/ai-calling/BatchPanel';
+import { CallNowDialog } from '../../components/ai-calling/CallNowDialog';
 
 const Q0 = { search: '', consent: 'all', source: '', language: '', ready: '', page: 1 };
 
@@ -17,6 +18,7 @@ export default function TestingMode() {
     const [selected, setSelected] = useState({});
     const [q, setQ] = useState(Q0);
     const [callStatus, setCallStatus] = useState(null);
+    const [calling, setCalling] = useState(null);
 
     const load = useCallback(async () => {
         try {
@@ -50,9 +52,10 @@ export default function TestingMode() {
                 </div>
                 <SampleSheetUpload onImported={load} />
                 <ManualCandidateForm settings={settings} onSaved={load} />
-                <CallingControls selectedCount={Object.keys(selected).length} status={callStatus} />
+                <CallingControls selected={Object.values(selected)} status={callStatus} onCall={setCalling} />
                 <CandidateList data={data} q={q} setQ={setQ} selected={selected} setSelected={setSelected} reload={load} callStatus={callStatus} />
                 <BatchPanel selected={Object.keys(selected)} clearSelected={() => setSelected({})} batches={batches} reload={load} startEnabled={!!settings?.bolna_integration_approved} />
+                {calling && <CallNowDialog key={calling.id} candidate={calling} onClose={() => setCalling(null)} onDone={() => { setCalling(null); load(); }} />}
             </main>
         </div>
     );

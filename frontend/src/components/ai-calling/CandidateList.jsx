@@ -23,11 +23,9 @@ const BulkBtn = ({ children, ...p }) => <button {...p} className="px-3 py-1.5 ro
 
 export const CandidateList = ({ data, q, setQ, selected, setSelected, reload, callStatus }) => {
     const [calling, setCalling] = useState(null);
-    const callBlockReason = (c) => !callStatus?.single_call_enabled ? 'Single test calls are disabled on the server'
-        : !callStatus?.ai_test_enabled ? 'AI Test Mode is OFF'
-            : callStatus?.emergency_stop ? 'Emergency stop is ON'
-            : callStatus?.blocking_call ? 'Another test call is still unresolved'
-                : c.readiness !== 'ready' ? 'Consent must be recorded and the recipient must not be Do Not Call' : '';
+    const callBlockReason = (c) => callStatus?.block_reasons?.length ? callStatus.block_reasons[0]
+        : !callStatus?.single_call_enabled ? 'Calling status is unavailable'
+            : c.readiness !== 'ready' ? 'Recipient is missing test-call consent or is marked Do Not Call' : '';
     const [editing, setEditing] = useState(null);
     const [bulk, setBulk] = useState(null);
     const [dryRun, setDryRun] = useState(null);

@@ -36,7 +36,7 @@ def test_public_consent_manage_unknown_404():
 
 
 def test_public_booking_consent_unknown_404():
-    r = requests.post(f"{API}/public/booking-consent/{_tok()}", json={"granted": True, "text_version": "2026-06-v3"})
+    r = requests.post(f"{API}/public/booking-consent/{_tok()}", json={"granted": True, "text_version": "2026-06-v4"})
     assert r.status_code in (404, 429)
 
 
@@ -46,7 +46,7 @@ def test_public_consent_withdraw_unknown_404():
 
 def test_public_consent_text():
     d = requests.get(f"{API}/public/consent-text").json()
-    assert d["version"] == "2026-06-v3" and d["title"] == "Optional AI Voice Call Consent" and d["default_checked"] is False
+    assert d["version"] == "2026-06-v4" and d["title"] == "Optional AI Voice Call Consent" and d["default_checked"] is False
 
 
 # --- real bookings preview (read-only)
@@ -84,12 +84,12 @@ def test_switches_live_limits(s):
 
 def test_consent_preview_v2(s):
     d = s.get(f"{API}/consent/preview").json()
-    assert d["version"] == "2026-06-v3" and d["default_checked"] is False and "withdraw" in d["text"]
+    assert d["version"] == "2026-06-v4" and d["default_checked"] is False and "withdraw" in d["text"]
 
 
 # --- settings validation for live limits
-@pytest.mark.parametrize("body", [{"live_daily_call_limit": 21}, {"live_daily_call_limit": -1},
-                                  {"live_max_concurrent_calls": 0}, {"live_max_concurrent_calls": 2}, {"live_pilot_daily_cap": 21}])
+@pytest.mark.parametrize("body", [{"live_daily_call_limit": 100001}, {"live_daily_call_limit": -1},
+                                  {"live_max_concurrent_calls": 0}, {"live_max_concurrent_calls": 51}, {"live_pilot_daily_cap": 100001}])
 def test_settings_live_limits_invalid_400(s, body):
     assert s.put(f"{API}/settings", json=body, headers=H).status_code == 400
 

@@ -5,27 +5,31 @@ import { aiApi, errMsg } from '../../pages/ai-calling/aiApi';
 import { Card } from './AICallingHeader';
 import { LiveReadiness } from './LiveReadiness';
 import { LiveWorkerStatus } from './LiveWorkerStatus';
+import { AlertsPanel } from './AlertsPanel';
 import { fmtTime } from './callFormat';
 
 const planMsg = (r) => `Mock plan: ${r.counts.planned} planned, ${r.counts.needs_review} needs review, ${r.counts.skipped} skipped, ${r.counts.invalidated} invalidated, ${r.counts.unchanged} unchanged`;
-const OUTCOMES = ['CONFIRMED', 'RESCHEDULE_REQUESTED', 'DECLINED', 'DO_NOT_CALL', 'no_answer', 'timeout', 'failed'];
+const OUTCOMES = ['CONFIRMED', 'MISSED_CONFIRMED', 'RUNNING_LATE', 'CLAIMS_ATTENDED', 'RESCHEDULE_REQUESTED', 'DECLINED', 'DO_NOT_CALL', 'UNKNOWN', 'WRONG_NUMBER', 'no_answer', 'busy', 'timeout', 'failed'];
+const PURPOSE = { interview_confirmation: 'Confirmation', missed_interview_followup: 'Missed follow-up' };
 const btn = 'px-3 py-2 rounded-lg text-sm font-semibold border disabled:opacity-40';
 
-const JobsTable = ({ jobs }) => (
+const JobsTable = ({ jobs, onProcess }) => (
     <div className="overflow-x-auto" data-testid="mock-jobs-table">
         <table className="w-full text-sm">
             <thead className="text-[11px] uppercase tracking-wider text-[#9b9787]">
-                <tr>{['Candidate', 'Attempt', 'Planned call', 'Status', 'Reasons / blocked by', 'Mock result'].map(h => <th key={h} className="px-2 py-2 text-left font-semibold">{h}</th>)}</tr>
+                <tr>{['Candidate', 'Purpose', 'Attempt', 'Planned call', 'Status', 'Reasons / blocked by', 'Mock result', ''].map(h => <th key={h} className="px-2 py-2 text-left font-semibold">{h}</th>)}</tr>
             </thead>
             <tbody>
                 {jobs.map(j => (
                     <tr key={j.id} className="border-t border-[#efede5] align-top" data-testid={`mock-job-${j.id}`}>
                         <td className="px-2 py-2"><div className="font-semibold">{j.candidate_name}</div><div className="font-mono text-xs text-[#6b7280]">{j.phone_masked} · {j.source}</div></td>
+                        <td className="px-2 py-2 text-xs font-semibold" data-testid="mock-job-purpose">{PURPOSE[j.purpose] || 'Confirmation'}</td>
                         <td className="px-2 py-2">{j.attempt}</td>
                         <td className="px-2 py-2 whitespace-nowrap">{fmtTime(j.planned_at) || '—'}</td>
                         <td className="px-2 py-2 font-semibold" data-testid="mock-job-status">{j.status}</td>
                         <td className="px-2 py-2 text-xs text-[#6b7280] max-w-[16rem]">{[...(j.reasons || []), ...(j.gate_failed || []).map(k => `gate:${k}`)].join(', ') || '—'}</td>
-                        <td className="px-2 py-2 text-xs">{j.mock_call ? `${j.mock_call.extracted?.attendance_status || j.mock_call.provider_status} · request sent: no` : '—'}</td>
+                        <td className="px-2 py-2 text-xs">{j.mock_call ? `${j.mock_call.extracted?.missed_interview_outcome || j.mock_call.extracted?.attendance_status || j.mock_call.provider_status} · request sent: no` : '—'}</td>
+                        <td className="px-2 py-2">{j.status === 'planned' && <button onClick={() => onProcess(j.id)} data-testid={`mock-job-process-${j.id}`} className="text-xs underline whitespace-nowrap">Process now (mock)</button>}</td>
                     </tr>
                 ))}
             </tbody>
@@ -51,6 +55,7 @@ export const LivePrepPanel = () => {
                 <p className="text-base font-extrabold tracking-wide text-amber-900">MOCK ONLY — NO PHONE CALLS WILL BE PLACED.</p>
             </div>
             <LiveWorkerStatus />
+            <AlertsPanel />
             {d && <LiveReadiness readiness={d.readiness} monitoring={d.monitoring} />}
             <Card>
                 <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -60,9 +65,10 @@ export const LivePrepPanel = () => {
                         {OUTCOMES.map(o => <option key={o} value={o}>{o}</option>)}
                     </select>
                     <button disabled={busy} onClick={() => run('/live-prep/mock-tick', { outcome }, r => (r.claimed ? `Mock worker: ${r.result}` : 'No mock job is due now'))} data-testid="mock-tick-btn" className={`${btn} bg-white border-[#e5e3d8]`}>Run mock worker once</button>
+                    <button disabled={busy} onClick={() => run('/live-prep/mock-run', { outcome }, r => `Mock queue run: ${r.processed} processed`)} data-testid="mock-run-btn" className={`${btn} bg-white border-[#e5e3d8]`}>Run mock queue</button>
                     <button disabled={busy} onClick={() => run('/live-prep/mock-jobs/clear', {}, r => `Cleared ${r.deleted} mock jobs`)} data-testid="mock-clear-btn" className={`${btn} bg-white border-rose-200 text-rose-700`}>Clear mock jobs</button>
                 </div>
-                {d && (d.jobs.length ? <JobsTable jobs={d.jobs} /> : <p className="text-sm text-[#9b9787]" data-testid="mock-jobs-empty">No mock jobs yet.</p>)}
+                {d && (d.jobs.length ? <JobsTable jobs={d.jobs} onProcess={(id) => run(`/live-prep/mock-jobs/${id}/process`, { outcome }, r => `Mock call: ${r.result}`)} /> : <p className="text-sm text-[#9b9787]" data-testid="mock-jobs-empty">No mock jobs yet.</p>)}
             </Card>
         </div>
     );

@@ -30,14 +30,14 @@ def reg(**kw):
     return d
 
 
-def run(monkeypatch, case, user="pytest-admin", top="pytest-admin"):
+def run(monkeypatch, case, user="pytest-admin", top="pytest-admin", settings=None):
     calls = {"bolna": 0}
 
     async def main():
         client = AsyncIOMotorClient("mongodb://localhost:27017")
         name = f"{SCRATCH}_{uuid.uuid4().hex[:8]}"
         d = client[name]
-        await d.ai_call_settings.insert_one({"_id": "global", **SETTINGS_DEFAULTS})
+        await d.ai_call_settings.insert_one({"_id": "global", **SETTINGS_DEFAULTS, "missed_enabled": False, **(settings or {})})
         await d.ai_candidate_consents.create_index("registration_id", unique=True)
 
         async def auth(_r):
@@ -57,8 +57,9 @@ def run(monkeypatch, case, user="pytest-admin", top="pytest-admin"):
         await consent.ensure_consent_indexes()
         await live_prep.ensure_live_prep_indexes()
         app = FastAPI()
+        from ai_calling import purposes, dispatch
         for r in (consent.public_router, consent.admin_router, modes.modes_router, live_prep.live_prep_router,
-                  retention.retention_router):
+                  retention.retention_router, purposes.purposes_router, dispatch.dispatch_router):
             app.include_router(r)
         try:
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
@@ -300,7 +301,7 @@ def test_mock_tick_confirmed_zero_requests(monkeypatch):
         j = await d.ai_live_mock_jobs.find_one({})
         mc = j["mock_call"]
         assert mc["registration_id"] == rid and mc["mode"] == "live" and mc["execution_id"].startswith("mock_")
-        assert set(mc["user_data"]) == {"candidate_name", "company_name", "job_role", "interview_date", "interview_time", "office_address"}
+        assert set(mc["user_data"]) == {"candidate_name", "company_name", "job_role", "interview_date", "interview_time", "office_address", "call_purpose"}
         assert set(mc["extracted"]) == set(live_prep.EXTRACTION_FIELDS) and mc["confirmed_attendance"] is True
         assert await d.ai_calls.count_documents({}) == 0  # mock never pollutes Candidate Profile history
         assert (await live_prep.mock_tick("w1", now=due))["claimed"] is None  # no duplicate

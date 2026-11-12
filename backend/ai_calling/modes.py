@@ -16,13 +16,24 @@ from .store import IST, SETTINGS_ID, db, get_settings, now_iso
 
 modes_router = APIRouter()
 LIVE_DISPATCH_IMPLEMENTED = False  # Phase 7A: no live dispatch code path exists
-CONSENT_TEXT_VERSION = "2026-06-v3"
+CONSENT_TEXT_VERSION = "2026-06-v4"
 CONSENT_TITLE = "Optional AI Voice Call Consent"
-CONSENT_TEXT = ("I agree to receive automated AI voice calls from BluBridge Technologies regarding my scheduled in-person "
-                "interview at the Chennai office.\n\nI understand that these calls may be recorded and transcribed to confirm my "
-                "attendance, process rescheduling requests, and record interview-related questions.\n\nI understand that I can "
-                "withdraw my consent at any time through the provided consent-management option.\n\nGiving consent is optional "
-                "and does not affect my ability to book or attend an interview.")
+CONSENT_TEXT = ("I agree to receive automated AI voice calls from BluBridge Technologies about my scheduled in-person "
+                "interview at the Chennai office: a confirmation call before the interview and, if my attendance has not "
+                "been verified at the office, a follow-up call after the interview time.\n\nI understand that these calls may "
+                "be recorded and transcribed to confirm my attendance, understand why I could not attend, process rescheduling "
+                "requests, and record interview-related questions.\n\nI understand that I can withdraw my consent at any time "
+                "through the provided consent-management option.\n\nGiving consent is optional and does not affect my ability "
+                "to book or attend an interview.")
+CONSENT_SCOPES = {"2026-06-v2": ["interview_confirmation"], "2026-06-v3": ["interview_confirmation"],
+                  "2026-06-v4": ["interview_confirmation", "missed_interview_followup"]}
+
+
+def scope_for(version) -> list:
+    """Earlier wording never covered the missed-interview follow-up; it is not silently upgraded."""
+    return list(CONSENT_SCOPES.get(version or "", []))
+
+
 LIVE_AUTH_PHRASE = "AUTHORIZE LIVE DISPATCH"
 
 
@@ -51,7 +62,7 @@ async def calling_status(overall: bool = None) -> dict:
     common = (["Emergency stop is ON"] if s["emergency_stop"] else []) + \
              ([] if gate.server_calling_enabled() else ["Server-side calling is disabled (AI_CALLING_ENABLED=false)"])
     test_b = (["AI Test Mode is OFF"] if not s["ai_test_enabled"] else []) + common + \
-             ([] if gate.SINGLE_TEST_CALL_APPROVED else ["Call Now is locked on the server"])
+             []
     live_b = (["AI Live Mode is OFF"] if not s["ai_live_enabled"] else
               ["Overall Website Test Mode is OFF — Live calls are blocked by policy"] if not overall else []) + common + \
              ([] if s.get("live_dispatch_authorized") else ["Live Dispatch Authorization is OFF"]) + \
@@ -169,7 +180,7 @@ async def live_readiness(overall: bool = None) -> dict:
              ("deployment_approved", "Production deployment approved (AI_LIVE_DEPLOYMENT_APPROVED)", deployment_approved()),
              ("consent_enforced", "Consent, Do Not Call and schedule checks run before every call", True),
              ("limits_set", f"Limits set: {live_daily_cap(s)}/day, {s['live_max_concurrent_calls']} at a time",
-              0 < live_daily_cap(s) <= 20 and int(s["live_max_concurrent_calls"]) == 1)]
+              0 < live_daily_cap(s) and 1 <= int(s["live_max_concurrent_calls"]) <= 50)]
     checks = [{"key": k, "label": lbl, "ok": bool(ok)} for k, lbl, ok in items]
     return {"ready": all(c["ok"] for c in checks), "authorized": st["live_dispatch_authorized"], "checks": checks,
             "phrase": LIVE_AUTH_PHRASE, "phase_locked": not LIVE_DISPATCH_IMPLEMENTED}

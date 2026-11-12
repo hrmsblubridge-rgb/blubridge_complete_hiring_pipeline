@@ -5,6 +5,11 @@ from datetime import date, datetime
 
 REQUIRED_VARIABLES = ["candidate_name", "company_name", "job_role", "interview_date", "interview_time", "office_address"]
 EXTRACTION_FIELDS = ["attendance_status", "wants_reschedule", "requested_virtual", "rejection_reason", "candidate_questions", "call_summary"]
+MISSED_FIELDS = ["missed_interview_outcome", "missed_interview_reason", "expected_arrival_time", "attendance_dispute",
+                 "preferred_reschedule_datetime"]
+ALL_FIELDS = EXTRACTION_FIELDS + MISSED_FIELDS
+MISSED_OUTCOMES = {"MISSED_CONFIRMED", "RUNNING_LATE", "CLAIMS_ATTENDED", "RESCHEDULE_REQUESTED", "DECLINED", "DO_NOT_CALL",
+                   "WRONG_NUMBER", "UNKNOWN"}
 EXTRACTION_CATEGORY = "Interview Call Results"
 STATUS_RANK = {"queued": 0, "initiated": 1, "ringing": 2, "in-progress": 3, "call-disconnected": 4}
 TERMINAL = {"completed", "no-answer", "busy", "failed", "canceled", "stopped", "error", "balance-low"}
@@ -29,9 +34,9 @@ def spoken_time(hhmm: str) -> str:
     return t.strftime("%I:%M %p").lstrip("0").replace(":00 ", " ") + " IST"
 
 
-def user_data_for(cand: dict) -> dict:
+def user_data_for(cand: dict, call_purpose: str = "interview_confirmation") -> dict:
     """Values come only from the saved test candidate record."""
-    return {
+    return {"call_purpose": call_purpose,
         "candidate_name": cand["candidate_name"], "company_name": cand["company_name"], "job_role": cand["job_role"],
         "interview_date": spoken_date(cand["interview_date"]), "interview_time": spoken_time(cand["interview_time"]),
         "office_address": cand["office_address"],
@@ -64,12 +69,12 @@ def _flatten(data: dict) -> tuple:
     """Support extracted_data[category][field] (observed) and extracted_data[field] (flat)."""
     flat, meta, category = {}, {}, None
     for k, v in data.items():
-        if isinstance(v, dict) and any(f in v for f in EXTRACTION_FIELDS):
+        if isinstance(v, dict) and any(f in v for f in ALL_FIELDS):
             category = category or k
-            for f in EXTRACTION_FIELDS:
+            for f in ALL_FIELDS:
                 if f in v and f not in flat:
                     flat[f] = v[f]
-    for f in EXTRACTION_FIELDS:
+    for f in ALL_FIELDS:
         if f in data and f not in flat:
             flat[f] = data[f]
     for f, v in flat.items():
@@ -104,8 +109,23 @@ def normalize_extraction(extracted) -> dict:
         "rejection_reason": _text(vals.get("rejection_reason")),
         "candidate_questions": qs,
         "call_summary": _text(vals.get("call_summary")),
+        "missed_interview_outcome": _missed_outcome(vals.get("missed_interview_outcome")),
+        "missed_interview_reason": _text(vals.get("missed_interview_reason")),
+        "expected_arrival_time": _text(vals.get("expected_arrival_time")),
+        "attendance_dispute": _bool(vals.get("attendance_dispute")),
+        "preferred_reschedule_datetime": _text(vals.get("preferred_reschedule_datetime")),
+        "missed_fields_present": [f for f in MISSED_FIELDS if f in flat],
         "field_meta": meta,
     }
+
+
+def _missed_outcome(v):
+    """None when the field is absent/incomplete; unclear values stay UNKNOWN (never guessed)."""
+    t = _text(v)
+    if t is None:
+        return None
+    t = re.sub(r"[\s\-]+", "_", t).upper()
+    return t if t in MISSED_OUTCOMES else "UNKNOWN"
 
 
 def normalize_execution(ex: dict) -> dict:

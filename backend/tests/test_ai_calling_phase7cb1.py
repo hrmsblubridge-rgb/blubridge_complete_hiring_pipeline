@@ -161,7 +161,8 @@ def test_backlog_never_dialled_late(monkeypatch):
         late = IV - timedelta(days=1) + timedelta(hours=2)
         r = await live_prep.mock_tick("w1", now=late)
         assert r["claimed"] is None and r["expired_backlog"] == 1
-        assert (await d.ai_live_mock_jobs.find_one({}))["status"] == "expired_backlog"
+        j = await d.ai_live_mock_jobs.find_one({})
+        assert j["status"] == "needs_review" and j["reasons"] == ["STALE_BACKLOG"]
     run(monkeypatch, case)
 
 

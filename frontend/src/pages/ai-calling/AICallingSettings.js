@@ -7,6 +7,7 @@ import { BolnaConfigPanel } from '../../components/ai-calling/BolnaConfigPanel';
 import { ModeSwitchesPanel } from '../../components/ai-calling/ModeSwitchesPanel';
 import { ConsentPreview } from '../../components/ai-calling/ConsentPreview';
 import { RetentionPanel } from '../../components/ai-calling/RetentionPanel';
+import { SchedulingPanel } from '../../components/ai-calling/SchedulingPanel';
 
 const inputCls = 'w-full bg-white border border-[#e5e3d8] rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-teal-500';
 const FIELDS = [
@@ -59,6 +60,7 @@ export default function AICallingSettings() {
                     <div className="flex justify-end mt-4"><button onClick={save} data-testid="settings-save-btn" className="px-5 py-2.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold">Save settings</button></div>
                 </Card>
                 <BolnaConfigPanel />
+                <SchedulingPanel />
                 <ConsentPreview />
                 <RetentionPanel />
                 <Card>
