@@ -183,6 +183,8 @@ async def live_readiness(overall: bool = None) -> dict:
              ("overall_test_on", "Overall Website Test Mode is ON", st["overall_test_mode"]),
              ("server_enabled", "Server calling enabled (AI_CALLING_ENABLED)", st["server_calling_enabled"]),
              ("emergency_stop_off", "Emergency Stop is OFF", not st["emergency_stop"]),
+             ("live_calling_stop_off", "Live Calling Stop is OFF (Test Mode is unaffected)",
+              s.get("live_calling_stop", True) is False),
              ("provider_verified", "Bolna configuration verified", provider_ready(prov)),
              ("deployment_approved", "Production deployment approved (AI_LIVE_DEPLOYMENT_APPROVED)", deployment_approved()),
              ("consent_enforced", "Consent, Do Not Call and schedule checks run before every call", True),

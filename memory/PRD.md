@@ -129,6 +129,35 @@ See `memory/PRODUCTION_READINESS.md` for:
 4. Four-release strategy (code deploy → single test call → limited pilot → full ops).
 5. Rollback via feature flags only (never DB deletion).
 
+### Stage E (Feb 2026) — Independent admin-editable safety switches
+Two new admin-only, audited switches wired end-to-end:
+- **Live Calling Stop** — defaults ON. Blocks Live dispatch only. Independent of
+  Global Emergency Stop. `POST /api/ai-calling/live-calling-stop`. Release requires
+  typing `RELEASE LIVE CALLING STOP`.
+- **Test Calling Permitted** — defaults OFF. Permits Test-Mode real outbound only.
+  Never unlocks Live. `POST /api/ai-calling/test-calling-permitted`. Enable requires
+  typing `PERMIT TEST CALLING`.
+
+Enforcement surfaces (all three fixed in Stage E for drift-free behaviour):
+- `router.safety_status` — `effective.test_blockers` and `effective.live_blockers`.
+- `modes.calling_status` — surfaces both flags in `test.blockers` / `live.blockers`
+  and exposes them at the top level of `/switches`.
+- `modes.evaluate_live` — adds `live_calling_stop_off` to the live-readiness check.
+- `safety_flags.effective_test_permission` tightened to strict-`True` identity
+  (previously truthy; `1`, `"yes"` would have passed).
+
+UI integration:
+- `Settings → Safety Controls` card shows two new "Admin-editable gates" rows above
+  the gate checklist, each with dialog-driven typed confirmation.
+- Gate checklist rows added for Test Calling Permitted + Live Calling Stop.
+- `Live Mode` page shows a new "Live safety controls" card at the top with both
+  toggles plus a Live Stop / Emergency Stop status badge pair.
+
+Regression: 24 new tests (13 in `test_live_calling_stop_endpoints.py` + 11 in
+`test_independent_safety_switches_api.py`), all phase 5 + 7A tests still green,
+11 field extraction / dispatch-permission suites unchanged — 104 relevant tests
+passing in total.
+
 ## Known limitations
 - No verified Bolna per-recording deletion endpoint; retention stays preview-only.
 - Number-to-agent entitlement not verifiable via public Bolna APIs.

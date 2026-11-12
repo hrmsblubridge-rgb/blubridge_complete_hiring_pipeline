@@ -1,106 +1,136 @@
-# BluBridge Hiring Website · AI Calling — Production Readiness
+# AI Calling · Production Readiness Plan
 
-**Status**: Preview-only engineering complete. No production deployment is authorized by this document.
+> **Status**: PLAN ONLY — no production migrations run, no real calls placed,
+> no live deployment performed as part of this task. All actions below are
+> gated on explicit written user approval.
 
-## 1. Preserve the original production database (D1)
-- Production DB: **`hr_analytics`** (on Render). Never touched by any preview code.
-- Preview DB: **`hiring_ai_testing`** (Emergent). All testing runs here.
-- Every backend read/write is scoped by `MONGO_URL` + `DB_NAME` from `backend/.env`. The AI Calling
-  module adds **only new collections**:
-    - `ai_admin_authorizations`, `ai_admin_authorization_audit`
-    - `ai_consent_drafts`, `ai_consent_versions`
-    - `ai_call_audit` (already existed)
-  Existing hiring collections (`bb_registrations`, consent, OTP, AiSensy state) are **read-only**
-  from this module. No existing document schema is altered.
+## 1. Non-negotiable preview-time invariants (currently enforced)
+| Control | Enforced where | Default |
+|---|---|---|
+| `MONGO_DB_NAME` | `backend/.env` | `hiring_ai_testing` only |
+| `AI_CALLING_ENABLED` | `backend/.env` | `false` |
+| `ENABLE_WHATSAPP` / `ENABLE_EMAIL` | `backend/.env` | `false` |
+| `emergency_stop` | `ai_call_settings` | `true` |
+| `live_calling_stop` (**new**) | `ai_call_settings` | `true` |
+| `test_calling_permitted` | `ai_call_settings` | `false` |
+| `ai_live_enabled` | `ai_call_settings` | `false` |
+| `live_dispatch_authorized` | `ai_call_settings` | `false` |
+| `LIVE_DISPATCH_IMPLEMENTED` | `modes.py` constant | `False` |
+| `BOLNA_INTEGRATION_APPROVED` | `gate.py` constant | `False` |
 
-## 2. Production architecture checklist (D2)
-Verified in code (no production access performed):
-- Render service: existing FastAPI service; no new service required. Backend served on the same
-  process at `/api/ai-calling/*`.
-- Environment variables that must be present in production (names only, never values):
-    - `MONGO_URL` (must point to `hr_analytics`), `DB_NAME`, `JWT_SECRET`, `COOKIE_SECRET`,
-      `AI_PROVIDER_ENCRYPTION_KEY`, `AI_CALLING_ENABLED` (**must be `false` on first deploy**),
-      `BOLNA_API_KEY` (only if not stored encrypted in DB), `BOLNA_AGENT_ID`, `WEBHOOK_SECRET`.
-- Existing `AI_TRUSTED_PROXY_HOPS` and CSRF handling are preserved.
-- Existing authentication (session cookie + `X-CSRF-Intent: ai-calling` on POSTs) is preserved
-  on every new route.
-- Required indexes (created idempotently on startup by `ensure_admin_auth_indexes`):
-    - `ai_admin_authorizations.registration_id` (unique)
-    - `ai_admin_authorization_audit.(registration_id, at desc)`
-    - `ai_consent_versions.version_id` (unique)
-    - `ai_consent_versions.published_at`
+None of the above may be relaxed in the same change-set that bumps a release.
 
-## 3. Migration plan (D3)
-Additive and idempotent:
-1. Deploy new code to Render (AI_CALLING_ENABLED=false). Startup runs `ensure_admin_auth_indexes()`
-   which creates the new collections lazily. **No existing collection is touched.**
-2. No data backfill runs. Candidate consents that predate the new editor are visible as
-   `LEGACY_UNVERIFIED` in Pending Authorization without any write.
-3. Existing live bookings keep their original `registration_id`.
-4. If preview/production schemas diverge in a field name later discovered during deployment,
-   migration is **read-adapters only** (in `candidates.py`); no rewrite.
+## 2. Independent admin-editable gates (Stage E)
+Two switches editable from the admin UI, both audited and independently enforced
+in `router.safety_status`, `modes.calling_status`, `modes.evaluate_live`,
+`safety_flags.py` and `gate.py`:
 
-## 4. Release strategy (D4)
-**Nothing below is executed by this task.** All require a separate explicit approval.
+| Switch | Blocks | Does NOT touch | Enabling requires |
+|---|---|---|---|
+| Global Emergency Stop | Test **and** Live | — | Live (already shipped) |
+| **Live Calling Stop** | Live only | Test Mode | Live (new) |
+| **Test Calling Permitted** | Test only | Live Mode | Typed `PERMIT TEST CALLING` |
 
-### Release 1 — Code deploy, calling disabled
-- Pre-check: `AI_CALLING_ENABLED=false`, `ENABLE_WHATSAPP=false` NOT required in prod, but the
-  AI Calling module never sends WhatsApp/email itself; it only reads candidate records.
-- Deploy via Render. Verify `/api/ai-calling/safety-status` returns `authoritative=true`,
-  `emergency_stop.active=true`, `effective.can_place_test_call=false`,
-  `effective.can_place_live_call=false`.
-- Verify existing booking flow, OTP verification and AiSensy workflow still work.
-- Spot-check Pending Authorization lists real future candidates (count only, no action).
+Release-direction phrases:
+- `RELEASE EMERGENCY STOP` — release global stop.
+- `RELEASE LIVE CALLING STOP` — release Live-only stop.
+- `PERMIT TEST CALLING` — grant Test-only outbound.
 
-### Release 2 — Controlled single test call
-- Flip `test_calling_permitted` to `true` **temporarily** via Settings → Safety Controls (new
-  control; defaults OFF; server-enforced).
-- Verify the specific test colleague's consent and masked phone.
-- Place one call via Call Now with typed confirmation.
-- Verify execution_id, webhook, transcript, recording, and all 11 extraction fields appear in
-  Candidate Profile AI Calling History.
-- Flip `test_calling_permitted` back to OFF immediately after.
+Engage/revoke directions require **no** phrase (fail-safe direction).
 
-### Release 3 — Limited Live pilot
-- Legal / telecom DPDP consent review signed off.
-- Set `live_pilot_daily_cap` to a small number (e.g. 10).
-- Flip `live_dispatch_authorized` with typed confirmation and `AI_CALLING_ENABLED=true` (deploy
-  env change).
-- Monitor results, opt-outs, failures.
+Gate identity is **strict**: a value other than exactly `True` for Test permission,
+or anything other than exactly `False` for either Stop, is treated as "blocked".
+Regression suites: `test_live_calling_stop_endpoints.py` + `test_independent_safety_switches_api.py` +
+`test_test_calling_permitted_enforcement.py`.
 
-### Release 4 — Full automatic operation
-- Remove pilot cap, let scheduler drive both purposes.
-- Keep all per-call gates (consent, DNC, calling window, OTP for missed-follow-up, retries).
+## 3. Production database preservation — `hr_analytics`
+- Do **not** reuse the preview database name. Production env must set
+  `MONGO_DB_NAME=hr_analytics` directly on the host and nowhere else.
+- Migration is **additive**. No `drop`, no `rename`, no `update_many` without
+  `$setOnInsert`.
+- Collections owned by this module (safe to create on first boot):
+  `ai_call_settings`, `ai_test_candidates`, `ai_test_batches`, `ai_call_jobs`,
+  `ai_calls`, `ai_call_audit`, `ai_provider_settings`, `ai_provider_audit`,
+  `ai_webhook_events`, `ai_candidate_consents`, `ai_admin_authorizations`,
+  `ai_admin_authorization_audit`, `ai_consent_drafts`, `ai_consent_versions`,
+  `ai_upload_batches`.
+- Existing production collections (`bb_registrations`, `bb_users`, booking flows,
+  AiSensy, email OTP) are **read-only** from this module. Grep of
+  `backend/ai_calling/` shows zero writes outside the collections above.
+- No synthetic preview record is ever to be copied into production.
 
-## 5. Rollback (D5)
-- Frontend/backend: redeploy prior Render commit; new collections are harmless if left.
-- Feature flags: set `AI_CALLING_ENABLED=false`; set `emergency_stop=true`; set
-  `test_calling_permitted=false`; set `live_dispatch_authorized=false`. Any ONE of these
-  independently stops every call.
-- Queue pause: Emergency Stop cancels all `pending` jobs (`cancel_reason: emergency_stop`).
-- Webhook: route remains live (idempotent record-only); no replay storm.
-- Duplicate-call prevention: `idempotency_key` on `ai_calls` + unique execution_id.
-- **Never use database deletion as rollback.** All new collections are additive.
+## 4. First-boot migration (idempotent)
+`ensure_ai_indexes()` runs on startup and is safe to re-run. It:
+1. Creates every index listed in §3 (idempotent in MongoDB).
+2. Runs a one-time `$set` on `ai_call_settings` filtered by
+   `ai_test_enabled: {"$exists": False}` — upgrades a legacy install exactly once.
+3. `get_settings()` inserts the safe defaults from §1 via `$setOnInsert`, so an
+   existing document is **never** overwritten.
 
-## 6. Legal / compliance (remaining)
-- India DPDP: confirm lawful basis + candidate-specific evidence record before approving any
-  alternative-basis authorization in Pending Authorization.
-- Telecom DLT/DND: verify Bolna/Plivo account has valid outbound entitlement on the purchased number.
-- Recording retention: no verified Bolna per-recording delete endpoint; 90-day retention remains
-  preview-only.
-- Consent wording: must be published by the top-level admin after legal sign-off.
+Expected state on a fresh production boot:
+```
+{ "_id": "global",
+  "emergency_stop": true,
+  "live_calling_stop": true,
+  "test_calling_permitted": false,
+  "ai_test_enabled": true,  "ai_live_enabled": false,
+  "live_dispatch_authorized": false,
+  "mode_version": 2 }
+```
 
-## 7. Bolna provider-side limitations
-- No verified per-recording deletion endpoint.
-- Agent↔calling-number association cannot be fully verified via a read-only Bolna API in all
-  cases. A known-safe read: `GET /v2/agent/{agent_id}` returns `dispositions` + metadata. Number
-  entitlement must be verified by a Bolna account manager or a side-channel console.
-- Extraction nested under `extracted_data["Interview Call Results"]`; parser already handles this
-  and all 11 fields (6 core + 5 missed-interview).
+## 5. Render / deployment checklist (env-var names only; values not stored here)
+| Variable | Purpose | Required |
+|---|---|---|
+| `MONGO_URL` | Production cluster connection | yes |
+| `MONGO_DB_NAME` | Must be `hr_analytics` | yes |
+| `FRONTEND_URL` | CSRF origin whitelist | yes |
+| `AI_CALLING_ENABLED` | Keep `false` until Release 2 | yes |
+| `AI_LIVE_DEPLOYMENT_APPROVED` | Keep `false` until Release 3 | yes |
+| `ENABLE_WHATSAPP` / `ENABLE_EMAIL` | Same policy as today | yes |
+| `BOLNA_API_KEY` | Live Bolna key (set only at Release 2) | later |
+| `PROVIDER_FERNET_KEY` | Required to decrypt any stored Bolna key | yes |
 
-## 8. Safety invariants on every deploy
-- Preview DB name in `backend/.env` must NEVER equal `hr_analytics`.
-- `AI_CALLING_ENABLED` is deployment-level only; it is NOT editable from the admin UI.
-- `emergency_stop`, `ai_test_enabled`, `ai_live_enabled`, `live_dispatch_authorized`,
-  `test_calling_permitted` are all independent. Releasing one NEVER affects another.
-- Admin alternative-basis approvals NEVER write to `ai_candidate_consents`.
+## 6. Four-release rollout
+| # | Name | Preconditions | What changes | Safety-net |
+|---|---|---|---|---|
+| R1 | Code deploy, dry-only | §1 defaults in prod | Code + indexes live; `/safety-status` returns `authoritative: true`; every gate still blocks | All gates block; `AI_CALLING_ENABLED=false` |
+| R2 | Single authorized Test call | `test_calling_permitted=true`, consented test recipient | Exactly one consented test number dialled via Bolna | Live Stop stays ON; Live blocked |
+| R3 | Limited Live pilot | Written approval; `AI_LIVE_DEPLOYMENT_APPROVED=true`; `LIVE_DISPATCH_IMPLEMENTED=True`; `live_calling_stop=false`; `live_dispatch_authorized=true`; `live_pilot_daily_cap=5` | Pilot queue runs within cap | Engage Live Stop or Emergency Stop to abort instantly |
+| R4 | Full automatic | Successful pilot; cap raised | Removed pilot cap; daily cap governs | Same aborts available |
+
+Each release step is a **separate PR** with a **separate approval**. Do not bundle.
+
+## 7. Rollback (feature-flag only — never DB deletion)
+Escalation order:
+1. Toggle **Live Calling Stop** ON → blocks new Live dispatch within one request.
+2. Revoke **Test Calling Permitted** → blocks new Test dispatch.
+3. Engage **Global Emergency Stop** → blocks BOTH and cancels pending jobs.
+4. Set `AI_CALLING_ENABLED=false` on the host (requires redeploy).
+5. If needed, flip `AI_LIVE_DEPLOYMENT_APPROVED=false`.
+
+No step deletes rows. Audit entries in `ai_call_audit` remain for forensics.
+
+## 8. Credential rotation
+- `test_credentials.md` stores the preview admin password only. It is **not**
+  copied into release packages, reports, or logs.
+- Before production launch, rotate the production `Admin User` password through
+  the standard reset flow and leave `test_credentials.md` pointing at a
+  preview-only account.
+- `BOLNA_API_KEY`, `PROVIDER_FERNET_KEY`, WhatsApp provider keys follow the
+  existing secret workflow (`secrets` tool); nothing new introduced here.
+
+## 9. What this task did and did not do
+Done:
+- Added two new audited admin-only endpoints and UI (Settings + Live Mode).
+- Fixed drift in `router.safety_status`, `modes.calling_status`, `modes.evaluate_live`
+  so every surface enforces both new flags consistently.
+- Hardened `effective_test_permission` to strict-`True` identity.
+- 24 new backend tests + 93 pre-existing relevant tests all green.
+
+Not done (deliberate):
+- No production DB connection, migration, or deploy executed.
+- No real Bolna, WhatsApp, SMS, or email dispatch.
+- No change to `AI_CALLING_ENABLED`, AiSensy, employee OTP, or booking flows.
+- No password rotation performed.
+
+**STOP point**: this plan requires explicit sign-off before any release step runs.

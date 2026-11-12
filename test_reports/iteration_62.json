@@ -1,0 +1,34 @@
+{
+  "summary": "Re-tested the fixes for the issues raised in iteration_61. Backend: 15 of 16 tests pass (the 11 earlier tests plus 5 new ones). Both HIGH fixes are confirmed at the API level. safety-status test_blockers now includes test_calling_permitted_off, and can_place_test_call is false. The /switches endpoint exposes both flags at the top level, with matching blocker phrases. The independence matrix holds: each switch affects only its own blocker list, and Emergency Stop appears in both. One failure remains. GET /live-dispatch/readiness does NOT list a live_calling_stop_off check, because live_readiness() builds its own checklist and does not use evaluate_live(). evaluate_live() itself now contains the check, but nothing in production calls it. Frontend: the Settings checklist shows the new safety-row-test-permit and safety-row-live-stop rows with correct text. The Live page renders all the required testids. Enabling Test Calling from the Live page (typed confirmation) saved and showed on Settings after a reload, and revoking it from Settings saved too. The DB was restored to defaults: emergency_stop=True, live_calling_stop=True, test_calling_permitted=False, ai_live_enabled=False.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/ai-calling/live-dispatch/readiness", "issue": "The response checks are: dispatch_implemented, ai_live_on, overall_test_on, server_enabled, emergency_stop_off, provider_verified, deployment_approved, consent_enforced, limits_set. There is no live_calling_stop_off check. The cause is that modes.live_readiness() (lines 175-193) has its own hard-coded items list and never calls evaluate_live(). The new check was added only to evaluate_live() at line 129. Fix: add ('live_calling_stop_off', 'Live Calling Stop is OFF', not st['live_calling_stop']) to the live_readiness items list. POST /live-dispatch/authorize uses the same list, so its audited preconditions also lack the check.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "ai_calling/modes.py evaluate_live()", "issue": "It now checks live_calling_stop, but nothing in production calls it (grep finds only its definition). live_prep.py has no reference to live_calling_stop. Enforcement of the Live Stop in code still depends on LIVE_DISPATCH_IMPLEMENTED=False."},
+      {"endpoint": "safety_flags.py / router.safety_status / modes.calling_status", "issue": "The blocker logic is still duplicated in three places. They agree now, but that is how the drift happened in the first place."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_independent_safety_switches_api.py", "/app/backend/tests/test_safety_drift_fixes_iter62.py", "/app/test_reports/pytest/iter62.xml"],
+  "action_items": [
+    "Add a live_calling_stop_off check to modes.live_readiness() so that GET /live-dispatch/readiness lists it: ok=false when the stop is engaged, true when released.",
+    "Optionally, have live_readiness and live_prep reuse evaluate_live or the safety_flags helpers, so the checklists cannot drift apart again."
+  ],
+  "critical_code_review_comments": [
+    "live_readiness() and evaluate_live() are two separate checklists that have drifted apart. The fix went into the function the readiness endpoint does not use.",
+    "router.safety_status, modes.calling_status and safety_flags each compute the blockers. Keep one implementation."
+  ],
+  "updated_files": ["/app/backend/tests/test_safety_drift_fixes_iter62.py"],
+  "success_rate": {"backend": "94% (15/16; the original 11/11 pass)", "frontend": "100%"},
+  "test_credentials": "Admin User / QAZwsx##123 works. /app/memory/test_credentials.md still lists the password as 'Admin User', which is out of date.",
+  "seed_data_creation": "None. Switches were toggled and restored. This created audit rows in ai_call_audit with reasons TEST_es, TEST_ls, TEST_tp and TEST_restore.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run with: REACT_APP_BACKEND_URL=... pytest -n0 -p no:randomly tests/test_independent_safety_switches_api.py tests/test_safety_drift_fixes_iter62.py. Only test_readiness_live_stop_check fails, until live_readiness gets the new check. Mutations need the headers X-CSRF-Intent: ai-calling and Origin=BASE_URL. Confirm phrases: 'RELEASE EMERGENCY STOP', 'RELEASE LIVE CALLING STOP', 'PERMIT TEST CALLING'. The UI dialog testids are independent-switch-typed, -reason, -confirm and -cancel.",
+  "rca of the issue": "The readiness endpoint calls modes.live_readiness(), which builds its own items list. The fix for iteration_61 added live_calling_stop_off only to evaluate_live(), which the endpoint does not call. To reproduce, call GET /api/ai-calling/live-dispatch/readiness: the check keys do not include live_calling_stop_off."
+}
