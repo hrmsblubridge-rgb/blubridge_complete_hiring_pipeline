@@ -8,6 +8,7 @@ const TABS = [
     { to: '/ai-calling', label: 'Dashboard', end: true },
     { to: '/ai-calling/testing', label: 'Testing Mode' },
     { to: '/ai-calling/live', label: 'Live Mode' },
+    { to: '/ai-calling/pending-authorization', label: 'Pending Authorization' },
     { to: '/ai-calling/history', label: 'Call History' },
     { to: '/ai-calling/settings', label: 'Settings' },
 ];

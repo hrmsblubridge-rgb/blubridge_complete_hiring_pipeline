@@ -51,6 +51,7 @@ async def ensure_ai_indexes():
     from .live_prep import ensure_live_prep_indexes
     await ensure_consent_indexes()
     await ensure_live_prep_indexes()
+    await ensure_admin_auth_indexes()
     await startup_recover()
 
 
@@ -400,7 +401,9 @@ from .consent import admin_router as consent_admin_router, public_router as cons
 from .live_prep import live_prep_router  # noqa: E402
 from .retention import retention_router  # noqa: E402
 from .purposes import purposes_router  # noqa: E402
+from .admin_auth import admin_auth_router, ensure_admin_auth_indexes  # noqa: E402
 
+ai_router.include_router(admin_auth_router)
 ai_router.include_router(purposes_router)
 
 ai_router.include_router(retention_router)

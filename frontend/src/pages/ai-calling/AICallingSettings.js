@@ -7,6 +7,8 @@ import { BolnaConfigPanel } from '../../components/ai-calling/BolnaConfigPanel';
 import { ModeSwitchesPanel } from '../../components/ai-calling/ModeSwitchesPanel';
 import { SafetyControlsPanel } from '../../components/ai-calling/SafetyControlsPanel';
 import { ConsentPreview } from '../../components/ai-calling/ConsentPreview';
+import { ConsentEditorPanel } from '../../components/ai-calling/ConsentEditorPanel';
+import { CapacitySummaryPanel } from '../../components/ai-calling/CapacitySummaryPanel';
 import { RetentionPanel } from '../../components/ai-calling/RetentionPanel';
 import { SchedulingPanel } from '../../components/ai-calling/SchedulingPanel';
 import { useSafetyStatus } from '../../components/ai-calling/useSafetyStatus';
@@ -52,8 +54,10 @@ export default function AICallingSettings() {
                     <div className="flex justify-end mt-4"><button onClick={save} data-testid="settings-save-btn" className="px-5 py-2.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-sm font-semibold">Save settings</button></div>
                 </Card>
                 <BolnaConfigPanel />
+                <CapacitySummaryPanel />
                 <SchedulingPanel />
                 <ConsentPreview />
+                <ConsentEditorPanel />
                 <RetentionPanel />
             </main>
         </div>

@@ -34,6 +34,7 @@ import TesterCredentials from "./pages/TesterCredentials";
 import AICallingDashboard from "./pages/ai-calling/AICallingDashboard";
 import AITestingMode from "./pages/ai-calling/TestingMode";
 import AILiveMode from "./pages/ai-calling/LiveMode";
+import AIPendingAuthorization from "./pages/ai-calling/PendingAuthorization";
 import AICallHistory from "./pages/ai-calling/CallHistory";
 import AICallingSettings from "./pages/ai-calling/AICallingSettings";
 import TeamScore from "./pages/TeamScore";
@@ -76,6 +77,7 @@ function App() {
                         <Route path="/ai-calling" element={<ProtectedRoute><AICallingDashboard /></ProtectedRoute>} />
                         <Route path="/ai-calling/testing" element={<ProtectedRoute><AITestingMode /></ProtectedRoute>} />
                         <Route path="/ai-calling/live" element={<ProtectedRoute><AILiveMode /></ProtectedRoute>} />
+                        <Route path="/ai-calling/pending-authorization" element={<ProtectedRoute><AIPendingAuthorization /></ProtectedRoute>} />
                         <Route path="/ai-calling/history" element={<ProtectedRoute><AICallHistory /></ProtectedRoute>} />
                         <Route path="/ai-calling/settings" element={<ProtectedRoute><AICallingSettings /></ProtectedRoute>} />
                         <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
