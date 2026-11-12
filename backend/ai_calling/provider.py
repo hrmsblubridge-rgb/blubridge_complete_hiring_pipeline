@@ -288,12 +288,19 @@ async def test_connection(request: Request):
             add("caller_number", "Calling number is listed on this Bolna account", "failed", e.kind)
         extraction = await _extraction_check(bc, api_key, d["agent_id"], agent)
         mm = extraction.get("missed_fields_missing")
-        if mm is not None:  # informational: the follow-up purpose needs 5 more dispositions on the same agent
+        mf = extraction.get("missed_fields_found")
+        if mm is None and extraction.get("source") == "dispositions":
+            # Legacy cached shape (keys absent): show a stale row instead of silently hiding it.
+            add("missed_extraction", "Missed-interview follow-up fields configured on agent", "cannot_verify",
+                "last verification predates the 5 follow-up fields — re-run Test Connection to refresh")
+        elif mm is not None:  # fresh shape: list may be empty (all found) or populated (some missing)
             add("missed_extraction", "Missed-interview follow-up fields configured on agent", "warning" if mm else "verified",
-                ("not found: " + ", ".join(mm)) if mm else "all 5 follow-up fields found")
+                ("not found: " + ", ".join(mm)) if mm else f"all 5 follow-up fields found ({len(mf or [])}/5)")
         missing = extraction["fields_missing"]
         if extraction.get("source") == "dispositions" and not missing:
-            state, detail = "verified", f"all 6 fields found as dispositions ({', '.join(sorted({v['category'] for v in extraction['fields'].values()}))})"
+            cats = ", ".join(sorted({v["category"] for v in extraction["fields"].values()}))
+            extra = f" · plus {len(mf)}/5 missed-interview fields" if mf else ""
+            state, detail = "verified", f"all 6 core fields found as dispositions ({cats}){extra}"
             if extraction["outside_category"]:
                 state, detail = "warning", "outside 'Interview Call Results': " + ", ".join(extraction["outside_category"])
         elif extraction.get("source") == "dispositions" and extraction["dispositions_unreadable"] and missing:
