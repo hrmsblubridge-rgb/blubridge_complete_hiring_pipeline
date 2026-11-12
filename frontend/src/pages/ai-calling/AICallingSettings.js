@@ -6,9 +6,8 @@ import { AICallingHeader, Card, SectionTitle } from '../../components/ai-calling
 import { BolnaConfigPanel } from '../../components/ai-calling/BolnaConfigPanel';
 import { ModeSwitchesPanel } from '../../components/ai-calling/ModeSwitchesPanel';
 import { SafetyControlsPanel } from '../../components/ai-calling/SafetyControlsPanel';
-import { ConsentPreview } from '../../components/ai-calling/ConsentPreview';
-import { ConsentEditorPanel } from '../../components/ai-calling/ConsentEditorPanel';
 import { CapacitySummaryPanel } from '../../components/ai-calling/CapacitySummaryPanel';
+import { CandidateConsentSection } from '../../components/ai-calling/CandidateConsentSection';
 import { RetentionPanel } from '../../components/ai-calling/RetentionPanel';
 import { SchedulingPanel } from '../../components/ai-calling/SchedulingPanel';
 import { useSafetyStatus } from '../../components/ai-calling/useSafetyStatus';
@@ -24,7 +23,7 @@ const FIELDS = [
 ];
 
 export default function AICallingSettings() {
-    const [s, setS] = useState(null);
+    const [, setS] = useState(null);
     const [f, setF] = useState({});
     const { safety, loading, refresh } = useSafetyStatus();
     const apply = (d) => { setS(d); setF(Object.fromEntries(FIELDS.map(([k]) => [k, d[k] ?? '']))); };
@@ -56,8 +55,7 @@ export default function AICallingSettings() {
                 <BolnaConfigPanel />
                 <CapacitySummaryPanel />
                 <SchedulingPanel />
-                <ConsentPreview />
-                <ConsentEditorPanel />
+                <CandidateConsentSection />
                 <RetentionPanel />
             </main>
         </div>

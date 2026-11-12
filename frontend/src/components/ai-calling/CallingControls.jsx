@@ -38,6 +38,9 @@ export const CallingControls = ({ selected = [], status, onCall }) => {
         catch (e) { toast.error(errMsg(e)); }
     };
 
+    // Stop Calls is only visible when there is actually something to stop (A3).
+    const hasActive = !!blk || (status?.active_jobs_count && status.active_jobs_count > 0) || status?.has_active_batch;
+
     const triggerCall = async () => {
         if (inFlight.current) return;  // duplicate-click guard
         inFlight.current = true; setPipeline('checking');
@@ -48,6 +51,8 @@ export const CallingControls = ({ selected = [], status, onCall }) => {
     };
 
     const blk = status?.blocking_call;
+
+    // Pull `blk` up above so hasActive can see it.
 
     return (
         <div className="bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl p-4 space-y-3" data-testid="calling-controls">
@@ -101,10 +106,16 @@ export const CallingControls = ({ selected = [], status, onCall }) => {
                     {inFlight.current ? 'Starting…' : `Call Selected (${eligible.length} eligible / ${selected.length} selected)`}
                 </button>
                 {reason && <span className="text-xs text-[#6b7280] self-center" data-testid="call-selected-reason">{reason}</span>}
-                <button onClick={stop} data-testid="stop-calls-btn"
-                    className="px-4 py-2 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 text-sm font-semibold flex items-center gap-2 hover:bg-rose-100 transition-colors">
-                    <Stop size={16} weight="fill" /> Stop Calls
-                </button>
+                {hasActive ? (
+                    <button onClick={stop} data-testid="stop-calls-btn"
+                        className="px-4 py-2 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 text-sm font-semibold flex items-center gap-2 hover:bg-rose-100 transition-colors">
+                        <Stop size={16} weight="fill" /> Stop Calls
+                    </button>
+                ) : (
+                    <span className="text-xs text-[#9b9787] self-center flex items-center gap-1" data-testid="stop-calls-hidden-reason">
+                        No active call or batch · use Settings → Safety Controls for Emergency Stop.
+                    </span>
+                )}
             </div>
         </div>
     );

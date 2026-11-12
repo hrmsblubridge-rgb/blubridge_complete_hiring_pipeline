@@ -39,6 +39,8 @@ SETTINGS_DEFAULTS = {
     "default_office_address": "",
     "live_retry_no_answer": 1,
     "live_call_hours_before": 24,
+    # B4: server-enforced test-only permission. Defaults OFF. Never unlocks Live.
+    "test_calling_permitted": False,
 }
 EDITABLE_SETTINGS = {
     "daily_call_limit", "max_concurrent_calls", "call_window_start", "call_window_end",

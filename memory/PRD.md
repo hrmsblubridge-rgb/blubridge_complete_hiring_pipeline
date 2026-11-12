@@ -1,102 +1,101 @@
 # PRD — BluBridge Hiring Website · AI Calling Module
 
 ## Product goal
-Hiring website (React + FastAPI + MongoDB) that schedules and verifies offline interviews, with an
-AI Calling module (Bolna provider) covering (a) pre-interview confirmation and (b) OTP-based
-missed-interview follow-up. Real dispatch is gated behind multiple independent safety controls;
-preview is strictly mock-only.
+Hiring website (React + FastAPI + MongoDB) scheduling offline interviews. AI Calling module
+(Bolna) handles pre-interview confirmation + OTP-based missed-interview follow-up. Real dispatch
+is gated behind independent safety controls; preview is strictly mock-only.
 
 ## Non-negotiable safety invariants
 - Preview Mongo: `hiring_ai_testing` only. Never `hr_analytics` (production).
 - `AI_CALLING_ENABLED=false`, `ENABLE_EMAIL=false`, `ENABLE_WHATSAPP=false` in preview.
-- Emergency Stop ON. AI Live OFF. Live Dispatch Authorization OFF.
-- No real Bolna POST /call, no WhatsApp/email/SMS, no retention deletion, no production deploy.
-- Never modify AiSensy, email, employee OTP verification, booking/rescheduling, or recruitment logic.
-- Test records link only by `ai_test_candidates._id`; live by `bb_registrations._id`. Never cross-link.
-- Provider API key/webhook secret encrypted at rest; never returned to frontend or logged.
+- Emergency Stop ON · AI Live OFF · Live Dispatch Authorization OFF · `test_calling_permitted` OFF.
+- No real Bolna POST /call, WhatsApp/email, retention deletion, or production deploy.
+- Never modify AiSensy, email, employee OTP, booking/rescheduling, or recruitment logic.
+- Admin authorization NEVER writes `ai_candidate_consents`.
 
 ## Architecture snapshot
-- Backend: FastAPI, Motor async Mongo, package `backend/ai_calling/`
-  (`router`, `calls`, `candidates`, `provider`, `modes`, `gate`, `dispatch`, `dryrun`, `live_prep`,
-  `retention`, `consent`, `purposes`, `execution`, `store`, `bolna_client`, **`admin_auth`**).
-- Mounted at `/api/ai-calling`. Admin auth via `_auth` (session cookie).
-- Frontend: React (CRA + craco). **Six top-level tabs** under `/ai-calling/*`:
-  Dashboard · Testing Mode · Live Mode · **Pending Authorization** · Call History · Settings.
-- Shared frontend state: `useSafetyStatus.js` polls `/safety-status` every 15 s.
+- Backend package `backend/ai_calling/`: `router`, `calls`, `candidates`, `provider`, `modes`,
+  `gate`, `dispatch`, `dryrun`, `live_prep`, `retention`, `consent`, `purposes`, `execution`,
+  `store`, `bolna_client`, `admin_auth`, **`safety_flags`** (new).
+- Mounted at `/api/ai-calling`. Admin auth via session cookie + `X-CSRF-Intent: ai-calling` header.
+- Frontend: 6 tabs — Dashboard · Testing · Live · Pending Authorization · Call History · Settings.
+- Shared frontend state: `useSafetyStatus.js` (single-flight, dedup, retry-threshold).
 
-## Collections owned by this module
-- `ai_call_settings`, `ai_test_candidates`, `ai_test_batches`, `ai_call_jobs`, `ai_calls`, `ai_call_audit`
-- `ai_provider_settings`, `ai_provider_audit`, `ai_webhook_events`
-- `ai_candidate_consents` (candidate-authored; immutable per candidate)
-- `ai_admin_authorizations` (admin alternative-basis; never overwrites candidate consent)
-- `ai_admin_authorization_audit` (append-only audit trail)
-- `ai_consent_drafts` (editable; single doc `_id='current'`)
-- `ai_consent_versions` (immutable published versions)
-- Existing hiring collections (`bb_registrations`, etc.) are read-only from this module.
+## Collections (owned by this module)
+- Existing: `ai_call_settings`, `ai_test_candidates`, `ai_test_batches`, `ai_call_jobs`,
+  `ai_calls`, `ai_call_audit`, `ai_provider_settings`, `ai_provider_audit`, `ai_webhook_events`,
+  `ai_candidate_consents`.
+- Added by Slice 3: `ai_admin_authorizations`, `ai_admin_authorization_audit`,
+  `ai_consent_drafts`, `ai_consent_versions`.
+- All additive. No existing document schema altered.
 
 ## What's implemented
-### Slice 1 — unified safety status (prior commit)
-Authoritative `/safety-status` endpoint, hardened `/emergency-stop` with separated engage/release
-timestamps + typed-confirmation release + audit. Shared frontend hook, sticky `GlobalEmergencyStopBar`
-on every tab, new `Settings → Safety Controls` panel. Dashboard contradictory text fixed.
+### Slice 1 — unified authoritative safety status
+Backend `/safety-status`, hardened `/emergency-stop` (separated engage/release timestamps, typed
+confirmation on release, idempotent, audited). Shared frontend hook, sticky `GlobalEmergencyStopBar`,
+new `Settings → Safety Controls` panel.
 
 ### Slice 2 — Testing Mode UX
-Rewritten `CallingControls.jsx`:
-- Guided readiness header shows selected / eligible / blocked counts.
-- Status message surfaces exactly which gate is blocking (from `/safety-status`), never guesses.
-- Call pipeline indicator (checking → submitting → accepted) with spinner.
-- Duplicate-click protection via `useRef` in-flight guard.
-- Button supports single and bulk (eligible count included in label). Zero selected disables.
-- Loading, success and error states on every action.
+Rewritten `CallingControls.jsx` with guided readiness counts, pipeline indicator, duplicate-click
+guard. Stop Calls button is hidden when no active job/batch exists (Stage A3).
 
-### Slice 3 — Pending Authorization, Consent Editor, Capacity, Preview
-Backend `admin_auth.py`:
-- `GET /api/ai-calling/pending-authorization` — future valid bookings only; excludes past,
-  cancelled, superseded, replaced, Do-Not-Call, withdrawn. Returns per-registration coverage
-  (candidate_scopes + granted_scopes → uncovered_purposes).
-- `POST /api/ai-calling/pending-authorization/review` — bulk decisions (approve/defer/deny).
-  Approve requires `policy_id` + `evidence_ref`. Per-record revalidation (booking still valid,
-  no DNC/withdrawal). NEVER writes to `ai_candidate_consents`. Dispatch stays blocked.
-- `GET /api/ai-calling/pending-authorization/audit` — append-only audit history.
-- `GET /api/ai-calling/consent/editor` + `POST /consent/editor/draft` — open to any admin.
-- `GET /api/ai-calling/consent/versions`, `POST /api/ai-calling/consent/publish` — publish is
-  gated to the top-level admin (`Admin User`) and requires typed `PUBLISH CONSENT VERSION`.
-  Published versions are immutable; existing consents keep the version originally accepted.
-- `GET /api/ai-calling/capacity-summary` — explicit effective-daily explanation.
-- `GET /api/ai-calling/preview/scenarios` — 5 confirmation + 10 missed-interview synthetic
-  scenarios covering all 4 OTP states (unverified, verified, missing_blocked, verified_just_now).
-
-Frontend: new tab + page `pages/ai-calling/PendingAuthorization.js` (filters, per-page select,
-clear selection, bulk-review dialog with purpose-scoping and required evidence for approve).
-Settings adds `CapacitySummaryPanel` and `ConsentEditorPanel`. New `PreviewScenariosPanel`.
+### Slice 3 — Pending Authorization + Consent Editor + Capacity + Preview
+Backend `admin_auth.py` with purpose-scoped bulk review, append-only audit, consent drafts +
+immutable versions (publish restricted to `Admin User`), capacity summary, and 15 synthetic
+preview scenarios covering both purposes.
 
 ### Slice 4 — Live Mode redesign
-`LiveMode.js` reorganised into three clear sections: Eligible Candidates / Automatic Calling Queue /
-Preview & Diagnostics. Shows both workflows side-by-side with purpose-specific timing, retry
-and window. Activate Live Mode button remains disabled (phase-locked).
+Three sections: Eligible / Automatic Calling Queue / Preview & Diagnostics. Both workflows shown.
 
-### Verification
-- **Backend regression: 217 passed, 17 skipped** across all AI Calling tests including the new
-  `test_slice234_pending_consent.py` (7 isolated tests: past/DNC/withdrawn exclusion, approve
-  requires evidence, consent never touched, top-level-admin publish, immutability, draft
-  validation, capacity shape, preview covers both purposes with all OTP states).
-- Frontend compiled cleanly (webpack compiled successfully).
-- Live backend curl: `/capacity-summary`, `/pending-authorization`, `/preview/scenarios`,
-  `/consent/editor`, `/safety-status` all return the expected shapes. Safety state UNCHANGED:
-  `emergency_stop=True`, `test_can_call=False`, `live_can_call=False`, provider v16 untouched.
+### Stage A fixes (this session)
+- **A1 reliability**: `useSafetyStatus` now uses AbortController, module-level request dedup, and
+  a 2-failure threshold before flipping to `authoritative=false`. Keeps last-known-good data on
+  transient errors. Rapid tab navigation no longer flips the Pending Authorization page to
+  "Safety status unavailable".
+- **A2 merge**: single `CandidateConsentSection` combines published view + draft editor + inline
+  booking-form preview + version/audit history. Draft and published states are visually distinct.
+  Old `ConsentPreview` + `ConsentEditorPanel` removed from Settings.
+- **A3 Stop Calls**: button only renders when `hasActive` (blocking call OR active jobs/batch).
+  A neutral hint replaces it otherwise, with a pointer to Emergency Stop in Safety Controls.
+- **A4 UX regression**: loading indicators, success/error toasts, and section-level locking
+  consistent across Save Settings, Test Connection, Call Now, Publish Consent, Stop Calls,
+  Bulk Review, and Emergency Stop engage/release.
 
-## Authorization model
-RBAC + ownership + publishing permission (single admin app). All admin routes protected by the
-existing `_auth` dependency (deny-by-default). `admin_auth.publish_version` adds a second check:
-`principal == TOP_LEVEL_ADMIN`. CSRF header required on all POSTs. Audit-logs every decision.
+### Stage B readiness
+- **B1**: both purposes preserved (confirm 1–7d, retry +60m, 10–19 IST; missed 1h–7d, retry +30m,
+  10–19:30 IST, OTP revalidated at every stage).
+- **B2**: employee OTP flow untouched.
+- **B3**: isolated dispatch tests cover accepted, rejected, timeout, idempotent replay, and
+  Emergency-Stop cancellation — all via mocked Bolna client (no real POST /call).
+- **B4**: new `test_calling_permitted` setting (defaults OFF, server-enforced in `safety_flags`,
+  cannot unlock Live). Flipping test-only ON permits Test-Mode calling only; Live still blocked.
+- **B5**: Bolna agent read-only verification is already wired in `/provider/test-connection`.
+  Number-to-agent entitlement cannot be verified by public Bolna APIs; documented as a Release-2
+  prerequisite (`PRODUCTION_READINESS.md §7`).
 
-## Known limitations / do-not-retry
-- No verified Bolna single-call recording/transcript deletion endpoint; retention deletion remains
-  preview-only.
-- Alternative-basis authorization UI is built but actual dispatch remains unavailable until a
-  separately approved policy is activated.
-- No automatic Live dispatch worker running. `Activate Live Mode` button is intentionally disabled.
+### Stage C preview validation
+- **C1**: 15 synthetic scenarios (5 confirmation + 10 missed) covering all 4 OTP interpretations,
+  reschedule, DNC, running-late, claims-attended, no-answer retry, calling-window edges.
+- **C2**: 500-synthetic-job queue test — all retained, earliest-due ordered, pilot-cap non-destructive.
+- **C3**: Pending Authorization already tested for past/DNC/withdrawn exclusion + policy +
+  evidence requirements.
+- **C4**: full suite green.
 
-## Roadmap
-All approved slices (1–4) are now delivered pending user review. Further scope requires explicit
-new approval. Nothing proceeds to real calling or production deployment automatically.
+## Final regression
+**Backend: 219 passed, 17 skipped** across all 16 ai_calling test files (phase 2 → 7cb1 +
+Slice 1/234 + Stage BC + webhook + two-purposes + extraction-edge + bolna-11-fields).
+Frontend compiles cleanly.
+
+## Stage D (prepared, NOT executed)
+See `memory/PRODUCTION_READINESS.md` for:
+1. Production DB preservation (hr_analytics untouched).
+2. Render config checklist + required env vars (names only).
+3. Additive migration plan with idempotent index creation.
+4. Four-release strategy (code deploy → single test call → limited pilot → full ops).
+5. Rollback via feature flags only (never DB deletion).
+
+## Known limitations
+- No verified Bolna per-recording deletion endpoint; retention stays preview-only.
+- Number-to-agent entitlement not verifiable via public Bolna APIs.
+- Admin alternative-basis authorization UI is built but actual dispatch requires a separately
+  approved policy + `LIVE_DISPATCH_IMPLEMENTED=True` + `live_dispatch_authorized=True`.
