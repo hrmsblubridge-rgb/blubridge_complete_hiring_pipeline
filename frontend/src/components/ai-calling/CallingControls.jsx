@@ -38,6 +38,7 @@ export const CallingControls = ({ selected = [], status, onCall }) => {
         catch (e) { toast.error(errMsg(e)); }
     };
 
+    const blk = status?.blocking_call;
     // Stop Calls is only visible when there is actually something to stop (A3).
     const hasActive = !!blk || (status?.active_jobs_count && status.active_jobs_count > 0) || status?.has_active_batch;
 
@@ -49,10 +50,6 @@ export const CallingControls = ({ selected = [], status, onCall }) => {
         catch (e) { setPipeline('failed'); toast.error(errMsg(e)); }
         finally { setTimeout(() => { inFlight.current = false; setPipeline('idle'); }, 1500); }
     };
-
-    const blk = status?.blocking_call;
-
-    // Pull `blk` up above so hasActive can see it.
 
     return (
         <div className="bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl p-4 space-y-3" data-testid="calling-controls">
