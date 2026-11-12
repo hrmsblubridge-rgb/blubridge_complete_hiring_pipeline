@@ -1,0 +1,41 @@
+{
+  "summary": "Tested the independent Live Calling Stop and Test Calling Permitted switches end to end, through the API and the UI, using the public URL. Backend: wrote a new suite of 11 tests (10 pass, 1 fails) and re-ran 68 existing related tests (all pass). UI: Settings and Live Mode tested, plus a rapid sweep across all 6 tabs. The endpoints, CSRF check, typed confirmations, audit rows, idempotency, saving to the database and the Emergency Stop override all work. The 'Safety status unavailable' fix still holds: it did not appear in 3 rapid click sweeps or in direct URL navigation. One real defect: safety-status effective.test_blockers and can_place_test_call ignore test_calling_permitted. The UI therefore never lists 'Test Calling Permitted is OFF' as a reason Test calls are blocked. Also, the live gate evaluate_live() never checks live_calling_stop. Switches were restored to defaults at the end: emergency_stop=True, live_calling_stop=True, test_calling_permitted=False, ai_live_enabled=False.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/ai-calling/safety-status", "issue": "effective.test_blockers is built inline in router.py (lines 310-314) and never checks test_calling_permitted. With the flag OFF, test_blockers = {'server_disabled'} only. If AI_CALLING_ENABLED were true and Emergency Stop were OFF, can_place_test_call would be true even though gate.evaluate() and start_batch would refuse the call. The 'symmetric' independence requirement fails. Fix: add ('test_calling_permitted_off', ...) when s.get('test_calling_permitted') is not True, or build both lists from safety_flags.effective_test_permission / effective_live_permission.", "priority": "HIGH"},
+      {"endpoint": "ai_calling/modes.py evaluate_live() (live dispatch gate)", "issue": "The live gate never checks live_calling_stop. The flag only appears in the safety-status display and in safety_flags.py, and safety_flags.py is used only by unit tests. Enforcement of 'Live Calling Stop blocks Live dispatch' depends entirely on LIVE_DISPATCH_IMPLEMENTED=False today. Add a check like add('live_calling_stop_off', ..., s.get('live_calling_stop', True) is False) to evaluate_live(), and to live_prep.py's gate and readiness lists.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "GET /api/ai-calling/switches (modes.calling_status)", "issue": "test.blockers and live.blockers do not include test_calling_permitted or live_calling_stop, so they disagree with safety-status."},
+      {"endpoint": "safety_flags.py", "issue": "effective_test_permission and effective_live_permission are dead code in production. The router duplicates the blocker logic, and the copies have already drifted apart (see the HIGH issue above)."},
+      {"endpoint": "POST /api/ai-calling/emergency-stop", "issue": "Unlike the two new endpoints, this one does not call _csrf(). This is older code, not part of this change."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Settings / Effective - Test Mode Calls panel", "issue": "The panel lists blockers from safety-status, so 'Test Calling Permitted is OFF' never appears as a blocker even when the switch shows OFF. This is a consequence of the backend issue.", "affected_selectors": ["[data-testid='safety-controls-panel']"]}
+    ],
+    "design_issues": [
+      {"screen": "Settings > Safety Controls checklist", "issues": ["The gate checklist (AI Test Mode, AI Live Mode, Server, Live Dispatch, Bolna, Emergency Stop) has no rows for Live Calling Stop or Test Calling Permitted. They appear only in the toggle rows above it."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_independent_safety_switches_api.py", "/app/backend/tests/test_live_calling_stop_endpoints.py", "/app/test_reports/pytest/independent_switches.xml"],
+  "action_items": [
+    "In router.safety_status, add a test_calling_permitted_off test blocker (preferably reuse safety_flags.effective_test_permission and effective_live_permission so the logic is not duplicated).",
+    "Enforce live_calling_stop in modes.evaluate_live(), and in the live_prep gate and readiness checks, so the Live Stop is checked in code before any dispatch.",
+    "Add both new flags to modes.calling_status test and live blockers, and to the Settings checklist rows."
+  ],
+  "critical_code_review_comments": [
+    "The blocker logic is duplicated in three places (router.safety_status, modes.calling_status, safety_flags) and the copies have drifted apart. Keep one implementation and use it everywhere.",
+    "The new endpoints correctly require auth and CSRF (missing header or bad Origin returns 403), validate input with Pydantic (bad body returns 422), are idempotent with no duplicate audit row, and audit with by, reason, previous and current."
+  ],
+  "updated_files": ["/app/backend/tests/test_independent_safety_switches_api.py"],
+  "success_rate": {"backend": "91% (10/11 new tests; 68/68 existing related tests pass)", "frontend": "100% (all requested data-testids present; dialogs, typed confirmations, Cancel, saving after reload, badge sync and the 6-tab sweep all work)"},
+  "seed_data_creation": "None. Switches were toggled temporarily and restored to defaults (verified directly in MongoDB). This created audit rows in ai_call_audit with reasons such as TEST_eng, TEST_rel, TEST_es and TEST_restore. The Emergency Stop engaged_by and engaged_reason metadata now shows Admin User / TEST_es.",
+  "test_credentials": "/app/memory/test_credentials.md lists the password as 'Admin User', but the working password is QAZwsx##123. The credentials file is out of date.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Login: POST /api/login with {username:'Admin User', password:'QAZwsx##123'}. Mutations need the headers X-CSRF-Intent: ai-calling and Origin = FRONTEND_URL. Run the suite with -n0, because the tests share global settings state. After the fix, re-run test_independence_test_permit_symmetric. Before testing, check that there are no pending ai_call_jobs or running ai_test_batches: engaging Emergency Stop cancels and stops them.",
+  "rca of the issue": "router.safety_status computes test_blockers inline and was not updated when test_calling_permitted was added. The flag was added to gate.evaluate() and safety_flags.py only. Likewise, live_calling_stop was added to safety-status and safety_flags but not to modes.evaluate_live(). Reproduce: release Emergency Stop and set test_calling_permitted=false; GET safety-status shows test_blockers == ['server_disabled']."
+}

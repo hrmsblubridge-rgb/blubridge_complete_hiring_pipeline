@@ -59,17 +59,21 @@ async def calling_status(overall: bool = None) -> dict:
     s = await get_settings()
     overall = overall_test_mode() if overall is None else overall
     eff = effective(overall, s["ai_test_enabled"], s["ai_live_enabled"])
+    live_stop_on = s.get("live_calling_stop", True) is not False
+    test_permit_on = s.get("test_calling_permitted") is True
     common = (["Emergency stop is ON"] if s["emergency_stop"] else []) + \
              ([] if gate.server_calling_enabled() else ["Server-side calling is disabled (AI_CALLING_ENABLED=false)"])
     test_b = (["AI Test Mode is OFF"] if not s["ai_test_enabled"] else []) + common + \
-             []
+             ([] if test_permit_on else ["Test Calling Permitted is OFF (server-enforced, defaults OFF)"])
     live_b = (["AI Live Mode is OFF"] if not s["ai_live_enabled"] else
               ["Overall Website Test Mode is OFF — Live calls are blocked by policy"] if not overall else []) + common + \
+             (["Live Calling Stop is engaged (Test Mode is unaffected)"] if live_stop_on else []) + \
              ([] if s.get("live_dispatch_authorized") else ["Live Dispatch Authorization is OFF"]) + \
              ([] if LIVE_DISPATCH_IMPLEMENTED else ["Live dispatch is not implemented yet (Phase 7A)"])
     return {"overall_test_mode": overall, "ai_test_enabled": s["ai_test_enabled"], "ai_live_enabled": s["ai_live_enabled"],
             "emergency_stop": s["emergency_stop"], "server_calling_enabled": gate.server_calling_enabled(),
             "live_dispatch_authorized": bool(s.get("live_dispatch_authorized")), "live_dispatch_implemented": LIVE_DISPATCH_IMPLEMENTED,
+            "live_calling_stop": live_stop_on, "test_calling_permitted": test_permit_on,
             "switch_version": s["mode_version"], "effective": eff, "live_auth_phrase": LIVE_AUTH_PHRASE,
             "live_limits": {"daily": s["live_daily_call_limit"], "pilot_daily_cap": s["live_pilot_daily_cap"],
                             "effective_daily": live_daily_cap(s), "concurrent": s["live_max_concurrent_calls"],
@@ -122,6 +126,9 @@ async def evaluate_live(*, registration_id: str, job_mode_version: int, now: dat
         checks.append({"key": key, "label": label, "ok": bool(ok), "detail": detail})
 
     add("implemented", "Live dispatch implemented", LIVE_DISPATCH_IMPLEMENTED, "Phase 7A")
+    add("live_calling_stop_off", "Live Calling Stop is OFF (server-enforced, defaults ON)",
+        s.get("live_calling_stop", True) is False,
+        "Blocks Live dispatch without affecting Test Mode")
     add("overall_test", "Overall Website Test Mode is ON", overall)
     add("ai_live", "AI Live Mode is ON", s["ai_live_enabled"])
     add("authorized", "Live Dispatch Authorization granted", s.get("live_dispatch_authorized"))

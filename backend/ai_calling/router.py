@@ -307,16 +307,18 @@ async def safety_status(request: Request):
         live_auth = bool(s.get("live_dispatch_authorized"))
         overall = overall_test_mode()
         # Effective permissions — single computation re-used everywhere.
+        test_permit = s.get("test_calling_permitted") is True
+        live_stop = s.get("live_calling_stop", True) is not False
         test_blockers = []
         if not ai_test: test_blockers.append(("ai_test_off", "AI Test Mode is OFF"))
         if emer: test_blockers.append(("emergency_stop", "Emergency Stop is ON"))
         if not env_enabled: test_blockers.append(("server_disabled", "Server outbound calling is disabled (AI_CALLING_ENABLED=false)"))
+        if not test_permit: test_blockers.append(("test_calling_permitted_off", "Test Calling Permitted is OFF (server-enforced, defaults OFF)"))
         if not prov_ready: test_blockers.append(("provider_unverified", f"Bolna provider not verified (status: {prov_status})"))
         live_blockers = []
         if not ai_live: live_blockers.append(("ai_live_off", "AI Live Mode is OFF"))
         if not overall: live_blockers.append(("overall_test_off", "Overall Website Test Mode is OFF — Live calls blocked by policy"))
         if emer: live_blockers.append(("emergency_stop", "Emergency Stop is ON"))
-        live_stop = s.get("live_calling_stop", True) is not False
         if live_stop: live_blockers.append(("live_calling_stop", "Live Calling Stop is engaged (Test Mode is unaffected)"))
         if not env_enabled: live_blockers.append(("server_disabled", "Server outbound calling is disabled (AI_CALLING_ENABLED=false)"))
         if not live_auth: live_blockers.append(("live_dispatch_unauth", "Live Dispatch Authorization is OFF"))

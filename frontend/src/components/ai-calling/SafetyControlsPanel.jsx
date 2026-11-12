@@ -118,9 +118,15 @@ export const SafetyControlsPanel = ({ safety, loading, onChanged }) => {
                 <Row ok={sw.ai_test_enabled} label="AI Test Mode"
                     detail={sw.ai_test_enabled ? 'ON — test-list manual calls allowed by this gate' : 'OFF'}
                     testid="safety-row-ai-test" warn={!sw.ai_test_enabled} />
+                <Row ok={sw.test_calling_permitted} label="Test Calling Permitted"
+                    detail={sw.test_calling_permitted ? 'ON — Test-Mode real outbound permitted' : 'OFF — Test-Mode outbound blocked (defaults OFF)'}
+                    testid="safety-row-test-permit" warn={!sw.test_calling_permitted} />
                 <Row ok={sw.ai_live_enabled} label="AI Live Mode"
                     detail={sw.ai_live_enabled ? 'ON' : 'OFF — scheduled live calls blocked by this gate'}
                     testid="safety-row-ai-live" warn={!sw.ai_live_enabled} />
+                <Row ok={!sw.live_calling_stop} label="Live Calling Stop"
+                    detail={sw.live_calling_stop ? 'ON — Live dispatch blocked (Test Mode unaffected, defaults ON)' : 'OFF — this gate not blocking'}
+                    testid="safety-row-live-stop" warn={sw.live_calling_stop} />
                 <Row ok={sv.outbound_calling_enabled} label="Server Outbound Calling"
                     detail={sv.outbound_calling_enabled
                         ? `Enabled (${sv.outbound_calling_env_flag}=true)`
