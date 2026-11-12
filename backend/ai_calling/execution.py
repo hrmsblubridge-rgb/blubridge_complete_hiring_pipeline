@@ -156,6 +156,8 @@ def extraction_from_dispositions(dispositions: list, errors: int = 0) -> dict:
             "dispositions_unreadable": errors, "fields_found": found,
             "fields_missing": [f for f in EXTRACTION_FIELDS if f not in by_name],
             "outside_category": [f for f in found if by_name[f]["category"] != EXTRACTION_CATEGORY],
+            "missed_fields_found": [f for f in MISSED_FIELDS if f in by_name],
+            "missed_fields_missing": [f for f in MISSED_FIELDS if f not in by_name],
             "fields": {f: by_name[f] for f in found}}
 
 

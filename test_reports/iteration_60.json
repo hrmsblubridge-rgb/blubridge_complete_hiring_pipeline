@@ -1,0 +1,46 @@
+{
+  "summary": "I tested the two-purpose AI Calling enhancement end to end, in dry-run/mock mode only. No calls were placed and the safety switches did not change. Backend live API: 22/22 passed in the new file tests/test_ai_calling_two_purposes_api.py. Covered: GET /scheduling (both purposes, windows, retries, capacity); PUT /scheduling rejecting 11 invalid bodies with 400 (confirm_offset_days 8 and 0, missed_offset_minutes 59 and 10081, concurrent 0 and 51, queue 1001, an unknown key, wrong types, an empty body); PUT without CSRF refused; a valid PUT (confirm_offset_days 2) returning 200 with an audit entry in the DB and 'recalculated', then restored to the defaults. /test-calls/status: single_call_enabled false, min_recipients 1, block_reasons = [Emergency Stop is ON, AI_CALLING_ENABLED=false]. call-now for Syed: wrong name gives 400, correct name gives 409, and ai_calls stays at 1. /alerts lists []. Resolving a bogus or unknown alert gives 404. mock-jobs/{unknown}/process gives 409. mock-run gives 200. worker-status works and includes pending_by_purpose. /live-dispatch/authorize gives 423. Scratch suite: 337 passed, 30 skipped, no flakes. Frontend: the Settings Call Scheduling panel has all 9 testids with the correct defaults. An invalid save shows the error toast, a valid save shows the success toast, and I restored 1/60/20/5/1/50 and checked it after reload. The consent preview shows the v4 text and 'version 2026-06-v4'. Testing page: block reasons are shown. Call Selected is disabled with 0 selected and the reason 'Select at least one test colleague'; with only Syed selected the reason is 'Emergency Stop is ON'. No call-now request was sent. Live Prep: AlertsPanel ('No open alerts.'), mock-run-btn, the purpose column and process buttons on planned rows all render. A process click on a job that is not due shows the 409 toast. Candidate Journey, checked with route mocks: the purpose badge shows 'Missed-interview follow-up' and 'Pre-interview confirmation' (the fallback when purpose is missing), and the flags and missed fields render. No horizontal overflow at 390 on settings, testing, live or the journey modal.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "Bolna provider extraction check (execution.py disposition check / extraction_config_check)", "issue": "This check only looks for the original 6 EXTRACTION_FIELDS. The 5 MISSED_FIELDS (missed_interview_outcome, missed_interview_reason, expected_arrival_time, attendance_dispute, ...) are never checked. The Settings diagnostic shows VERIFIED 'all 6 fields found' even if the Bolna agent has no missed follow-up fields configured. It should check ALL_FIELDS (11)."},
+      {"endpoint": "POST /api/ai-calling/test-candidates/{id}/call-now", "issue": "call_purpose is only validated after the gate has run and the dispatch lock has been taken. A bad purpose should be rejected with 400 before any gate or lock work."},
+      {"endpoint": "/live-prep/plan source=fixtures", "issue": "The synthetic fixtures never produce a missed_interview_followup job. Fixture consent has no text_version, so its scope lacks the follow-up purpose, and no fixture is a past 'Interview Scheduled'/'Missed' booking with otp_verified ''. As a result the Live Prep purpose column only ever shows 'Confirmation', and the follow-up purpose cannot be checked in the UI."},
+      {"endpoint": "candidates.readiness()", "issue": "Readiness compares only the date: Syed's interview at 12:00 IST today had already passed (about 13:28 IST) but still showed 'Ready for test call'. This existed before this change."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ProfileCallItem", "issue": "The flag reads 'NO ANSWER' when the call status is 'busy'. The label is misleading; use BUSY or 'NO ANSWER / BUSY'.", "selector": "[data-testid=profile-call-flag-NO_ANSWER]", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Candidate Journey consent card", "issue": "The backend returns consent_text_version and consent_scope, but ConsentCard shows neither. HR cannot tell whether a candidate's consent (v3) covers only confirmation or (v4) also covers the missed follow-up.", "affected_selectors": ["[data-testid^=consent-card-]"]}
+    ],
+    "design_issues": [
+      {"screen": "Candidate Journey modal: AI Calling History", "issues": ["The purpose badge (text-violet-300 on bg-violet-900/20) is almost unreadable because the modal has a light beige theme. ProfileCallItem uses dark-theme zinc/violet/cyan colours, so the status and purpose badges have low contrast."]},
+      {"screen": "Testing page manual candidate form", "issues": ["Uses the browser's built-in date and time pickers (mm/dd/yyyy) instead of a shadcn calendar. This existed before this change."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_ai_calling_two_purposes_api.py", "/app/backend/tests/test_ai_calling_two_purposes.py", "/app/test_reports/pytest/two_purposes_api.xml"],
+  "action_items": [
+    "Make the Bolna extraction-field verification check all 11 fields (ALL_FIELDS), not only the 6 original EXTRACTION_FIELDS",
+    "Validate call_purpose in call-now before gate evaluation and taking the lock",
+    "Add a synthetic fixture with v4 consent and a past interview with otp_verified '' (and status 'Missed') so the missed follow-up purpose can be checked in Live Prep",
+    "Fix ProfileCallItem badge colours for the light journey modal (purpose badge contrast)",
+    "Show consent_text_version and scope in ConsentCard",
+    "Update /app/memory/test_credentials.md: the admin password is 'QAZwsx##123', not 'Admin User'"
+  ],
+  "critical_code_review_comments": [
+    "execution.py: EXTRACTION_FIELDS (6) is still used for the provider disposition and config checks, while ALL_FIELDS (11) is used only for normalisation",
+    "purposes.missed_eligibility line 62: the `if st != 'Missed'` branch can never run, because Missed is in MISSED_STATUSES. Harmless but confusing",
+    "dispatch.call_now: purpose validation happens inside the locked try block, after gate.evaluate"
+  ],
+  "updated_files": ["/app/backend/tests/test_ai_calling_two_purposes_api.py"],
+  "success_rate": {"backend": "100% (22/22 live API; scratch 337 passed / 30 skipped)", "frontend": "100% of requested flows; 1 low-priority UI bug, 2 design issues and 1 integration gap found"},
+  "test_credentials": "Admin User / QAZwsx##123 works. The value in /app/memory/test_credentials.md ('Admin User') is out of date and returns 401.",
+  "seed_data_creation": "No seed data. Clicking 'Plan from synthetic bookings' created or updated non-dispatchable fixture mock jobs in ai_live_mock_jobs (5 planned, 1 needs_review). I did not clear them, because mock-jobs/clear deletes without a filter. Scheduling was saved to offset 2 (API and UI) and restored to the defaults 1/60/20/5/1/50.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run: REACT_APP_BACKEND_URL=... pytest tests/test_ai_calling_two_purposes_api.py -p no:xdist (22 tests, restores the scheduling defaults on teardown). Switches unchanged: Test ON, Live OFF, Emergency Stop ON; authorize 423; ai_calls count 1. Candidate Journey AI history and consent need page.route mocks for /api/bb/manual/applicant/search, /api/bb/candidate-journey, /api/ai-calling/registrations/lookup, /calls/by-registration/*, /consent/admin/*. The consent/admin mock must include dnc_sources:[] or ConsentCard crashes.",
+  "rca of the issue": "The 'all 6 fields found' VERIFIED status comes from execution.py, where verify_dispositions and extraction_config_check iterate EXTRACTION_FIELDS (6) instead of ALL_FIELDS (11)."
+}

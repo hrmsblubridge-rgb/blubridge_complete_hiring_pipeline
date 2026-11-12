@@ -287,6 +287,10 @@ async def test_connection(request: Request):
         except bc.BolnaError as e:
             add("caller_number", "Calling number is listed on this Bolna account", "failed", e.kind)
         extraction = await _extraction_check(bc, api_key, d["agent_id"], agent)
+        mm = extraction.get("missed_fields_missing")
+        if mm is not None:  # informational: the follow-up purpose needs 5 more dispositions on the same agent
+            add("missed_extraction", "Missed-interview follow-up fields configured on agent", "warning" if mm else "verified",
+                ("not found: " + ", ".join(mm)) if mm else "all 5 follow-up fields found")
         missing = extraction["fields_missing"]
         if extraction.get("source") == "dispositions" and not missing:
             state, detail = "verified", f"all 6 fields found as dispositions ({', '.join(sorted({v['category'] for v in extraction['fields'].values()}))})"

@@ -19,15 +19,15 @@ export const ProfileCallItem = ({ call }) => {
     const missed = call.purpose === 'missed_interview_followup';
     const flags = [r.missed_interview_outcome === 'RUNNING_LATE' && 'RUNNING_LATE', r.missed_interview_outcome === 'CLAIMS_ATTENDED' && 'CLAIMS_ATTENDED',
         r.wants_reschedule === true && 'RESCHEDULE_REQUEST_PENDING', call.ui_state === 'Needs Review' && 'NEEDS_REVIEW',
-        ['no-answer', 'busy'].includes(call.status) && 'NO_ANSWER'].filter(Boolean);
+        call.status === 'no-answer' && 'NO_ANSWER', call.status === 'busy' && 'BUSY'].filter(Boolean);
     const qs = r.candidate_questions?.length ? r.candidate_questions.map(q => `• ${q}`).join('\n') : (call.response ? 'None asked' : null);
     return (
         <li className="border border-zinc-800 bg-zinc-900/50" data-testid={`profile-call-${call.id}`}>
             <button onClick={() => setOpen(o => !o)} data-testid={`profile-call-toggle-${call.id}`} className="w-full px-4 py-3 flex flex-wrap items-center gap-3 text-left hover:bg-zinc-900">
                 <span className="text-sm text-zinc-200 font-medium flex-1 min-w-[10rem]">{fmtTime(call.dispatched_at || call.created_at) || '—'}</span>
                 <span className="text-xs px-2 py-0.5 rounded border border-zinc-700 text-zinc-300 uppercase" data-testid="profile-call-mode">{call.mode === 'live' ? 'Live' : 'Testing'}</span>
-                <span className="text-xs px-2 py-0.5 rounded border border-violet-800/50 bg-violet-900/20 text-violet-300" data-testid="profile-call-purpose">{PURPOSE[call.purpose] || PURPOSE.interview_confirmation}</span>
-                {flags.map(f => <span key={f} className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 border border-amber-800/60" data-testid={`profile-call-flag-${f}`}>{f.replace(/_/g, ' ')}</span>)}
+                <span className="text-xs px-2 py-0.5 rounded border border-violet-400 bg-violet-100 text-violet-900 font-semibold" data-testid="profile-call-purpose">{PURPOSE[call.purpose] || PURPOSE.interview_confirmation}</span>
+                {flags.map(f => <span key={f} className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-400 font-semibold" data-testid={`profile-call-flag-${f}`}>{f.replace(/_/g, ' ')}</span>)}
                 <span className="text-xs px-2 py-0.5 rounded border border-cyan-800/50 bg-cyan-900/30 text-cyan-300" data-testid="profile-call-status">{call.ui_state} · {call.status || '—'}</span>
                 <span className="text-xs text-zinc-400" data-testid="profile-call-attendance">Attendance: <b className="text-zinc-200">{r.attendance_status || 'UNKNOWN'}</b></span>
                 <CaretDown size={14} className={`text-zinc-500 transition-transform ${open ? 'rotate-180' : ''}`} />

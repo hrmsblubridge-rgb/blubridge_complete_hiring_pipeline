@@ -25,6 +25,8 @@ export const ConsentCard = ({ c, onChange }) => {
             <Row label="Registration" value={`…${id}`} />
             <Row label="AI calling consent" value={c.consent_status} testid={`consent-status-${id}`} />
             <Row label="Consent date / source" value={`${fmt(c.consent_timestamp)} · ${c.consent_source || '—'}`} />
+            <Row label="Wording version / covers" testid={`consent-scope-${id}`}
+                value={`${c.consent_text_version || '—'} · ${(c.consent_scope || []).map(s => (s === 'missed_interview_followup' ? 'missed follow-up' : 'confirmation')).join(' + ') || 'nothing'}`} />
             {c.consent_withdrawn_at && <Row label="Withdrawn" value={fmt(c.consent_withdrawn_at)} />}
             <Row label="Do Not Call" value={c.do_not_call ? `Yes (${c.dnc_sources.join(', ')})` : 'No'} testid={`dnc-status-${id}`} />
             {c.do_not_call && <Row label="Marked by / reason" value={`${c.dnc_by || '—'} · ${c.dnc_reason || '—'}`} />}

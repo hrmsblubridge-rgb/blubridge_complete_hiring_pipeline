@@ -3660,3 +3660,36 @@ Re-derive via `python3 /app/backend/backfill_derived.py` or call `reprocess_matc
   - Production AI_TRUSTED_PROXY_HOPS.
   - Owner approval to deploy the booking checkbox and renewal box.
   - Implementing the real dispatch path (LIVE_DISPATCH_IMPLEMENTED) behind authorization.
+
+
+
+## Two-purpose AI Calling + single-call fix (June 2026). Verified by the testing agent (iteration_60; minors fixed after). MOCK ONLY, zero calls, no messages, no deletion, no deploy.
+- Audit findings:
+  - The existing OTP default is "" and verification sets a truthy value; nothing ever writes Boolean false.
+  - bg_workers WORKER E sets status "Missed" + missed_marked about 2 min after the interview and sends its own WhatsApp/email reminder (untouched).
+  - The "Single test calls are disabled" message came from a hard-coded gate.SINGLE_TEST_CALL_APPROVED=False (Phase 5 lock).
+- `purposes.py`:
+  - interview_confirmation: 1–7 days before (default 1), window 10:00–19:00, retry +60 min, at least 2 h lead.
+  - missed_interview_followup: 60–10080 min after (default 60), window 10:00–19:30, retry +30 min, follow-up period 24 h after the target.
+  - otp_state: "" or False → not_verified; missing → data issue; None or other values → unknown. Statuses "Interview Scheduled" and "Missed" are accepted; missed_marked is never required.
+  - Outcomes → `ai_call_alerts` (RESCHEDULE_REQUEST_PENDING, RUNNING_LATE, CLAIMS_ATTENDED suppress the missed follow-up for that booking_key; WRONG_NUMBER blocks the registration). DO_NOT_CALL → AI_CALL_OPT_OUT Do Not Call, and it wins over DECLINED.
+  - GET/PUT /scheduling (audited, recalculates pending jobs). GET /alerts and POST /alerts/{id}/resolve.
+- `live_prep.py`:
+  - Jobs are keyed by (registration, booking_key, purpose, attempt). Claims are ordered by planned_at, then interview_at.
+  - OTP is re-read at plan, gate, claim and immediately before provider.place. If it is verified, the job is cancelled with OTP_VERIFIED.
+  - One retry, only after no_answer or busy. Stale jobs (more than 30 min late) become NEEDS_REVIEW.
+  - mock_run uses the queue capacity, and nothing is truncated. POST /mock-jobs/{id}/process is the individual action on the same path.
+- Extraction: 11 fields (MISSED_FIELDS added) and the call_purpose user_data variable. Provider verification reports a "missed_extraction" warning: the Bolna agent currently has only the 6 original dispositions.
+- Consent: v2026-06-v4 covers both purposes (CONSENT_SCOPES). v3 covers confirmation only and is not upgraded.
+- Limits: configurable daily (≤100000), pilot cap, concurrency 1–50, jobs per run 1–1000. Preview values are 20/5/1/50.
+- Single call: the lock was replaced by the real gates. /test-calls/status returns block_reasons and min_recipients 1. Call Selected works with 1+ selected.
+- UI: SchedulingPanel (Settings), AlertsPanel (Live Prep and the Candidate Journey consent card), purpose column and Process/Run buttons, profile purpose badge, 11-field details, consent version/scope.
+- Tests: test_ai_calling_two_purposes.py (35) and test_ai_calling_two_purposes_api.py (22). Full AI suite: 359 passed, 30 skipped.
+- Known race: a candidate's OTP verified between the final DB read and a real provider request cannot be prevented without changing the OTP workflow. The call record and OTP are both kept and never overwritten.
+- Production blockers:
+  - The 5 follow-up dispositions must be added to the Bolna agent.
+  - Legal review of the v4 wording.
+  - Real dispatch path (LIVE_DISPATCH_IMPLEMENTED) and real result handling calling purposes.apply_outcome.
+  - Bolna capacity confirmation.
+  - Per-call deletion at Bolna.
+  - A synthetic missed-interview fixture for the UI demo.
