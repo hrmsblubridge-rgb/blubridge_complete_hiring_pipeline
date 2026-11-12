@@ -42,7 +42,7 @@ export default function TestingMode() {
 
     return (
         <div className="min-h-screen" data-testid="ai-testing-page">
-            <AICallingHeader title="Testing Mode" subtitle="Consented test recipients only — never reads real candidate records" mode={settings?.mode} emergencyStop={settings?.emergency_stop} />
+            <AICallingHeader title="Testing Mode" subtitle="Consented test recipients only — never reads real candidate records" />
             <main className="max-w-6xl mx-auto px-6 lg:px-10 py-6 space-y-5">
                 <div className="flex flex-wrap items-center gap-3 bg-[#fffdf7] border border-[#e5e3d8] rounded-2xl p-4">
                     <p className="flex-1 text-sm text-[#1a2332]">AI Test Mode is <b data-testid="testing-mode-state">{settings?.ai_test_enabled ? 'ON' : 'OFF'}</b>. Turning it on never places calls. The AI Live switch is on the Settings page.</p>

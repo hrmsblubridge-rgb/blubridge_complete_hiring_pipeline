@@ -21,7 +21,7 @@ export default function LiveMode() {
 
     return (
         <div className="min-h-screen" data-testid="ai-live-page">
-            <AICallingHeader title="Live Mode" subtitle="Calls to real booked candidates — locked in this phase" mode={st?.active ? 'live' : undefined} />
+            <AICallingHeader title="Live Mode" subtitle="Calls to real booked candidates — locked in this phase" />
             <main className="max-w-6xl mx-auto px-6 lg:px-10 py-6 space-y-5">
                 <div className="flex items-start gap-3 bg-rose-50 border border-rose-200 rounded-2xl p-4" data-testid="live-locked-banner">
                     <Lock size={22} weight="duotone" className="text-rose-700 shrink-0" />

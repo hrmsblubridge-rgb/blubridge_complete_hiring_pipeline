@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { GearSix, Siren, Key } from '@phosphor-icons/react';
+import { GearSix } from '@phosphor-icons/react';
 import { aiApi, errMsg } from './aiApi';
 import { AICallingHeader, Card, SectionTitle } from '../../components/ai-calling/AICallingHeader';
 import { BolnaConfigPanel } from '../../components/ai-calling/BolnaConfigPanel';
 import { ModeSwitchesPanel } from '../../components/ai-calling/ModeSwitchesPanel';
+import { SafetyControlsPanel } from '../../components/ai-calling/SafetyControlsPanel';
 import { ConsentPreview } from '../../components/ai-calling/ConsentPreview';
 import { RetentionPanel } from '../../components/ai-calling/RetentionPanel';
 import { SchedulingPanel } from '../../components/ai-calling/SchedulingPanel';
+import { useSafetyStatus } from '../../components/ai-calling/useSafetyStatus';
 
 const inputCls = 'w-full bg-white border border-[#e5e3d8] rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-teal-500';
 const FIELDS = [
@@ -22,6 +24,7 @@ const FIELDS = [
 export default function AICallingSettings() {
     const [s, setS] = useState(null);
     const [f, setF] = useState({});
+    const { safety, loading, refresh } = useSafetyStatus();
     const apply = (d) => { setS(d); setF(Object.fromEntries(FIELDS.map(([k]) => [k, d[k] ?? '']))); };
     useEffect(() => { aiApi.get('/settings').then(r => apply(r.data)).catch(e => toast.error(errMsg(e))); }, []);
 
@@ -29,24 +32,13 @@ export default function AICallingSettings() {
         const body = { ...f, daily_call_limit: Number(f.daily_call_limit), max_concurrent_calls: Number(f.max_concurrent_calls) };
         try { apply((await aiApi.put('/settings', body)).data); toast.success('Settings saved'); } catch (e) { toast.error(errMsg(e)); }
     };
-    const estop = async () => {
-        try { apply((await aiApi.post('/emergency-stop', { active: !s.emergency_stop })).data); } catch (e) { toast.error(errMsg(e)); }
-    };
 
     return (
         <div className="min-h-screen" data-testid="ai-settings-page">
-            <AICallingHeader title="AI Calling Settings" subtitle="Limits, defaults and safety switches" mode={s?.mode} emergencyStop={s?.emergency_stop} />
+            <AICallingHeader title="AI Calling Settings" subtitle="Safety controls, limits, defaults and provider configuration" />
             <main className="max-w-6xl mx-auto px-6 lg:px-10 py-6 space-y-5">
+                <SafetyControlsPanel safety={safety} loading={loading} onChanged={refresh} />
                 <ModeSwitchesPanel />
-                <Card>
-                    <SectionTitle icon={Siren}>Emergency stop</SectionTitle>
-                    <div className="flex flex-wrap items-center gap-3">
-                        <p className="flex-1 text-sm text-[#1a2332]">Overrides every switch: while active, no new call of any kind can start and pending jobs are cancelled. Currently <b data-testid="estop-state">{s?.emergency_stop ? 'ON' : 'OFF'}</b>.</p>
-                        <button onClick={estop} data-testid="estop-toggle-btn" className={`px-4 py-2.5 rounded-lg text-sm font-bold ${s?.emergency_stop ? 'bg-white border border-rose-300 text-rose-700' : 'bg-rose-700 text-white hover:bg-rose-800'}`}>
-                            {s?.emergency_stop ? 'Release emergency stop' : 'Activate emergency stop'}
-                        </button>
-                    </div>
-                </Card>
                 <Card>
                     <SectionTitle icon={GearSix}>Limits & defaults</SectionTitle>
                     <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -63,10 +55,6 @@ export default function AICallingSettings() {
                 <SchedulingPanel />
                 <ConsentPreview />
                 <RetentionPanel />
-                <Card>
-                    <SectionTitle icon={Key}>Server locks</SectionTitle>
-                    <p className="text-xs text-[#6b7280]">Server calling (AI_CALLING_ENABLED): <b data-testid="server-calling-state">{s?.server_calling_enabled ? 'enabled' : 'disabled'}</b> · Batch calling: <b>{s?.bolna_integration_approved ? 'approved' : 'locked'}</b></p>
-                </Card>
             </main>
         </div>
     );

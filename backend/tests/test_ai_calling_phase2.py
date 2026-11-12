@@ -57,7 +57,11 @@ def cleanup(s, created):
     # restore mode / estop / settings
     if orig["mode"] != s.get(f"{API}/settings").json()["mode"]:
         s.post(f"{API}/mode", json={"mode": orig["mode"]})
-    s.post(f"{API}/emergency-stop", json={"active": orig["emergency_stop"]})
+    # Release requires the typed confirmation; engage doesn't.
+    s.post(f"{API}/emergency-stop",
+           json={"active": orig["emergency_stop"],
+                 "reason": "phase2 cleanup",
+                 "confirmation": "RELEASE EMERGENCY STOP"})
     s.put(f"{API}/settings", json={k: orig[k] for k in ("daily_call_limit", "max_concurrent_calls", "call_window_start", "call_window_end", "default_company_name", "default_office_address")})
 
 
@@ -304,11 +308,17 @@ class TestModeSettings:
         assert s.get(f"{API}/settings").json()["daily_call_limit"] == 15
 
     def test_emergency_stop(self, s):
-        r = s.post(f"{API}/emergency-stop", json={"active": True})
+        r = s.post(f"{API}/emergency-stop", json={"active": True, "reason": "phase2 test engage"})
         assert r.status_code == 200 and r.json()["emergency_stop"] is True
         assert s.get(f"{API}/summary").json()["emergency_stop"] is True
-        r = s.post(f"{API}/emergency-stop", json={"active": False})
-        assert r.json()["emergency_stop"] is False
+        # Release without typed confirmation is now rejected (required by UX redesign).
+        rej = s.post(f"{API}/emergency-stop", json={"active": False, "reason": "oops"})
+        assert rej.status_code == 400 and "RELEASE EMERGENCY STOP" in rej.json()["detail"]
+        # Release with correct confirmation succeeds.
+        r = s.post(f"{API}/emergency-stop",
+                   json={"active": False, "reason": "phase2 test release",
+                         "confirmation": "RELEASE EMERGENCY STOP"})
+        assert r.status_code == 200 and r.json()["emergency_stop"] is False
 
     def test_live_status_and_calls(self, s):
         d = s.get(f"{API}/live/status").json()

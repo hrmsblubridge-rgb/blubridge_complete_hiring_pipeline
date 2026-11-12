@@ -159,18 +159,127 @@ async def set_mode(body: ModeBody, request: Request):
 
 class StopBody(BaseModel):
     active: bool
+    reason: Optional[str] = None
+    confirmation: Optional[str] = None  # "RELEASE EMERGENCY STOP" required when active=False
 
 
 @ai_router.post("/emergency-stop")
 async def emergency_stop(body: StopBody, request: Request):
+    """Engage or release Emergency Stop. Timestamp fields are kept distinct so no observer has to
+    guess the current state from timestamp drift:
+      - emergency_stop_at         → set only when engaging (active=True)
+      - emergency_stop_released_at → set only when releasing (active=False)
+    A release never enables calling on its own — all other gates remain in force."""
     user = await _auth(request)
-    await get_settings()
-    await db().ai_call_settings.update_one({"_id": SETTINGS_ID}, {"$set": {
-        "emergency_stop": body.active, "emergency_stop_by": user, "emergency_stop_at": now_iso()}})
+    s = await get_settings()
+    if bool(body.active) == bool(s.get("emergency_stop")):
+        return await read_settings(request)  # idempotent: no change, no audit noise
+    if not body.active and body.confirmation != "RELEASE EMERGENCY STOP":
+        raise HTTPException(400, "Releasing Emergency Stop requires typing: RELEASE EMERGENCY STOP")
+    ts = now_iso()
+    if body.active:
+        upd = {"emergency_stop": True, "emergency_stop_by": user, "emergency_stop_at": ts,
+               "emergency_stop_reason": (body.reason or "").strip()[:280] or None}
+    else:
+        upd = {"emergency_stop": False, "emergency_stop_released_by": user, "emergency_stop_released_at": ts,
+               "emergency_stop_release_reason": (body.reason or "").strip()[:280] or None}
+    await db().ai_call_settings.update_one({"_id": SETTINGS_ID}, {"$set": upd})
     if body.active:
         await db().ai_call_jobs.update_many({"status": "pending"}, {"$set": {"status": "cancelled", "cancel_reason": "emergency_stop"}})
         await db().ai_test_batches.update_many({"status": "running"}, {"$set": {"status": "stopped"}})
+    await db().ai_call_audit.insert_one({
+        "action": "emergency_stop_engaged" if body.active else "emergency_stop_released",
+        "by": user, "at": ts, "previous": bool(s.get("emergency_stop")), "current": bool(body.active),
+        "reason": upd.get("emergency_stop_reason") or upd.get("emergency_stop_release_reason"),
+        "side_effects_note": ("cancelled pending test jobs + stopped running batches" if body.active else
+                              "release does NOT enable calling; other gates still apply"),
+    })
     return await read_settings(request)
+
+
+# ---------------- unified authoritative safety status ----------------
+
+@ai_router.get("/safety-status")
+async def safety_status(request: Request):
+    """Single source of truth consumed by every AI Calling screen. If any sub-check cannot be read
+    the response's `authoritative` flag flips to False and the UI must block calling."""
+    await _auth(request)
+    try:
+        s = await get_settings()
+        from .modes import overall_test_mode, live_daily_cap
+        from .provider import provider_ready
+        prov = await db().ai_provider_settings.find_one({"_id": "bolna"}) or {}
+        prov_ready = provider_ready(prov)
+        prov_status = prov.get("status", "not_configured")
+        env_enabled = gate.server_calling_enabled()
+        emer = bool(s["emergency_stop"])
+        ai_test = bool(s["ai_test_enabled"])
+        ai_live = bool(s["ai_live_enabled"])
+        live_auth = bool(s.get("live_dispatch_authorized"))
+        overall = overall_test_mode()
+        # Effective permissions — single computation re-used everywhere.
+        test_blockers = []
+        if not ai_test: test_blockers.append(("ai_test_off", "AI Test Mode is OFF"))
+        if emer: test_blockers.append(("emergency_stop", "Emergency Stop is ON"))
+        if not env_enabled: test_blockers.append(("server_disabled", "Server outbound calling is disabled (AI_CALLING_ENABLED=false)"))
+        if not prov_ready: test_blockers.append(("provider_unverified", f"Bolna provider not verified (status: {prov_status})"))
+        live_blockers = []
+        if not ai_live: live_blockers.append(("ai_live_off", "AI Live Mode is OFF"))
+        if not overall: live_blockers.append(("overall_test_off", "Overall Website Test Mode is OFF — Live calls blocked by policy"))
+        if emer: live_blockers.append(("emergency_stop", "Emergency Stop is ON"))
+        if not env_enabled: live_blockers.append(("server_disabled", "Server outbound calling is disabled (AI_CALLING_ENABLED=false)"))
+        if not live_auth: live_blockers.append(("live_dispatch_unauth", "Live Dispatch Authorization is OFF"))
+        if not prov_ready: live_blockers.append(("provider_unverified", f"Bolna provider not verified (status: {prov_status})"))
+        from .modes import LIVE_DISPATCH_IMPLEMENTED
+        if not LIVE_DISPATCH_IMPLEMENTED:
+            live_blockers.append(("code_locked", "Live dispatch not yet implemented in code"))
+        return {
+            "authoritative": True, "fetched_at": now_iso(),
+            "emergency_stop": {
+                "active": emer,
+                "engaged_at": s.get("emergency_stop_at") if emer else None,
+                "engaged_by": s.get("emergency_stop_by") if emer else None,
+                "engaged_reason": s.get("emergency_stop_reason") if emer else None,
+                "released_at": s.get("emergency_stop_released_at") if not emer else None,
+                "released_by": s.get("emergency_stop_released_by") if not emer else None,
+                "release_reason": s.get("emergency_stop_release_reason") if not emer else None,
+            },
+            "switches": {
+                "ai_test_enabled": ai_test, "ai_live_enabled": ai_live,
+                "overall_test_mode": overall, "mode_version": s["mode_version"],
+                "live_dispatch_authorized": live_auth,
+                "live_dispatch_implemented": LIVE_DISPATCH_IMPLEMENTED,
+            },
+            "server": {
+                "outbound_calling_env_flag": "AI_CALLING_ENABLED",
+                "outbound_calling_enabled": env_enabled,
+                "env_flag_is_runtime_editable": False,  # changed only via deployment config
+            },
+            "provider": {
+                "ready": prov_ready, "status": prov_status,
+                "config_version": prov.get("config_version"),
+                "has_api_key": bool(prov.get("api_key_encrypted")),
+            },
+            "effective": {
+                "can_place_test_call": not test_blockers,
+                "test_blockers": [{"key": k, "reason": r} for k, r in test_blockers],
+                "can_place_live_call": not live_blockers,
+                "live_blockers": [{"key": k, "reason": r} for k, r in live_blockers],
+            },
+            "limits": {
+                "test_daily_limit": s["daily_call_limit"],
+                "test_max_concurrent": s["max_concurrent_calls"],
+                "live_daily_limit": s["live_daily_call_limit"],
+                "live_pilot_cap": s["live_pilot_daily_cap"],
+                "live_effective_daily": live_daily_cap(s),
+                "live_max_concurrent": s["live_max_concurrent_calls"],
+            },
+        }
+    except Exception as e:  # noqa: BLE001
+        _logger.exception("safety-status read failed")
+        return {"authoritative": False, "fetched_at": now_iso(),
+                "error": "Safety status unavailable — calling blocked.",
+                "error_detail": str(e)[:200]}
 
 
 # ---------------- batches ----------------
