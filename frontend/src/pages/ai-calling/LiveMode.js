@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Lock, CalendarCheck, ArrowClockwise, MapPin, UserCircle, Queue, Alarm, Eye } from '@phosphor-icons/react';
+import { Lock, CalendarCheck, ArrowClockwise, MapPin, UserCircle, Queue, Alarm, Eye, ShieldWarning } from '@phosphor-icons/react';
 import { aiApi, errMsg } from './aiApi';
 import { AICallingHeader, Card, SectionTitle } from '../../components/ai-calling/AICallingHeader';
 import { DryRunPreview } from '../../components/ai-calling/DryRunPreview';
 import { RealBookingsPreview } from '../../components/ai-calling/RealBookingsPreview';
 import { LivePrepPanel } from '../../components/ai-calling/LivePrepPanel';
 import { PreviewScenariosPanel } from '../../components/ai-calling/PreviewScenariosPanel';
+import { IndependentSafetySwitches, LiveStopBadge, EmergencyStopBadge } from '../../components/ai-calling/IndependentSafetySwitches';
+import { useSafetyStatus } from '../../components/ai-calling/useSafetyStatus';
 
 const Rule = ({ icon: Icon, title, text }) => (
     <div className="flex gap-3">
@@ -18,12 +20,26 @@ const Rule = ({ icon: Icon, title, text }) => (
 export default function LiveMode() {
     const [st, setSt] = useState(null);
     const [tab, setTab] = useState('eligible');
+    const { safety, refresh } = useSafetyStatus();
     useEffect(() => { aiApi.get('/live/status').then(r => setSt(r.data)).catch(e => toast.error(errMsg(e))); }, []);
 
     return (
         <div className="min-h-screen" data-testid="ai-live-page">
             <AICallingHeader title="Live Mode" subtitle="Two automatic calling workflows — dispatch remains blocked" />
             <main className="max-w-6xl mx-auto px-6 lg:px-10 py-6 space-y-5">
+                <Card data-testid="live-safety-switches-card">
+                    <SectionTitle icon={ShieldWarning}>Live safety controls</SectionTitle>
+                    <div className="flex flex-wrap gap-2 mb-3" data-testid="live-safety-badges">
+                        <LiveStopBadge safety={safety} />
+                        <EmergencyStopBadge safety={safety} />
+                    </div>
+                    <p className="text-xs text-[#6b7280] mb-2">
+                        <b>Live Calling Stop</b> blocks only Live dispatch. <b>Global Emergency Stop</b> blocks BOTH Test and Live.
+                        Both engage independently — releasing one never implicitly enables calling.
+                    </p>
+                    <IndependentSafetySwitches safety={safety} onChanged={refresh} compact />
+                </Card>
+
                 <div className="flex items-start gap-3 bg-rose-50 border border-rose-200 rounded-2xl p-4" data-testid="live-locked-banner">
                     <Lock size={22} weight="duotone" className="text-rose-700 shrink-0" />
                     <div>

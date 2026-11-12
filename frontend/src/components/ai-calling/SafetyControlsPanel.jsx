@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { Siren, ShieldCheck, Warning, CheckCircle, XCircle, Spinner, Lock } from '@phosphor-icons/react';
 import { aiApi, errMsg } from '../../pages/ai-calling/aiApi';
 import { Card, SectionTitle } from './AICallingHeader';
+import { IndependentSafetySwitches } from './IndependentSafetySwitches';
 import {
     Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '../ui/dialog';
@@ -104,6 +105,12 @@ export const SafetyControlsPanel = ({ safety, loading, onChanged }) => {
                         </button>
                     )}
                 </div>
+            </div>
+
+            {/* Independent admin-editable gates — Live Calling Stop + Test Calling Permitted */}
+            <div className="mb-4">
+                <p className="text-[11px] uppercase tracking-wider text-[#9b9787] mb-2">Admin-editable gates</p>
+                <IndependentSafetySwitches safety={safety} onChanged={onChanged} compact />
             </div>
 
             {/* Individual gates */}

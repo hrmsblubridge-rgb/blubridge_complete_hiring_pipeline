@@ -41,6 +41,9 @@ SETTINGS_DEFAULTS = {
     "live_call_hours_before": 24,
     # B4: server-enforced test-only permission. Defaults OFF. Never unlocks Live.
     "test_calling_permitted": False,
+    # Live-only stop. Defaults ON (safe). Blocks Live dispatch without affecting Test Mode.
+    # Independent of Global Emergency Stop (which still blocks BOTH Test and Live).
+    "live_calling_stop": True,
 }
 EDITABLE_SETTINGS = {
     "daily_call_limit", "max_concurrent_calls", "call_window_start", "call_window_end",

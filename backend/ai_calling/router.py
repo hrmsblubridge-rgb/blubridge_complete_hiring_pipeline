@@ -164,6 +164,18 @@ class StopBody(BaseModel):
     confirmation: Optional[str] = None  # "RELEASE EMERGENCY STOP" required when active=False
 
 
+class LiveStopBody(BaseModel):
+    active: bool                                   # True = engage stop; False = release stop
+    reason: Optional[str] = None
+    confirmation: Optional[str] = None             # "RELEASE LIVE CALLING STOP" required when active=False
+
+
+class TestPermitBody(BaseModel):
+    permitted: bool                                # True = permit Test-only outbound; False = block
+    reason: Optional[str] = None
+    confirmation: Optional[str] = None             # "PERMIT TEST CALLING" required when permitted=True
+
+
 @ai_router.post("/emergency-stop")
 async def emergency_stop(body: StopBody, request: Request):
     """Engage or release Emergency Stop. Timestamp fields are kept distinct so no observer has to
@@ -198,6 +210,82 @@ async def emergency_stop(body: StopBody, request: Request):
     return await read_settings(request)
 
 
+# ---------------- Live Calling Stop (independent of Emergency Stop) ----------------
+
+@ai_router.post("/live-calling-stop")
+async def live_calling_stop(body: LiveStopBody, request: Request):
+    """Engage or release the Live-only calling stop.
+
+    Invariants:
+      - Defaults ON. Blocks Live dispatch without affecting Test Mode.
+      - Releasing requires typing: RELEASE LIVE CALLING STOP.
+      - Independent of Global Emergency Stop and every other gate — release NEVER enables calling.
+    """
+    from .provider import _csrf
+    user = await _auth(request)
+    _csrf(request)
+    s = await get_settings()
+    current = s.get("live_calling_stop", True) is not False
+    if bool(body.active) == current:
+        return await read_settings(request)  # idempotent no-op, no audit noise
+    if not body.active and body.confirmation != "RELEASE LIVE CALLING STOP":
+        raise HTTPException(400, "Releasing Live Calling Stop requires typing: RELEASE LIVE CALLING STOP")
+    ts = now_iso()
+    reason = (body.reason or "").strip()[:280] or None
+    if body.active:
+        upd = {"live_calling_stop": True, "live_calling_stop_by": user,
+               "live_calling_stop_at": ts, "live_calling_stop_reason": reason}
+    else:
+        upd = {"live_calling_stop": False, "live_calling_stop_released_by": user,
+               "live_calling_stop_released_at": ts, "live_calling_stop_release_reason": reason}
+    await db().ai_call_settings.update_one({"_id": SETTINGS_ID}, {"$set": upd})
+    await db().ai_call_audit.insert_one({
+        "action": "live_calling_stop_engaged" if body.active else "live_calling_stop_released",
+        "by": user, "at": ts, "previous": current, "current": bool(body.active), "reason": reason,
+        "side_effects_note": ("Blocks Live dispatch; Test Mode unaffected" if body.active else
+                              "Release does NOT enable Live calling; other gates still apply"),
+    })
+    return await read_settings(request)
+
+
+# ---------------- Test Calling Permitted (Test-only; never unlocks Live) ----------------
+
+@ai_router.post("/test-calling-permitted")
+async def test_calling_permitted(body: TestPermitBody, request: Request):
+    """Grant or revoke the Test-only outbound calling permission.
+
+    Invariants:
+      - Defaults OFF. Permits real Test-Mode calls only; has ZERO effect on Live.
+      - Enabling requires typing: PERMIT TEST CALLING.
+      - Emergency Stop, server flag and Bolna readiness still apply.
+    """
+    from .provider import _csrf
+    user = await _auth(request)
+    _csrf(request)
+    s = await get_settings()
+    current = s.get("test_calling_permitted") is True
+    if bool(body.permitted) == current:
+        return await read_settings(request)  # idempotent
+    if body.permitted and body.confirmation != "PERMIT TEST CALLING":
+        raise HTTPException(400, "Enabling Test Calling requires typing: PERMIT TEST CALLING")
+    ts = now_iso()
+    reason = (body.reason or "").strip()[:280] or None
+    if body.permitted:
+        upd = {"test_calling_permitted": True, "test_calling_permitted_by": user,
+               "test_calling_permitted_at": ts, "test_calling_permitted_reason": reason}
+    else:
+        upd = {"test_calling_permitted": False, "test_calling_revoked_by": user,
+               "test_calling_revoked_at": ts, "test_calling_revoked_reason": reason}
+    await db().ai_call_settings.update_one({"_id": SETTINGS_ID}, {"$set": upd})
+    await db().ai_call_audit.insert_one({
+        "action": "test_calling_permitted" if body.permitted else "test_calling_revoked",
+        "by": user, "at": ts, "previous": current, "current": bool(body.permitted), "reason": reason,
+        "side_effects_note": ("Test outbound permitted (Live unaffected)" if body.permitted else
+                              "Test outbound blocked; all queued test jobs will fail the gate"),
+    })
+    return await read_settings(request)
+
+
 # ---------------- unified authoritative safety status ----------------
 
 @ai_router.get("/safety-status")
@@ -228,6 +316,8 @@ async def safety_status(request: Request):
         if not ai_live: live_blockers.append(("ai_live_off", "AI Live Mode is OFF"))
         if not overall: live_blockers.append(("overall_test_off", "Overall Website Test Mode is OFF — Live calls blocked by policy"))
         if emer: live_blockers.append(("emergency_stop", "Emergency Stop is ON"))
+        live_stop = s.get("live_calling_stop", True) is not False
+        if live_stop: live_blockers.append(("live_calling_stop", "Live Calling Stop is engaged (Test Mode is unaffected)"))
         if not env_enabled: live_blockers.append(("server_disabled", "Server outbound calling is disabled (AI_CALLING_ENABLED=false)"))
         if not live_auth: live_blockers.append(("live_dispatch_unauth", "Live Dispatch Authorization is OFF"))
         if not prov_ready: live_blockers.append(("provider_unverified", f"Bolna provider not verified (status: {prov_status})"))
@@ -250,6 +340,26 @@ async def safety_status(request: Request):
                 "overall_test_mode": overall, "mode_version": s["mode_version"],
                 "live_dispatch_authorized": live_auth,
                 "live_dispatch_implemented": LIVE_DISPATCH_IMPLEMENTED,
+                "test_calling_permitted": s.get("test_calling_permitted") is True,
+                "live_calling_stop": s.get("live_calling_stop", True) is not False,
+            },
+            "live_calling_stop": {
+                "active": live_stop,
+                "engaged_at": s.get("live_calling_stop_at") if live_stop else None,
+                "engaged_by": s.get("live_calling_stop_by") if live_stop else None,
+                "engaged_reason": s.get("live_calling_stop_reason") if live_stop else None,
+                "released_at": s.get("live_calling_stop_released_at") if not live_stop else None,
+                "released_by": s.get("live_calling_stop_released_by") if not live_stop else None,
+                "release_reason": s.get("live_calling_stop_release_reason") if not live_stop else None,
+            },
+            "test_calling_permitted": {
+                "active": s.get("test_calling_permitted") is True,
+                "permitted_at": s.get("test_calling_permitted_at") if s.get("test_calling_permitted") is True else None,
+                "permitted_by": s.get("test_calling_permitted_by") if s.get("test_calling_permitted") is True else None,
+                "permitted_reason": s.get("test_calling_permitted_reason") if s.get("test_calling_permitted") is True else None,
+                "revoked_at": s.get("test_calling_revoked_at") if s.get("test_calling_permitted") is not True else None,
+                "revoked_by": s.get("test_calling_revoked_by") if s.get("test_calling_permitted") is not True else None,
+                "revoked_reason": s.get("test_calling_revoked_reason") if s.get("test_calling_permitted") is not True else None,
             },
             "server": {
                 "outbound_calling_env_flag": "AI_CALLING_ENABLED",

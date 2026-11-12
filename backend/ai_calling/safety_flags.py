@@ -18,7 +18,7 @@ def effective_test_permission(settings: dict, *, server_enabled: bool, provider_
         blockers.append({"key": "server_disabled", "reason": "Server outbound calling is disabled"})
     if not settings.get("ai_test_enabled", False):
         blockers.append({"key": "ai_test_off", "reason": "AI Test Mode is OFF"})
-    if not settings.get(TEST_CALLING_PERMITTED_FIELD, False):
+    if settings.get(TEST_CALLING_PERMITTED_FIELD) is not True:
         blockers.append({"key": "test_calling_permitted_off",
                          "reason": "Test-only real calling is not permitted (server-enforced flag, defaults OFF)"})
     if not provider_ready:
@@ -31,6 +31,11 @@ def effective_live_permission(settings: dict, *, server_enabled: bool, provider_
     blockers: List[dict] = []
     if settings.get("emergency_stop", True):
         blockers.append({"key": "emergency_stop", "reason": "Emergency Stop is ON"})
+    # Live-only stop. Defaults ON. Blocks Live dispatch without affecting Test Mode.
+    # Strict identity: anything other than exactly False means "stopped" (fails closed).
+    if settings.get("live_calling_stop", True) is not False:
+        blockers.append({"key": "live_calling_stop",
+                         "reason": "Live Calling Stop is engaged (Test Mode is unaffected)"})
     if not server_enabled:
         blockers.append({"key": "server_disabled", "reason": "Server outbound calling is disabled"})
     if not settings.get("ai_live_enabled", False):
