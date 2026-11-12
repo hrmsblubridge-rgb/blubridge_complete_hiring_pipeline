@@ -47,11 +47,20 @@ preview scenarios covering both purposes.
 ### Slice 4 — Live Mode redesign
 Three sections: Eligible / Automatic Calling Queue / Preview & Diagnostics. Both workflows shown.
 
-### Stage A fixes (this session)
-- **A1 reliability**: `useSafetyStatus` now uses AbortController, module-level request dedup, and
-  a 2-failure threshold before flipping to `authoritative=false`. Keeps last-known-good data on
-  transient errors. Rapid tab navigation no longer flips the Pending Authorization page to
-  "Safety status unavailable".
+### Stage A fixes
+- **A1 reliability**: `useSafetyStatus` now uses module-level request dedup and a 2-failure
+  threshold before flipping to `authoritative=false`. Keeps last-known-good data on transient
+  errors. Rapid tab navigation no longer flips pages to "Safety status unavailable".
+- **A1.1 (Feb 2026)**: Removed the per-call AbortController. The shared in-flight promise was
+  bound to the first caller's controller; when a second hook instance re-ran `load()` or
+  unmounted it aborted that controller, rejecting the shared promise for every OTHER caller
+  with AbortError. Two such rejections tripped FAILURE_THRESHOLD and surfaced "Safety status
+  unavailable — calling blocked." even with the backend returning 200. Fix: drop per-call
+  aborts (use the `alive` ref instead) and stop depending on `data` in the `useCallback`.
+  Verified by Playwright: 7 safety-status polls across a rapid 6-tab sweep, all 200, banner
+  absent on both desktop (1920×800) and mobile (390×844). Jest regression added at
+  `frontend/src/components/ai-calling/__tests__/useSafetyStatus.test.js` covering dedupe,
+  rapid-mount/unmount race, failure threshold, and recovery.
 - **A2 merge**: single `CandidateConsentSection` combines published view + draft editor + inline
   booking-form preview + version/audit history. Draft and published states are visually distinct.
   Old `ConsentPreview` + `ConsentEditorPanel` removed from Settings.
@@ -94,6 +103,23 @@ Three sections: Eligible / Automatic Calling Queue / Preview & Diagnostics. Both
 **Backend: 219 passed, 17 skipped** across all 16 ai_calling test files (phase 2 → 7cb1 +
 Slice 1/234 + Stage BC + webhook + two-purposes + extraction-edge + bolna-11-fields).
 Frontend compiles cleanly.
+
+### Test-suite isolation (Feb 2026)
+- 9 live-API test modules failed at *collection* because they read
+  `os.environ['REACT_APP_BACKEND_URL']` at import time and that variable lives in
+  `frontend/.env`, not `backend/.env`. Added `backend/tests/conftest.py` that hydrates the
+  var from `frontend/.env` on import. Collection errors in AI-calling tests: 9 → 0.
+- 15 brittle `assert emergency_stop is True` assertions across those same modules were
+  flapping because the preview DB is routinely toggled OFF. Added an autouse module-scoped
+  fixture that snapshots the live `emergency_stop` value, forces it to True for the test
+  module's duration, and restores it on teardown — even on failure. The preview Emergency
+  Stop value is therefore never persistently changed by the test suite.
+- Also exposed `ai_estop_on` / `ai_estop_off` per-test fixtures for future tests that need
+  to explicitly cover both states with the same snapshot/restore guarantee.
+- Verification: `pytest tests/test_ai_calling_phase{3,4a_api,4b_api,5_api,6_api,7a_api,
+  7b_api,7ca_api,7cb1_api,two_purposes_api}` → **199 passed, 4 skipped, 0 failed**.
+  Pre- and post-run DB state identical (`emergency_stop=False`, `test_calling_permitted=None`,
+  `mode=testing`).
 
 ## Stage D (prepared, NOT executed)
 See `memory/PRODUCTION_READINESS.md` for:

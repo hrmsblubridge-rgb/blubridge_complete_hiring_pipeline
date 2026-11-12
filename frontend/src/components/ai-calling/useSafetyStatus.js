@@ -1,17 +1,17 @@
 // Shared authoritative safety-status hook.
 //
-// A1 reliability fixes:
-//  - Keep last-known-good data on transient errors (never flip to "unavailable" because of a
-//    single tab-switch race or timeout). Only mark the state unavailable after N consecutive
-//    failures, so transient network blips don't block the UI.
-//  - Single-flight per hook instance via an AbortController; rapid tab changes don't produce
-//    duplicate concurrent requests or stale resolves.
-//  - Dedupe across components: a module-level in-flight promise means multiple tabs that mount
-//    the hook simultaneously (header + page) share one request, not spawn N.
-//  - Clear in-flight on unmount.
+// Reliability fixes (iter: no-abort-race):
+//  - Shared in-flight promise across hook instances (header + page) so a second mount reuses
+//    one request instead of spawning N.
+//  - No per-call AbortController. The old design let one hook instance abort the shared
+//    in-flight promise on cleanup / strict-mode double-invoke, rejecting it for every other
+//    caller with AbortError. Two such rejections (FAILURE_THRESHOLD) flipped the UI to
+//    "Safety status unavailable — calling blocked." even while the backend was healthy.
+//  - `alive` ref prevents state updates after unmount — safer than tearing down the request.
+//  - Only flip to "unavailable" after N consecutive real failures AND we never had good data.
+//  - Last-known-good data is kept on transient errors.
 //
-// The backend's /safety-status is still the only trusted source. Unknown state still blocks
-// calling via `callingBlocked()` — but only after we've actually confirmed we can't reach it.
+// The backend's /safety-status is still the only trusted source.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { aiApi } from '../../pages/ai-calling/aiApi';
 
@@ -19,10 +19,10 @@ const POLL_MS = 15000;
 const FAILURE_THRESHOLD = 2;    // mark unavailable only after this many *consecutive* failures
 let inflight = null;             // module-level dedupe across simultaneous mounts
 
-async function fetchOnce(signal) {
+async function fetchOnce() {
     if (inflight) return inflight;
     inflight = (async () => {
-        try { return (await aiApi.get('/safety-status', { signal })).data; }
+        try { return (await aiApi.get('/safety-status')).data; }
         finally { inflight = null; }
     })();
     return inflight;
@@ -34,36 +34,36 @@ export function useSafetyStatus({ pollMs = POLL_MS } = {}) {
     const [loading, setLoading] = useState(true);
     const alive = useRef(true);
     const failures = useRef(0);
-    const abortRef = useRef(null);
+    const dataRef = useRef(null);
 
     const load = useCallback(async () => {
-        if (abortRef.current) abortRef.current.abort();
-        const ctl = new AbortController(); abortRef.current = ctl;
         try {
-            const r = await fetchOnce(ctl.signal);
+            const r = await fetchOnce();
             if (!alive.current) return;
             failures.current = 0;
+            dataRef.current = r;
             setData(r); setError(null);
         } catch (e) {
-            if (!alive.current || e?.name === 'CanceledError' || e?.name === 'AbortError') return;
+            if (!alive.current) return;
+            if (e?.name === 'CanceledError' || e?.name === 'AbortError' || e?.code === 'ERR_CANCELED') return;
             failures.current += 1; setError(e);
             // Only flip to unavailable after FAILURE_THRESHOLD consecutive errors AND no prior data.
-            if (failures.current >= FAILURE_THRESHOLD && !data) {
+            if (failures.current >= FAILURE_THRESHOLD && !dataRef.current) {
                 setData({ authoritative: false, error: 'Safety status unavailable — calling blocked.' });
             }
             // If we had prior good data, keep it — the previous poll's answer is still the truth.
         } finally {
             if (alive.current) setLoading(false);
         }
-    }, [data]);
+    }, []);
 
     useEffect(() => {
-        alive.current = true; load();
+        alive.current = true;
+        load();
         const id = setInterval(load, pollMs);
         return () => {
             alive.current = false;
             clearInterval(id);
-            if (abortRef.current) abortRef.current.abort();
         };
     }, [load, pollMs]);
 
