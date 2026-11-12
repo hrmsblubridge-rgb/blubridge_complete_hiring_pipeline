@@ -143,6 +143,10 @@ Enforcement surfaces (all three fixed in Stage E for drift-free behaviour):
 - `modes.calling_status` — surfaces both flags in `test.blockers` / `live.blockers`
   and exposes them at the top level of `/switches`.
 - `modes.evaluate_live` — adds `live_calling_stop_off` to the live-readiness check.
+- `modes.live_readiness` — adds `live_calling_stop_off` to the authoritative readiness
+  checklist (iter63 fix), so `GET /live-dispatch/readiness` lists it as ok=false while the
+  stop is ON, and `POST /live-dispatch/authorize` audits it in its preconditions. Live
+  Calling Stop can no longer be bypassed via the authorize path.
 - `safety_flags.effective_test_permission` tightened to strict-`True` identity
   (previously truthy; `1`, `"yes"` would have passed).
 
@@ -157,6 +161,24 @@ Regression: 24 new tests (13 in `test_live_calling_stop_endpoints.py` + 11 in
 `test_independent_safety_switches_api.py`), all phase 5 + 7A tests still green,
 11 field extraction / dispatch-permission suites unchanged — 104 relevant tests
 passing in total.
+
+### Stage E.1 (Feb 2026) — readiness-drift fix (iter63)
+- Added `live_calling_stop_off` to `modes.live_readiness()` items list. Both
+  `GET /api/ai-calling/live-dispatch/readiness` and `POST /live-dispatch/authorize` now
+  enforce the Live Calling Stop in their published checklist.
+- `LivePrepPanel` now re-fetches `/live-prep/overview` when the shared safety switch
+  version changes, so the readiness badge updates in-place when toggles move.
+- `test_credentials.md` rewritten: adds explicit dev-only scope, correct working password
+  (`QAZwsx##123`), and an explicit "rotation required before production" flag.
+- Regression: 50/50 across 5 safety suites (`test_independent_safety_switches_api.py`,
+  `test_safety_drift_fixes_iter62.py`, `test_live_calling_stop_endpoints.py`,
+  `test_slice1_safety_status.py`, `test_readiness_live_stop_iter63.py`).
+- Testing-agent iter63 sweep: backend 100%, frontend 100%, `retest_needed=false`.
+- Two pre-existing unrelated failures remain in the full backend suite
+  (`test_ai_calling_phase7b_api::test_real_preview_empty`,
+  `test_iter127_job_role_auto_registration::test_sync_idempotent_repeated_calls`) — both
+  reproduce on git-stashed HEAD and are DB-state-leak issues from prior test runs, not
+  caused by this change.
 
 ## Known limitations
 - No verified Bolna per-recording deletion endpoint; retention stays preview-only.

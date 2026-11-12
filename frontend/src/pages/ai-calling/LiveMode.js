@@ -81,7 +81,7 @@ export default function LiveMode() {
                 </div>
 
                 {tab === 'eligible' ? <RealBookingsPreview />
-                 : tab === 'queue' ? <LivePrepPanel />
+                 : tab === 'queue' ? <LivePrepPanel safetyVersion={safety?.switch_version || 0} />
                  : <><PreviewScenariosPanel /><DryRunPreview /></>}
             </main>
         </div>

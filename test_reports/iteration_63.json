@@ -1,0 +1,33 @@
+{
+  "summary": "Verified the iter62 HIGH fix. GET /live-dispatch/readiness now returns a live_calling_stop_off check. It is ok=false when live_calling_stop is True, 'false' (a string), None, 0 or missing, and ok=true only when the value is exactly False. POST /live-dispatch/authorize still returns 423 under the phase lock, requires auth and CSRF (missing header or a foreign Origin gives 403), and its audit row's preconditions now include live_calling_stop_off with the correct bool. The independence matrix (a)-(d) holds across /safety-status, the /switches blockers and readiness. Switch endpoints reject wrong typed phrases (400), require auth and CSRF, save to ai_call_settings _id=global, and write audit rows. Backend: 50/50 pass across the 4 regression suites plus the new iter63 suite, run serially. Frontend: the Settings rows safety-row-test-permit and safety-row-live-stop show the correct text. On the Live page, the confirm button stays disabled with a wrong phrase. Releasing and re-engaging Live Stop, and enabling and revoking Test Calling, both save across reload. The readiness-live_calling_stop_off item shows on the Live > Automatic Calling Queue tab with a red X while the stop is ON. DB ended in its initial safe state: emergency_stop=True, live_calling_stop=True, test_calling_permitted=False, ai_live_enabled=False, live_dispatch_authorized=False, ai_test_enabled=True (as it was at the start). AI_CALLING_ENABLED=false. No real calls or messages were sent.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "modes.live_readiness / evaluate_live / safety_flags / router.safety_status", "issue": "The blocker and checklist logic is still duplicated in 4 places. They agree now, but they can drift again. evaluate_live() is still not called from production code."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Live page: toggling Live Calling Stop while the Automatic Calling Queue tab is open", "issue": "LivePrepPanel loads /live-prep/overview only on mount. IndependentSafetySwitches onChanged refreshes safety-status, but the readiness list and 'Readiness x/10' do not update until the tab is switched or the page reloaded. Seen in code; not checked in the browser.", "affected_selectors": ["[data-testid=readiness-live_calling_stop_off]", "[data-testid=worker-readiness]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_readiness_live_stop_iter63.py", "/app/test_reports/pytest/iter63.xml"],
+  "action_items": [
+    "Fix /app/memory/test_credentials.md: it lists the Admin User password as 'Admin User', which returns 401. The working password is 'QAZwsx##123'.",
+    "Optional: refresh LivePrepPanel (readiness) when the safety switches change.",
+    "Optional: build all safety checklists from the safety_flags helpers to prevent future drift."
+  ],
+  "critical_code_review_comments": [
+    "The live_readiness() check uses s.get('live_calling_stop', True) is False, which correctly treats any value other than False as stop ON (fail-closed).",
+    "The /switches policy label effective.test_calls=true ('Test-list calls only') shows even when Emergency Stop is ON. This is cosmetic, because the test.can_call and blockers fields are correct."
+  ],
+  "updated_files": ["/app/backend/tests/test_readiness_live_stop_iter63.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "Admin User / QAZwsx##123 works. The credentials file has the wrong password ('Admin User').",
+  "seed_data_creation": "None. Only ai_call_audit rows with TEST_* reasons and live_dispatch_authorize_attempt rows were added. The settings flags were set to non-False values directly in the DB for the fail-closed tests, then restored to True.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run the suites serially (-p no:xdist -o addopts=''), because they all change the shared ai_call_settings global doc. The iter63 suite fixture always restores ES=ON, LS=ON, TP=OFF. The readiness UI is under the Live page tab live-tab-queue."
+}

@@ -38,12 +38,13 @@ const JobsTable = ({ jobs, onProcess }) => (
 );
 
 // Phase 7C-A mock scheduler + worker. Jobs are non-dispatchable; nothing is ever sent to Bolna.
-export const LivePrepPanel = () => {
+// `safetyVersion` lets the parent force a readiness reload when safety switches change (iter63).
+export const LivePrepPanel = ({ safetyVersion = 0 } = {}) => {
     const [d, setD] = useState(null);
     const [busy, setBusy] = useState(false);
     const [outcome, setOutcome] = useState('CONFIRMED');
     const load = () => aiApi.get('/live-prep/overview').then(r => setD(r.data)).catch(e => toast.error(errMsg(e)));
-    useEffect(() => { load(); }, []);
+    useEffect(() => { load(); }, [safetyVersion]);
     const run = async (path, body, msg) => {
         setBusy(true);
         try { const r = await aiApi.post(path, body); toast.success(msg(r.data)); await load(); } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
