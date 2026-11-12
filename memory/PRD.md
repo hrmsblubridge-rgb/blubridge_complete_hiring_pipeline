@@ -69,6 +69,15 @@ Three sections: Eligible / Automatic Calling Queue / Preview & Diagnostics. Both
   Emergency-Stop cancellation — all via mocked Bolna client (no real POST /call).
 - **B4**: new `test_calling_permitted` setting (defaults OFF, server-enforced in `safety_flags`,
   cannot unlock Live). Flipping test-only ON permits Test-Mode calling only; Live still blocked.
+- **B4.1 (Feb 2026)**: enforcement wired end-to-end across every test-call dispatch path.
+  `gate.evaluate` adds a `test_calling_permitted` check with strict-True identity (missing,
+  null, False, 0, 1, "true", "yes" all fail closed). `dispatch.call_now` includes
+  `test_calling_permitted: True` in the atomic `find_one_and_update` lock filter; the lock
+  cannot be acquired without it. `router.start_batch` independently refuses (HTTP 423) when
+  the flag is not strictly True, so batch calling cannot bypass through a different path.
+  28 new regression tests in `test_test_calling_permitted_enforcement.py` cover single call,
+  batch, concurrency (10x race → exactly one dispatch), mid-flight flag flip, Live-permission
+  isolation. All 84 pre-existing ai_calling pure-logic tests still pass (zero regressions).
 - **B5**: Bolna agent read-only verification is already wired in `/provider/test-connection`.
   Number-to-agent entitlement cannot be verified by public Bolna APIs; documented as a Release-2
   prerequisite (`PRODUCTION_READINESS.md §7`).

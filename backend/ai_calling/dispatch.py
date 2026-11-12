@@ -91,10 +91,11 @@ async def call_now(cid: str, request: Request, body: dict = Body(...)):  # noqa:
 
     auth_id = uuid.uuid4().hex
     s = await db().ai_call_settings.find_one_and_update(
-        {"_id": SETTINGS_ID, "ai_test_enabled": True, "emergency_stop": False, "dispatch_lock": None},
+        {"_id": SETTINGS_ID, "ai_test_enabled": True, "emergency_stop": False,
+         "test_calling_permitted": True, "dispatch_lock": None},
         {"$set": {"dispatch_lock": {"id": auth_id, "by": user, "at": now_iso()}}})
     if not s:
-        raise HTTPException(409, "AI Test Mode is OFF, the emergency stop is ON, or another call authorisation is in progress")
+        raise HTTPException(409, "AI Test Mode is OFF, the Emergency Stop is ON, test-only calling is not permitted, or another call authorisation is in progress")
     try:
         verdict = await gate.evaluate(mode="testing", test_candidate_id=cid, batch_id="", phone_e164=cand["phone_e164"],
                                       mode_version=s["mode_version"], single_call=True)

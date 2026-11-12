@@ -36,6 +36,12 @@ async def evaluate(*, mode: str, test_candidate_id: str, batch_id: str, phone_e1
     add("ai_test_on", "AI Test Mode is ON", mode == "testing" and s["ai_test_enabled"])
     add("not_live", "Job is a test-list job (live dispatch uses its own gate)", mode != "live")
     add("server_enabled", "Server-side calling is enabled", server_calling_enabled(), "AI_CALLING_ENABLED env flag")
+    # B4 enforcement: test-only outbound calling must be explicitly permitted.
+    # Strict identity check — missing, null, False or any non-bool value fails closed.
+    add("test_calling_permitted",
+        "Test-only outbound calling is permitted (server-enforced flag)",
+        s.get("test_calling_permitted") is True,
+        "defaults OFF; must be exactly True in ai_call_settings to permit test calls")
     if not single_call:
         add("bolna_approved", "Bolna API integration approved", BOLNA_INTEGRATION_APPROVED, "batch calling locked")
     from .provider import provider_ready

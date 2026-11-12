@@ -343,6 +343,11 @@ async def start_batch(bid: str, request: Request):
     batch = await db().ai_test_batches.find_one({"_id": _oid(bid)})
     if not batch:
         raise HTTPException(404, "Not found")
+    # B4 enforcement: batch test dispatch is independently blocked by the test-only permission flag.
+    # Strict True required; missing, null, False or malformed all fail closed.
+    s = await get_settings()
+    if s.get("test_calling_permitted") is not True:
+        raise HTTPException(423, "Test-only outbound calling is not permitted (server-enforced flag is OFF)")
     if not gate.BOLNA_INTEGRATION_APPROVED:
         raise HTTPException(423, "Start Test Calls is disabled until the Bolna API integration is approved")
     raise HTTPException(501, "Test call dispatch is not implemented yet")

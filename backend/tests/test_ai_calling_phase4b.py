@@ -44,6 +44,7 @@ def run(monkeypatch, case, place=None):
         await db.ai_call_jobs.create_index("idempotency_key", unique=True, sparse=True)
         await db.ai_calls.create_index("execution_id", unique=True, sparse=True)
         await db.ai_call_settings.insert_one({"_id": "global", **store.SETTINGS_DEFAULTS, "mode": "testing", "emergency_stop": False, "ai_test_enabled": True,
+                                              "test_calling_permitted": True,
                                               "call_window_start": "00:00", "call_window_end": "23:59"})
         await db.ai_provider_settings.insert_one({"_id": "bolna", "agent_id": AGENT, "caller_number": "+918000001993", "api_key_encrypted": "x"})
         sent = []
